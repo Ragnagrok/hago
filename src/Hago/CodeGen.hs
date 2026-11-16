@@ -66,7 +66,8 @@ generate runtime prog = unlines (header ++ [runtime] ++ dataDecls ++ classDecls 
       , cxProg = prog
       }
     dataDecls = concatMap (genData prog) [(n, d) | (n, d) <- M.toList (progData prog), n `notElem` ["[]", "Bool"]]
-    classDecls = concatMap (genClass ctx0) [c | c@(_, ci) <- M.toList (progClasses prog), clsKind ci == 0]
+    classDecls = concatMap (genClass ctx0)
+      [c | c@(n, _) <- M.toList (progClasses prog), n `elem` map instClass (progInsts prog)]
     ((tops, inits), (instDecls, dictInits)) = flip evalState (GS 0 False) $ do
       ts <- unzip <$> mapM (genTop ctx0) (progBinds prog)
       is <- unzip <$> mapM (genInst ctx0) (progInsts prog)
@@ -306,6 +307,11 @@ genPats ctx ((s, p) : rest) k = case p of
           _ -> genMethodCall ctx "==" dEq [s, lit]
     body <- genPats ctx rest k
     pure (["if " ++ test ++ " {"] ++ body ++ ["}"])
+  CPEq f v -> do
+    f' <- genExpr ctx f
+    v' <- genExpr ctx v
+    body <- genPats ctx rest k
+    pure (["if (" ++ f' ++ ")(" ++ s ++ ")(" ++ v' ++ ") {"] ++ body ++ ["}"])
   CPForce q -> do
     n <- freshName "f"
     body <- genPats ctx ((n, q) : rest) k

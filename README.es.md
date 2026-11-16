@@ -92,18 +92,19 @@ label t = traverse step t
 
 ### Cómo se compilan
 
-- **Las clases sobre tipos simples** (`Eq`, `Num`, `Monoid`) usan paso de diccionarios. Cada
-  clase es un struct genérico de Go con campos que son funciones no currificadas, y una función
-  con restricciones recibe un puntero a diccionario por cada restricción. Cuando la instancia se
-  conoce en tiempo de compilación, la llamada va directo a la función de esa instancia:
-  `n + 1` sobre `Int` queda `inst_Num_Int_m_op_plus(n, 1)`, que Go inlinea en un `+` común.
-- **Las clases sobre constructores de tipos se especializan.** Los genéricos de Go son sobre
-  tipos, no sobre constructores de tipos: no existe `F[_]`, así que un diccionario de
-  `Functor f` no puede existir en tiempo de ejecución. En cambio, toda función polimórfica sobre
-  un constructor de tipos es una plantilla. El compilador genera una copia por cada constructor
-  con que se usa (`traverse` en `State Int`, `mapM_` en `IO`), como hacen Rust y MLton, y cada
-  llamada a un método pasa a ser una llamada directa. El código sobre constructores de tipos
-  nunca pasa por un diccionario.
+Las clases se compilan por **especialización**, como en Rust y MLton:
+
+- **Toda función con restricciones, o polimórfica sobre un constructor de tipos, es una
+  plantilla.** El compilador genera una copia por cada instancia o constructor con que se usa:
+  `nfib :: (Ord a, Num a) => a -> a` usada en `Int` se vuelve `nfib__Int`, y `traverse` usado
+  en `State Int` tiene su propia copia.
+- **Cada llamada a un método es una llamada directa a la función de la instancia,** que Go
+  inlinea cuando es chica: `n + 1` sobre `Int` termina siendo un `+` común.
+- **No existe ningún diccionario en tiempo de ejecución.** Los genéricos de Go son sobre tipos,
+  no sobre constructores de tipos (no existe `F[_]`), así que un diccionario de `Functor f` no
+  podría existir de todos modos.
+- **Las variables de tipo sin restricciones siguen siendo genéricos de Go,** así que `map` sigue
+  siendo una sola función.
 
 ## Una jerarquía sin los errores de Haskell
 
@@ -190,17 +191,16 @@ Son números de una sola máquina, como referencia y no como benchmark.
 |---|---|---|
 | `nfib 40`, Go escrito a mano | 0,34 s | — |
 | `nfib 40 :: Int -> Int`, Hago | 0,34 s | — |
-| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, en `Int` | 1,90 s | — |
+| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, en `Int` | 0,35 s | — |
 | suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | 0,42 s | ~8 MB |
 | `mapM_` sobre un millón de elementos en IO | 0,17 s | ~9 MB |
 | un loop recursivo en IO de cinco millones de iteraciones | 0,31 s | ~8 MB |
 
 - **El código estricto en tipos concretos** se compila al Go que escribirías a mano, y rinde
   igual.
-- **El código polimórfico sobre un constructor de tipos** (`Monad m =>`) no cuesta nada extra,
-  porque se especializa.
-- **El código con restricciones sobre tipos simples** (`Num a =>`) es unas 5,5 veces más lento,
-  porque llama a través de diccionarios. Especializarlo también es el siguiente paso obvio.
+- **El código con restricciones o polimórfico sobre constructores** (`Num a =>`, `Monad m =>`)
+  no cuesta nada extra, porque se especializa. El precio es el tamaño del código: una copia por
+  cada tipo con que se usa.
 - **La cadena de listas perezosas** corre en memoria constante, pero cada celda reserva un
   thunk, así que es mucho más lenta que un loop de Go.
 
@@ -242,8 +242,9 @@ Haskell 98.
 **Falta**
 - **Parámetros de orden superior en tipos de datos,** así que todavía no hay transformadores de
   mónadas como `StateT s m a`. Sus tipos de Go también tendrían que especializarse.
-- Clases de varios parámetros, `deriving Functor`, especialización del código con restricciones
-  sobre tipos simples.
+- Clases de varios parámetros, `deriving Functor`.
+- **La recursión polimórfica a través de una restricción** (una función que se llama a sí misma
+  en un tipo más grande) no se puede especializar, y se rechaza.
 - **`Read` y `Enum`.** `[a..b]` sólo funciona con `Int`.
 - **`String` es el `string` de Go, no `[Char]`.** Se convierte con `pack` y `unpack`.
 - Módulos e imports, records, la semántica de `newtype`, listas por comprensión, sinónimos con

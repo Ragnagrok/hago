@@ -90,17 +90,17 @@ label t = traverse step t
 
 ### How they compile
 
-- **Classes over plain types** (`Eq`, `Num`, `Monoid`) use dictionary passing. Each class
-  becomes a generic Go struct of uncurried function fields, and a constrained function takes
-  one dictionary pointer per constraint. When the instance is known at compile time, the call
-  goes straight to that instance's function: `n + 1` on `Int` becomes
-  `inst_Num_Int_m_op_plus(n, 1)`, which Go inlines into a plain `+`.
-- **Classes over type constructors are specialised.** Go generics range over types, not type
-  constructors: there is no `F[_]`, so a `Functor f` dictionary cannot exist at run time.
-  Instead, every function polymorphic over a type constructor is a template. The compiler makes
-  one copy per constructor it is used at (`traverse` at `State Int`, `mapM_` at `IO`), as Rust
-  and MLton do, and every method call becomes a direct call. Constructor-class code never goes
-  through a dictionary.
+Classes compile by **specialisation**, as in Rust and MLton:
+
+- **Every function with a constraint, or polymorphic over a type constructor, is a template.**
+  The compiler makes one copy per instance or constructor it is used at: `nfib :: (Ord a, Num a)
+  => a -> a` used at `Int` becomes `nfib__Int`, and `traverse` used at `State Int` gets its own
+  copy.
+- **Every method call is a direct call to the instance's function,** which Go inlines when it
+  is small: `n + 1` on `Int` ends up as a plain `+`.
+- **No dictionary exists at run time.** Go generics range over types, not type constructors
+  (there is no `F[_]`), so a `Functor f` dictionary could not exist anyway.
+- **Type variables without constraints stay Go generics,** so `map` is still one function.
 
 ## A hierarchy without Haskell's mistakes
 
@@ -186,16 +186,14 @@ These numbers come from one machine, as a reference and not as a benchmark.
 |---|---|---|
 | `nfib 40`, hand-written Go | 0.34 s | — |
 | `nfib 40 :: Int -> Int`, Hago | 0.34 s | — |
-| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, at `Int` | 1.90 s | — |
+| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, at `Int` | 0.35 s | — |
 | sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.42 s | ~8 MB |
 | `mapM_` over a million elements in IO | 0.17 s | ~9 MB |
 | a recursive IO loop of five million iterations | 0.31 s | ~8 MB |
 
 - **Strict code at concrete types** compiles to the Go you would write by hand, and runs like it.
-- **Code polymorphic over a type constructor** (`Monad m =>`) costs nothing extra, because it is
-  specialised.
-- **Code constrained over plain types** (`Num a =>`) is about 5.5 times slower, because it calls
-  through dictionaries. Specialising it too is the obvious next step.
+- **Constrained and constructor-polymorphic code** (`Num a =>`, `Monad m =>`) costs nothing
+  extra, because it is specialised. The price is code size: one copy per type it is used at.
 - **The lazy list pipeline** streams in constant memory, but every cell allocates a thunk, so it
   is much slower than a Go loop.
 
@@ -233,8 +231,9 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 **Missing**
 - **Type parameters of a higher kind in data types,** so no monad transformers like
   `StateT s m a` yet. Their Go types would have to be specialised as well.
-- Multi-parameter classes, `deriving Functor`, specialisation of code constrained over plain
-  types.
+- Multi-parameter classes, `deriving Functor`.
+- **Polymorphic recursion through a constraint** (a function that calls itself at a bigger
+  type) cannot be specialised, and is rejected.
 - **`Read` and `Enum`.** `[a..b]` only works on `Int`.
 - **`String` is Go's `string`, not `[Char]`.** Convert with `pack` and `unpack`.
 - Modules and imports, records, `newtype` semantics, list comprehensions, `type` synonyms, tuples

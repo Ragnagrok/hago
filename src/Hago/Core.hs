@@ -137,6 +137,7 @@ data CPat
   | CPNum Integer Type Dict Dict   -- ^ an integer literal at a type with Eq and Num dictionaries
   | CPCon Name [Type] [CPat]
   | CPForce CPat      -- ^ force a lazy field before matching on it
+  | CPEq CExpr CExpr  -- ^ equal, by this (==), to this value: a literal at a type of your own
   | CPAs Name Type CPat
   deriving (Show)
 

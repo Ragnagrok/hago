@@ -5,10 +5,12 @@
 --
 -- Go generics range over types, not over type constructors: there is no
 -- @F[_]@, so a dictionary for @Functor f@ cannot exist at run time. Every
--- function with a higher-kinded type parameter (and so every constraint on
--- Functor, Monad, Foldable...) is therefore a template, copied once per
--- constructor it is used at, as Rust and MLton do. Classes over plain types
--- (Eq, Num, Monoid) keep their run-time dictionaries.
+-- function with a higher-kinded type parameter is therefore a template,
+-- copied once per constructor it is used at, as Rust and MLton do. So is
+-- every function with a class constraint: copying it per instance removes
+-- the dictionaries altogether, and with them the indirect calls. Type
+-- variables without constraints stay Go generics, so map is still one
+-- function.
 --
 -- The pass also turns instance methods into ordinary top-level functions,
 -- resolves every method call whose instance is known into a direct call,
@@ -64,7 +66,9 @@ specialize prog = do
       classes = progClasses prog
       instMap = M.fromList [(instId i, i) | i <- progInsts prog]
       methodClass = M.fromList [(m, c) | (c, ci) <- M.toList classes, (m, _) <- clsMethods ci]
-      isStatic c = maybe False ((> 0) . clsKind) (M.lookup c classes)
+      -- every constraint is resolved at compile time
+      isStatic :: Name -> Bool
+      isStatic _ = True
       topEnts = [Ent n ps ds (zonk sub t) ar b sh | TopBind n ps ds t ar b sh <- progBinds prog]
       instEnts =
         [ Ent (instMethodName (instId inst) m) (instVars inst ++ own)
@@ -77,7 +81,7 @@ specialize prog = do
         , let mpreds = drop 1 ps
         , let t = norm (substTV (M.singleton (clsVar ci) (instHead inst)) (zonk sub mt)) ]
       ents = M.fromList [(eName e, e) | e <- topEnts ++ instEnts]
-      hkParams e = [v | v <- eTParams e, v `elem` headVars (eType e) || or [w == v && isStatic c | (_, IsIn c (TVar w)) <- eDicts e]]
+      hkParams e = [v | v <- eTParams e, v `elem` headVars (eType e) || or [w == v | (_, IsIn _ (TVar w)) <- eDicts e]]
       isTemplate e = not (null (hkParams e))
 
       ty rc t = norm (substTV (rcTy rc) (zonk sub t))
@@ -118,8 +122,13 @@ specialize prog = do
                   | otherwise -> pure (CVar x (Inst ts' ds') t')
         CCon k ts t -> pure (CCon k (map (ty rc) ts) (ty rc t))
         CLit l -> pure (CLit l)
-        CNum n t d -> pure (CNum n (ty rc t) (dict rc d))
-        CFrac x t d -> pure (CFrac x (ty rc t) (dict rc d))
+        -- literals at Int and Double are Go literals; elsewhere, a call
+        CNum n t d -> case ty rc t of
+          t'@(TCon c []) | c `elem` ["Int", "Double"] -> pure (CNum n t' (dict rc d))
+          _ -> rw rc (CApp (CVar "fromInteger" (Inst [t] [d]) (TFun tInt t)) [CLit (LInt n)])
+        CFrac x t d -> case ty rc t of
+          t'@(TCon "Double" []) -> pure (CFrac x t' (dict rc d))
+          _ -> rw rc (CApp (CVar "fromDouble" (Inst [t] [d]) (TFun tDouble t)) [CLit (LDouble x)])
         CApp f as -> CApp <$> rw rc f <*> mapM (rw rc) as
         CLam ps r b -> CLam [(p, ty rc pt) | (p, pt) <- ps] (ty rc r) <$> rw (locals rc (map fst ps)) b
         CLet bs b t -> do
@@ -138,17 +147,20 @@ specialize prog = do
       rwRow rc (CRow pats bs gs) = do
         let rc1 = locals rc (concatMap patVars pats)
             rc2 = locals rc1 [n | CBind n _ _ _ <- bs]
-        CRow (map (rwPat rc) pats) <$> mapM (rwBind rc2) bs
+        CRow <$> mapM (rwPat rc) pats <*> mapM (rwBind rc2) bs
           <*> mapM (\(g, e) -> (,) <$> traverse (rw rc2) g <*> rw rc2 e) gs
 
       rwPat rc = \case
-        CPVar x t -> CPVar x (ty rc t)
-        CPWild -> CPWild
-        CPLit l -> CPLit l
-        CPNum n t a b -> CPNum n (ty rc t) (dict rc a) (dict rc b)
-        CPCon k ts ps -> CPCon k (map (ty rc) ts) (map (rwPat rc) ps)
-        CPForce p -> CPForce (rwPat rc p)
-        CPAs x t p -> CPAs x (ty rc t) (rwPat rc p)
+        CPVar x t -> pure (CPVar x (ty rc t))
+        CPWild -> pure CPWild
+        CPLit l -> pure (CPLit l)
+        CPNum n t a b -> case ty rc t of
+          t'@(TCon c []) | c `elem` ["Int", "Double"] -> pure (CPNum n t' (dict rc a) (dict rc b))
+          _ -> CPEq <$> rw rc (CVar "==" (Inst [t] [a]) (TFun t (TFun t tBool))) <*> rw rc (CNum n t b)
+        CPEq f v -> CPEq <$> rw rc f <*> rw rc v
+        CPCon k ts ps -> CPCon k (map (ty rc) ts) <$> mapM (rwPat rc) ps
+        CPForce p -> CPForce <$> rwPat rc p
+        CPAs x t p -> CPAs x (ty rc t) <$> rwPat rc p
 
       rwStmts _ [] = pure []
       rwStmts rc (s : rest) = case s of
@@ -264,7 +276,8 @@ specialize prog = do
     (SS M.empty (M.keysSet ents) [] [] 0)
   pure prog
     { progBinds = reverse (ssOut final)
-    , progInsts = [i | i <- progInsts prog, maybe False ((== 0) . clsKind) (M.lookup (instClass i) classes)]
+    -- no dictionary is left at run time
+    , progInsts = []
     }
   where
     missing m t =
