@@ -3,6 +3,12 @@ module Hago.Syntax where
 
 type Name = String
 
+-- | Where something is in the source: file, line, column.
+type Loc = (FilePath, Int, Int)
+
+showLoc :: Loc -> String
+showLoc (f, l, c) = f ++ ":" ++ show l ++ ":" ++ show c
+
 data Lit = LInt Integer | LDouble Double | LChar Char | LStr String
   deriving (Eq, Show)
 
@@ -22,7 +28,13 @@ data Pat
   | PLit Lit
   | PCon Name [Pat]
   | PAs Name Pat
+  | PLoc Loc Pat
   deriving (Eq, Show)
+
+-- | A pattern without its location.
+unLocP :: Pat -> Pat
+unLocP (PLoc _ p) = unLocP p
+unLocP p = p
 
 data Expr
   = EVar Name
@@ -35,6 +47,7 @@ data Expr
   | ECase Expr [Alt]
   | EDo [Stmt]
   | EAnn Expr SType               -- ^ @e :: t@
+  | ELoc Loc Expr
   | EOpSeq Expr [(Name, Expr)]   -- ^ unresolved operators, removed by 'resolveFixity'
   deriving (Eq, Show)
 
@@ -69,7 +82,7 @@ data Decl
   = DData Name [Name] [ConDecl] [Name]   -- ^ with its deriving list
   | DSig [Name] Context SType
   | DClass Context Name Name [Decl]       -- ^ superclasses, class, variable, signatures and defaults
-  | DInstance Context Name SType [Decl]   -- ^ context, class, instance type, methods
+  | DInstance (Maybe Loc) Context Name SType [Decl]   -- ^ where, context, class, instance type, methods
   | DBind Name [Clause]
   | DFixity Assoc Int [Name]
   | DForeign String Name SType   -- ^ Go symbol, Hago name, type

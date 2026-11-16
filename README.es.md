@@ -271,7 +271,8 @@ Haskell 98.
   segundo argumento. La adaptación automática cubre el caso de pasar funciones estrictas, pero
   igual puede aparecer un error de tipos que mencione `Lazy` (`liftA2 (:)` es uno; una lambda lo
   resuelve).
-- **Los mensajes de error son mínimos** y el type checker no da posiciones en el código.
+- **Los mensajes de error son escuetos.** Dicen dónde (`examples/x.hgo:12:7: in main: no
+  instance for Show Color`), pero no citan el código ni sugieren correcciones.
 
 ## Organización del código
 

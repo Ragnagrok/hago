@@ -18,7 +18,7 @@ instanceFor n ps cons cls = do
     "Ord" -> Right [DBind "compare" (ordClauses cons)]
     "Show" -> Right [DBind "showsPrec" (map showClause cons)]
     _ -> Left ("cannot derive " ++ cls ++ " for " ++ n ++ " (only Eq, Ord and Show)")
-  pure (DInstance [(cls, p) | p <- ps] cls (STCon n (map STVar ps)) methods)
+  pure (DInstance Nothing [(cls, p) | p <- ps] cls (STCon n (map STVar ps)) methods)
 
 -- | Two patterns for the same constructor, with fields named a1.. and b1..
 fieldsOf :: ConDecl -> (Name, Int)

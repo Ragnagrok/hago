@@ -1,4 +1,4 @@
--- expects: no instance for Applicative Box
+-- expects: rejected/monad-needs-applicative.hgo:7:1: in instance Monad Box: no instance for Applicative Box
 data Box a = Box a
 
 instance Functor Box where

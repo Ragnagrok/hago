@@ -11,7 +11,7 @@ import qualified Data.IntMap as IM
 import Data.List (intercalate, nub)
 import qualified Data.Map as M
 import Hago.Core
-import Hago.Syntax (Name)
+import Hago.Syntax (Loc, Name, showLoc)
 
 data InstHead = InstHead {ihId :: Name, ihVars :: [Name], ihCtx :: [Pred]}
 
@@ -27,17 +27,39 @@ data Env = Env
 data St = St
   { stNext :: Int
   , stSub :: Subst
-  , stWanted :: [(Int, Pred)]   -- ^ constraints waiting to be solved, by hole
+  , stWanted :: [(Int, Pred, Maybe Loc)]   -- ^ constraints waiting to be solved, by hole, with where they arose
   , stSolved :: IM.IntMap Dict
+  , stLoc :: Maybe Loc                     -- ^ the innermost expression or pattern being checked
   }
 
-type TC = StateT St (Either String)
+-- | An error: where, inside which definitions (outermost first), and what.
+data TcErr = TcErr (Maybe Loc) [Name] String
+
+type TC = StateT St (Either TcErr)
 
 throw :: String -> TC a
-throw = throwError
+throw msg = do
+  l <- gets stLoc
+  throwError (TcErr l [] msg)
 
 withCtx :: Name -> TC a -> TC a
-withCtx n act = act `catchError` \e -> throwError ("in " ++ n ++ ": " ++ e)
+withCtx n act = act `catchError` \(TcErr l cs m) -> throwError (TcErr l (n : cs) m)
+
+withLoc :: Loc -> TC a -> TC a
+withLoc l act = do
+  old <- gets stLoc
+  modify (\s -> s {stLoc = Just l})
+  r <- act
+  modify (\s -> s {stLoc = old})
+  pure r
+
+atLoc :: Maybe Loc -> TC a -> TC a
+atLoc = maybe id withLoc
+
+-- | file:line:col: in f, in g: message. Without a location, the file alone.
+formatErr :: FilePath -> TcErr -> String
+formatErr file (TcErr l cs m) =
+  maybe file showLoc l ++ ": " ++ (if null cs then "" else "in " ++ intercalate ", in " cs ++ ": ") ++ m
 
 next :: TC Int
 next = do
@@ -95,7 +117,7 @@ substT = substTV
 newHole :: Pred -> TC Dict
 newHole p = do
   h <- next
-  modify (\s -> s {stWanted = (h, p) : stWanted s})
+  modify (\s -> s {stWanted = (h, p, stLoc s) : stWanted s})
   pure (DHole h)
 
 -- | Fresh type variables for the scheme, and a hole for each constraint.
@@ -129,12 +151,12 @@ solve env gen = nub <$> loop []
         else do
           ds <- concat <$> mapM step ws
           loop (deferred ++ ds)
-    step (h, IsIn c t) = do
+    step (h, IsIn c t, l) = atLoc l $ do
       t' <- zonkT t
       case lookup (IsIn c t') (envGivens env) of
         Just d -> solved h d >> pure []
         Nothing -> case t' of
-          TMeta m -> pure [(h, c, m)]
+          TMeta m -> pure [(h, c, m, l)]
           TCon k ts | Just ih <- M.lookup (c, k) (envInsts env) -> do
             let s = M.fromList (zip (ihVars ih) ts)
             subs <- mapM (\(IsIn c' pt) -> newHole (IsIn c' (substT s pt))) (ihCtx ih)
@@ -143,25 +165,28 @@ solve env gen = nub <$> loop []
           TVar v -> throw ("no instance for (" ++ c ++ " " ++ v ++ "): add it to the type signature")
           _ -> throw ("no instance for " ++ c ++ " " ++ prettyAtom t')
     finish deferred = do
-      deferred' <- forM deferred $ \(h, c, m) -> do
+      deferred' <- forM deferred $ \(h, c, m, l) -> do
         t <- zonkT (TMeta m)
-        pure (h, c, t)
-      let stillMeta = [(h, c, m) | (h, c, TMeta m) <- deferred']
-          resolvedNow = [(h, IsIn c t) | (h, c, t) <- deferred', not (isMetaT t)]
+        pure (h, c, t, l)
+      let stillMeta = [(h, c, m, l) | (h, c, TMeta m, l) <- deferred']
+          resolvedNow = [(h, IsIn c t, l) | (h, c, t, l) <- deferred', not (isMetaT t)]
       -- defaulting may have resolved some of them already
       unless (null resolvedNow) $ modify (\s -> s {stWanted = resolvedNow ++ stWanted s})
-      let (generalised, ambiguous) = span' (\(_, _, m) -> M.member m gen) stillMeta
-      preds <- forM generalised $ \(h, c, m) -> do
+      let (generalised, ambiguous) = span' (\(_, _, m, _) -> M.member m gen) stillMeta
+      preds <- forM generalised $ \(h, c, m, _) -> do
         let v = gen M.! m
         solved h (DParam (dictName c v))
         pure (IsIn c (TVar v))
-      forM_ (nub [m | (_, _, m) <- ambiguous]) $ \m -> do
-        let cs = nub [c | (_, c, m') <- ambiguous, m' == m]
+      forM_ (nub [m | (_, _, m, _) <- ambiguous]) $ \m -> do
+        let cs = nub [c | (_, c, m', _) <- ambiguous, m' == m]
+            l = case [l' | (_, _, m', l') <- ambiguous, m' == m] of
+              (l' : _) -> l'
+              [] -> Nothing
         case defaultFor cs of
           Just t -> bindMeta m t
-          Nothing -> throw ("ambiguous type variable with constraints " ++ intercalate ", " cs)
+          Nothing -> atLoc l (throw ("ambiguous type: nothing fixes the type with " ++ intercalate ", " cs))
       unless (null ambiguous) $
-        modify (\s -> s {stWanted = [(h, IsIn c (TMeta m)) | (h, c, m) <- ambiguous] ++ stWanted s})
+        modify (\s -> s {stWanted = [(h, IsIn c (TMeta m), l) | (h, c, m, l) <- ambiguous] ++ stWanted s})
       rest <- if null ambiguous && null resolvedNow then pure [] else loop []
       pure (preds ++ rest)
     solved :: Int -> Dict -> TC ()

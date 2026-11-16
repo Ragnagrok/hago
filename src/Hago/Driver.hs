@@ -24,7 +24,8 @@ compile file src = do
   prelude <- parseModule "Prelude.hgo" preludeSource
   user <- parseModule file src
   decls <- either (Left . ((file ++ ": ") ++)) Right (expandDeriving (prelude ++ user))
-  prog <- either (Left . ((file ++ ": ") ++)) Right (typecheck (resolveFixity decls) >>= specialize)
+  checked <- typecheck file (resolveFixity decls)
+  prog <- either (Left . ((file ++ ": ") ++)) Right (specialize checked)
   pure (generate runtimeSource prog)
 
 compileFile :: FilePath -> IO (Either String String)

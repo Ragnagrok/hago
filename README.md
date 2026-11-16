@@ -257,7 +257,8 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
   `foldr` takes `a -> Lazy b -> b` so it can stop early, and `++` and `<>` suspend their second
   argument. The automatic adaptation covers passing strict functions, but you can still meet a
   type error that mentions `Lazy` (`liftA2 (:)` is one; a lambda fixes it).
-- **Error messages are minimal** and have no source positions in the type checker.
+- **Error messages are short.** They do say where (`examples/x.hgo:12:7: in main: no instance
+  for Show Color`), but they do not quote the source or suggest fixes.
 
 ## Layout of the code
 

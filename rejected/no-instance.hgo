@@ -1,4 +1,4 @@
--- expects: no instance for Show Color
+-- expects: rejected/no-instance.hgo:5:8: in main: no instance for Show Color
 data Color = Red | Green
 
 main :: IO ()

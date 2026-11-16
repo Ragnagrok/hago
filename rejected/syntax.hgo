@@ -1,0 +1,9 @@
+-- expects: rejected/syntax.hgo:6:5: syntax error
+f :: Int -> Int
+f x = case x of
+  1 -> 2
+  -- => instead of ->
+  _ => 3
+
+main :: IO ()
+main = print (f 1)

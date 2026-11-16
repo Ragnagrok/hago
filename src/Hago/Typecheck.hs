@@ -6,6 +6,8 @@
 -- where a @t@ is expected is forced. Constraints become dictionaries.
 module Hago.Typecheck (typecheck, primSchemes, pretty) where
 
+import Data.Bifunctor (first)
+
 import Control.Monad
 import Control.Monad.State
 import Data.Graph (flattenSCC, flattenSCCs, stronglyConnComp)
@@ -141,6 +143,7 @@ inferVarRaw env x = case M.lookup x (envVars env) of
 
 infer :: Env -> Expr -> TC (CExpr, Type)
 infer env e = case e of
+  ELoc l x -> withLoc l (infer env x)
   EVar x -> do
     (c, t) <- inferVarRaw env x
     zonkT t >>= \case
@@ -204,6 +207,7 @@ check :: Env -> Expr -> Type -> TC CExpr
 check env e expected = do
   ex <- zonkT expected
   case (e, ex) of
+    (ELoc l x, _) -> withLoc l (check env x expected)
     (_, TCon "Lazy" [inner]) -> case e of
       EVar x -> do
         (c, t) <- inferVarRaw env x
@@ -281,7 +285,7 @@ checkLam env ps body ex = do
     go i (p : rest) t = do
       (pt, rt) <- splitArrow t
       (params, toMatch, bs, r) <- go (i + 1) rest rt
-      case p of
+      case unLocP p of
         PVar x -> pure ((x, pt) : params, toMatch, (x, pt) : bs, r)
         _ -> do
           let n = "_lam" ++ show i
@@ -292,6 +296,7 @@ checkPat :: Env -> Pat -> Type -> TC (CPat, [(Name, Type)])
 checkPat env p t = do
   t' <- zonkT t
   case (p, t') of
+    (PLoc l q, _) -> withLoc l (checkPat env q t')
     (PVar x, _) -> pure (CPVar x t', [(x, t')])
     (PWild, _) -> pure (CPWild, [])
     (_, TCon "Lazy" [i]) -> do
@@ -413,8 +418,9 @@ etaTo t (k, body) = do
 
 -- Module --------------------------------------------------------------------------
 
-typecheck :: [Decl] -> Either String Program
-typecheck ds = evalStateT (tcModule ds) (St 0 IM.empty [] IM.empty)
+-- | Errors without a location of their own are reported against the file.
+typecheck :: FilePath -> [Decl] -> Either String Program
+typecheck file ds = first (formatErr file) (evalStateT (tcModule ds) (St 0 IM.empty [] IM.empty Nothing))
 
 tyconId :: Name -> String
 tyconId = \case
@@ -468,7 +474,7 @@ tcModule ds = do
     pure (c, ClassInfo v kind (map fst sup) methods defaults)
   let envCl = envK {envClasses = classes}
   -- instance heads
-  instDecls <- forM [(ctx, c, st, body) | DInstance ctx c st body <- ds] $ \(ctx, c, st, body) -> withCtx ("instance " ++ c) $ do
+  instDecls <- forM [(l, ctx, c, st, body) | DInstance l ctx c st body <- ds] $ \(l, ctx, c, st, body) -> atLoc l $ withCtx ("instance " ++ c) $ do
     unless (M.member c classes) (throw ("unknown class: " ++ c))
     t <- fromSType envCl (rigid st) st
     (k, vs) <- case t of
@@ -480,7 +486,7 @@ tcModule ds = do
     unless (length vs + kind == arity) $
       throw ("the instance type must take " ++ show kind ++ " more argument(s) to match the class")
     preds <- contextPreds envCl ctx
-    pure ((c, k), InstHead ("inst_" ++ c ++ "_" ++ tyconId k) vs preds, t, body)
+    pure ((c, k), InstHead ("inst_" ++ c ++ "_" ++ tyconId k) vs preds, t, (l, body))
   case [key | (key, n) <- M.toList (M.fromListWith (+) [(key, 1 :: Int) | (key, _, _, _) <- instDecls]), n > 1] of
     ((c, k) : _) -> throw ("duplicate instance " ++ c ++ " " ++ k)
     [] -> pure ()
@@ -528,7 +534,7 @@ tcModule ds = do
       _ <- solve envG M.empty
       pure ((topBind (defaultName c m) vs preds t (arrows t) body') {tbShared = False})
   -- instance bodies
-  insts <- forM instDecls $ \((c, _), ih, headT, body) -> withCtx ("instance " ++ c ++ " " ++ prettyAtom headT) $ do
+  insts <- forM instDecls $ \((c, _), ih, headT, (l, body)) -> atLoc l $ withCtx ("instance " ++ c ++ " " ++ prettyAtom headT) $ do
     let ci = classes M.! c
         defined = M.fromListWith (flip (++)) [(m, cs) | DBind m cs <- body]
         self = DInst (ihId ih) (map TVar (ihVars ih)) [DParam (dictName pc pv) | IsIn pc (TVar pv) <- ihCtx ih]
@@ -558,9 +564,12 @@ tcModule ds = do
       pure (s, d)
     pure (InstInfo (ihId ih) c (ihVars ih) (ihCtx ih) headT methods supers)
   -- main must be an IO action
+  let mainLoc = case [l | DBind "main" (Clause _ (Rhs ((_, ELoc l _) : _) _) : _) <- ds] of
+        (l : _) -> Just l
+        [] -> Nothing
   case M.lookup "main" (envVars env2) of
     Nothing -> throw "no main defined"
-    Just (sc, _) -> withCtx "main" $ do
+    Just (sc, _) -> atLoc mainLoc $ withCtx "main" $ do
       (t, _, _) <- instantiate sc
       unify t (tIO tUnit)
       modify (\s -> s {stWanted = []})
@@ -630,6 +639,7 @@ exprRefs = \case
   EDo ss -> concatMap stmtRefs ss
   EOpSeq e0 rest -> exprRefs e0 ++ concat [op : exprRefs x | (op, x) <- rest]
   EAnn x _ -> exprRefs x
+  ELoc _ x -> exprRefs x
   _ -> []
   where
     stmtRefs (SBind _ e) = exprRefs e

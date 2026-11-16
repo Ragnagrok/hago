@@ -11,26 +11,67 @@ import Data.Maybe (fromMaybe)
 import Hago.Lexer
 import Hago.Syntax
 import Text.Parsec hiding (token, tokens)
+import Text.Parsec.Error (errorMessages, showErrorMessages)
 import Text.Parsec.Pos (initialPos)
 import qualified Text.Parsec as P
 
-type Parser = Parsec [Token] ()
+-- | The user state is the file being parsed, for locations.
+type Parser = Parsec [Token] FilePath
 
 parseModule :: FilePath -> String -> Either String [Decl]
 parseModule file src = do
   toks <- either (\e -> Left (file ++ ":" ++ e)) Right (lexer src)
-  ds <- either (Left . show) Right (runParser pModule () file (layout toks))
+  ds <- either (Left . showParseError file) Right (runParser pModule file file (layout toks))
   pure (groupClauses ds)
 
 -- Token primitives -----------------------------------------------------------
 
+showParseError :: FilePath -> ParseError -> String
+showParseError file err =
+  file ++ ":" ++ show (sourceLine p) ++ ":" ++ show (sourceColumn p) ++ ": syntax error"
+    ++ showErrorMessages "or" "unknown parse error" "expecting" "unexpected" "end of input" (errorMessages err)
+  where p = errorPos err
+
+-- | How a token reads in an error message.
+describe :: Tok -> String
+describe = \case
+  TVarId s -> "identifier " ++ s
+  TConId s -> "constructor " ++ s
+  TVarSym s -> "operator " ++ s
+  TConSym s -> "operator " ++ s
+  TInt n -> "number " ++ show n
+  TFloat d -> "number " ++ show d
+  TChar c -> "character " ++ show c
+  TStr s -> "string " ++ show s
+  TSpecial "{" -> "the start of a block"
+  TSpecial "}" -> "the end of a block"
+  TSpecial ";" -> "a new line"
+  TSpecial s -> show s
+  TKey k -> show k
+  TOpenN _ _ -> "layout"
+  TLineN _ -> "layout"
+
 satisfyT :: (Tok -> Maybe a) -> Parser a
-satisfyT f = P.token (show . tokVal) pos (f . tokVal)
+satisfyT f = P.token (describe . tokVal) pos (f . tokVal)
   where pos t = newPos' (tokLine t) (tokCol t)
         newPos' l c = setSourceColumn (setSourceLine (initialPos "") l) c
 
 tokEq :: Tok -> Parser ()
-tokEq t = satisfyT (\x -> if x == t then Just () else Nothing) <?> show t
+tokEq t = satisfyT (\x -> if x == t then Just () else Nothing) <?> describe t
+
+-- | The location of the next token.
+here :: Parser Loc
+here = do
+  file <- getState
+  t <- lookAhead (P.token (describe . tokVal) pos Just)
+  pure (file, tokLine t, tokCol t)
+  where pos t = setSourceColumn (setSourceLine (initialPos "") (tokLine t)) (tokCol t)
+
+locE :: Parser Expr -> Parser Expr
+locE p = ELoc <$> here <*> p
+
+locP :: Parser Pat -> Parser Pat
+locP p = PLoc <$> here <*> p
 
 special :: String -> Parser ()
 special = tokEq . TSpecial
@@ -129,12 +170,13 @@ classDecl = do
 
 instanceDecl :: Parser Decl
 instanceDecl = do
+  l <- here
   key "instance"
   ctx <- context
   cls <- conId
   t <- aType
   body <- option [] (key "where" >> localDecls)
-  pure (DInstance ctx cls t body)
+  pure (DInstance (Just l) ctx cls t body)
 
 conDecl :: Parser ConDecl
 conDecl = try infixCon <|> prefixCon
@@ -261,14 +303,14 @@ pat = do
     pure (PCon op [l, r])
 
 lPat :: Parser Pat
-lPat = try (PCon <$> conId <*> many1 aPat) <|> negLit <|> aPat
+lPat = locP (try (PCon <$> conId <*> many1 aPat) <|> negLit) <|> aPat
   where negLit = do
           tokEq (TVarSym "-")
           n <- satisfyT (\t -> case t of TInt i -> Just i; _ -> Nothing)
           pure (PLit (LInt (negate n)))
 
 aPat :: Parser Pat
-aPat = choice
+aPat = locP $ choice
   [ try (PAs <$> varId <* key "@") <*> aPat
   , PVar <$> var
   , PWild <$ key "_"
@@ -306,7 +348,7 @@ expr = do
   option e (EAnn e <$> (key "::" *> pType))
 
 expr10 :: Parser Expr
-expr10 = choice
+expr10 = locE $ choice
   [ lambda
   , letIn
   , ifThen
@@ -369,7 +411,7 @@ fexpr :: Parser Expr
 fexpr = foldl1 EApp <$> many1 aExpr
 
 aExpr :: Parser Expr
-aExpr = choice
+aExpr = locE $ choice
   [ EVar <$> varId
   , ECon <$> conId
   , ELit <$> literal
@@ -432,13 +474,13 @@ resolveFixity ds = map (rDecl fixities) ds
 
 allDecls :: [Decl] -> [Decl]
 allDecls ds = ds ++ concat [concatMap whereDecls cs | DBind _ cs <- ds]
-  ++ concat [allDecls b | DClass _ _ _ b <- ds] ++ concat [allDecls b | DInstance _ _ _ b <- ds]
+  ++ concat [allDecls b | DClass _ _ _ b <- ds] ++ concat [allDecls b | DInstance _ _ _ _ b <- ds]
   where whereDecls (Clause _ (Rhs _ w)) = allDecls w
 
 rDecl :: Fixities -> Decl -> Decl
 rDecl fx (DBind n cs) = DBind n [Clause ps (rRhs fx r) | Clause ps r <- cs]
 rDecl fx (DClass sup c v ds) = DClass sup c v (map (rDecl fx) ds)
-rDecl fx (DInstance ctx c t ds) = DInstance ctx c t (map (rDecl fx) ds)
+rDecl fx (DInstance l ctx c t ds) = DInstance l ctx c t (map (rDecl fx) ds)
 rDecl _ d = d
 
 rRhs :: Fixities -> Rhs -> Rhs
@@ -456,6 +498,7 @@ rExpr fx = go
       EDo ss -> EDo (map stmtR ss)
       EOpSeq e0 rest -> climb (go e0) [(op, go x) | (op, x) <- rest]
       EAnn x t -> EAnn (go x) t
+      ELoc l x -> ELoc l (go x)
       _ -> e
     stmtR (SBind x e) = SBind x (go e)
     stmtR (SBindPat p e) = SBindPat p (go e)
