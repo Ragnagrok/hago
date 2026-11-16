@@ -72,21 +72,21 @@ specialize prog = do
       topEnts = [Ent n ps ds (zonk sub t) ar b sh | TopBind n ps ds t ar b sh <- progBinds prog]
       instEnts =
         [ Ent (instMethodName (instId inst) m) (instVars inst ++ own)
-              [(dictName c v, p) | p@(IsIn c (TVar v)) <- instCtx inst ++ mpreds] t (arrows t)
+              [(dictName p, p) | p <- instCtx inst ++ mpreds] t (arrows t)
               (fromMaybe (missing m t) mbody) False
         | inst <- progInsts prog
         , let ci = classes M.! instClass inst
         , ((m, Forall vs ps mt), (_, mbody)) <- zip (clsMethods ci) (instMethods inst)
-        , let own = drop 1 vs
+        , let own = drop (length (clsVars ci)) vs
         , let mpreds = drop 1 ps
-        , let t = norm (substTV (M.singleton (clsVar ci) (instHead inst)) (zonk sub mt)) ]
+        , let t = norm (substTV (M.fromList (zip (clsVars ci) (instHead inst))) (zonk sub mt)) ]
       ents = M.fromList [(eName e, e) | e <- topEnts ++ instEnts]
       hkParams e
         | isValue e = eTParams e
         | otherwise =
             [ v | v <- eTParams e
             , v `elem` headVars (eType e) || v `elem` dataHkVars (progData prog) (eType e)
-                || or [w == v | (_, IsIn _ (TVar w)) <- eDicts e] ]
+                || or [v `elem` concatMap tyVarsOf ts | (_, IsIn _ ts) <- eDicts e] ]
       -- a polymorphic value, like xs :: [a] or table :: Num a => [a], is a
       -- template too: each copy at concrete types is computed once and shared
       isValue e = eArity e == 0 && arrows (eType e) == 0
@@ -104,7 +104,7 @@ specialize prog = do
       superOf d s = case d of
         DInst i ts ds | Just inst <- M.lookup i instMap, Just sd <- lookup s (instSupers inst) ->
           let rc = RC (M.fromList (zip (instVars inst) ts))
-                      (M.fromList (zip [dictName c v | IsIn c (TVar v) <- instCtx inst] ds))
+                      (M.fromList (zip (map dictName (instCtx inst)) ds))
                       (error "superOf") S.empty
            in dict rc sd
         _ -> DSuper d s
@@ -122,7 +122,8 @@ specialize prog = do
                   ds' = map (dict rc) ds
                   t' = ty rc t
               case (M.lookup x methodClass, ds') of
-                (Just _, DInst i its subs : rest) -> useEnt (instMethodName i x) (its ++ drop 1 ts') (subs ++ rest) t'
+                (Just c, DInst i its subs : rest) ->
+                  useEnt (instMethodName i x) (its ++ drop (length (clsVars (classes M.! c))) ts') (subs ++ rest) t'
                 (Just c, _) | isStatic c -> lift (Left ("cannot resolve " ++ c ++ " for " ++ x ++ " in " ++ eName cur))
                 (Just _, _) -> pure (CVar x (Inst ts' ds') t')
                 (Nothing, _)
@@ -242,13 +243,13 @@ specialize prog = do
         DInst i ts subs | Just inst <- M.lookup i instMap -> do
           ts' <- mapM canonType ts
           let s = M.fromList (zip (instVars inst) ts')
-          subs' <- forM (zip (instCtx inst) subs) $ \(IsIn c pt, sd) ->
+          subs' <- forM (zip (instCtx inst) subs) $ \(IsIn c pts, sd) ->
             if isStatic c
               then canonDict sd
               else do
                 (m, tsAcc, n, ds) <- get
                 let p = "_sd" ++ show n
-                put (m, tsAcc, n + 1, (p, IsIn c (norm (substTV s pt)), sd) : ds)
+                put (m, tsAcc, n + 1, (p, IsIn c (map (norm . substTV s) pts), sd) : ds)
                 pure (DParam p)
           pure (DInst i ts' subs')
         d -> pure d
@@ -258,13 +259,13 @@ specialize prog = do
       plain e = do
         let rc = RC M.empty M.empty e S.empty
         b <- rw rc (eBody e)
-        emit (TopBind (eName e) (eTParams e) [(n, IsIn c (ty rc t)) | (n, IsIn c t) <- eDicts e] (ty rc (eType e)) (eArity e) b (eShared e))
+        emit (TopBind (eName e) (eTParams e) [(n, IsIn c (map (ty rc) ts)) | (n, IsIn c ts) <- eDicts e] (ty rc (eType e)) (eArity e) b (eShared e))
 
       runJob (Job e n tmap dmap extraT extraD) = do
         let hk = hkParams e
             rc = RC tmap dmap e S.empty
             tparams = filter (`notElem` hk) (eTParams e) ++ extraT
-            dicts = [(dn, IsIn c (ty rc t)) | (dn, IsIn c t) <- eDicts e, not (isStatic c)] ++ extraD
+            dicts = [(dn, IsIn c (map (ty rc) ts)) | (dn, IsIn c ts) <- eDicts e, not (isStatic c)] ++ extraD
         b <- rw rc (eBody e)
         emit (TopBind n tparams dicts (ty rc (eType e)) (eArity e) b (isValue e && null tparams && null dicts))
 

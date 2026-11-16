@@ -36,7 +36,7 @@ expandSynonyms ds = do
       DData d -> showLoc (ddLoc d) ++ ": in type " ++ unqual (ddName d)
       DSig ns _ _ -> "in " ++ intercalate ", " (map unqual ns)
       DBind n _ -> "in " ++ unqual n
-      DClass _ c _ _ -> "in class " ++ unqual c
+      DClass _ c _ _ _ -> "in class " ++ unqual c
       DInstance l _ c _ _ -> maybe "" ((++ ": ") . showLoc) l ++ "in instance " ++ unqual c
       DForeign _ n _ -> "in " ++ unqual n
       _ -> "in a declaration"

@@ -51,14 +51,14 @@ tableOf m = Table vals types children
     q = moduleQualify (modName m)
     ds = modDecls m
     vals = M.fromList [(n, q n) | n <- valueNames]
-    types = M.fromList [(n, q n) | n <- [ddName d | DData d <- ds] ++ [t | DType t _ _ <- ds] ++ [c | DClass _ c _ _ <- ds]]
+    types = M.fromList [(n, q n) | n <- [ddName d | DData d <- ds] ++ [t | DType t _ _ <- ds] ++ [c | DClass _ c _ _ _ <- ds]]
     valueNames = nub $
       [n | DBind n _ <- ds] ++ [n | DSig ns _ _ <- ds, n <- ns] ++ [n | DForeign _ n _ <- ds]
         ++ [k | DData d <- ds, ConDecl k _ _ <- ddCons d] ++ methods
-    methods = [n | DClass _ _ _ body <- ds, DSig ns _ _ <- body, n <- ns]
+    methods = [n | DClass _ _ _ _ body <- ds, DSig ns _ _ <- body, n <- ns]
     children = M.fromList $
       [(ddName d, [k | ConDecl k _ _ <- ddCons d]) | DData d <- ds]
-        ++ [(c, [n | DSig ns _ _ <- body, n <- ns]) | DClass _ c _ body <- ds]
+        ++ [(c, [n | DSig ns _ _ <- body, n <- ns]) | DClass _ c _ _ body <- ds]
 
 -- | The part of a table a module lets others see: its own names, the names
 -- it imports, and whole modules it imports (@module M@). Children maps a
@@ -235,18 +235,18 @@ topDecl sc = \case
   DType n ps t -> DType (own sc n) ps <$> rnType sc t
   DSig ns ctx t -> DSig (map (own sc) ns) <$> rnContext sc ctx <*> rnType sc t
   DBind n cs -> DBind (own sc n) <$> mapM (rnClause sc) cs
-  DClass sup c v body -> do
+  DClass sup c vs deps body -> do
     sup' <- rnContext sc sup
     body' <- forM body $ \case
       DSig ns ctx t -> DSig (map (own sc) ns) <$> rnContext sc ctx <*> rnType sc t
       DBind n cs -> DBind (own sc n) <$> mapM (rnClause sc) cs
       d -> pure d
-    pure (DClass sup' (own sc c) v body')
-  DInstance l ctx c t body -> do
+    pure (DClass sup' (own sc c) vs deps body')
+  DInstance l ctx c ts body -> do
     let sc' = sc {scLoc = l}
     c' <- resolveType sc' c
     ctx' <- rnContext sc' ctx
-    t' <- rnType sc' t
+    t' <- mapM (rnType sc') ts
     body' <- forM body $ \case
       DBind n cs -> DBind (methodOf c' n) <$> mapM (rnClause sc) cs
       d -> pure d
@@ -255,7 +255,7 @@ topDecl sc = \case
   DForeign s n t -> DForeign s (own sc n) <$> rnType sc t
 
 rnContext :: Scope -> Context -> Rn Context
-rnContext sc = mapM (\(c, v) -> (,) <$> resolveType sc c <*> pure v)
+rnContext sc = mapM (\(c, ts) -> (,) <$> resolveType sc c <*> mapM (rnType sc) ts)
 
 rnType :: Scope -> SType -> Rn SType
 rnType sc = \case

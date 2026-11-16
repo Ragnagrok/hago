@@ -1,0 +1,15 @@
+-- expects: rejected/fundep-mismatch.hgo:12:14: in label: type mismatch: expected Int, got String
+class Monad m => MonadState s m | m -> s where
+  get :: m s
+  put :: s -> m ()
+
+-- the monad fixes the state's type, so n is an Int
+label :: MonadState Int m => m Int
+label = do
+  n <- get
+  -- the state is an Int, not a String
+  put n
+  pure (n ++ "!")
+
+main :: IO ()
+main = pure ()

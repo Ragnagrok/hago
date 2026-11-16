@@ -11,12 +11,13 @@
 -- the final substitution. Class constraints are explicit dictionaries.
 module Hago.Core where
 
+import Data.Char (isAlphaNum)
 import Data.Data (Data, gmapQ, gmapT)
 import Data.Type.Equality ((:~:) (..))
 import Data.Typeable (Typeable, eqT)
 import qualified Data.IntMap as IM
 import qualified Data.Map as M
-import Hago.Syntax (Lit (..), Name)
+import Hago.Syntax (Lit (..), Name, tupleArity)
 
 data Type
   = TVar Name          -- ^ rigid (quantified) type variable
@@ -42,8 +43,9 @@ norm = \case
   TApp f x -> tApp (norm f) (norm x)
   t -> t
 
--- | A class constraint: the class and the type it applies to.
-data Pred = IsIn Name Type
+-- | A class constraint: the class and the types it applies to, one per
+-- class parameter.
+data Pred = IsIn Name [Type]
   deriving (Eq, Show, Data)
 
 data Scheme = Forall [Name] [Pred] Type
@@ -217,10 +219,11 @@ data Foreign = Foreign {fSymbol :: String, fType :: Type, fArity :: Int}
   deriving (Show, Data)
 
 data ClassInfo = ClassInfo
-  { clsVar :: Name
-  , clsKind :: Int                 -- ^ how many arguments the class variable takes: 0 for Eq, 1 for Monad
-  , clsSupers :: [Name]
-  , clsMethods :: [(Name, Scheme)] -- ^ in declaration order: Forall (clsVar : own vars) (class : own constraints)
+  { clsVars :: [Name]
+  , clsKinds :: [Int]              -- ^ how many arguments each variable takes: 0 for Eq, 1 for Monad
+  , clsKey :: Int                  -- ^ the parameter that chooses the instance and determines the others
+  , clsSupers :: [Pred]            -- ^ over clsVars, each class at most once
+  , clsMethods :: [(Name, Scheme)] -- ^ in declaration order: Forall (clsVars ++ own vars) (class : own constraints)
   , clsDefaults :: [Name]          -- ^ methods with a default definition
   }
   deriving (Show, Data)
@@ -230,7 +233,7 @@ data InstInfo = InstInfo
   , instClass :: Name
   , instVars :: [Name]
   , instCtx :: [Pred]                     -- ^ constraints on instVars
-  , instHead :: Type
+  , instHead :: [Type]                    -- ^ one type per class parameter
   , instMethods :: [(Name, Maybe CExpr)]  -- ^ every method of the class, in order; Nothing if missing
   , instSupers :: [(Name, Dict)]
   }
@@ -259,9 +262,23 @@ data Program = Program
   }
   deriving (Show, Data)
 
--- | The name of the dictionary parameter for a constraint on a type variable.
-dictName :: Name -> Name -> Name
-dictName cls v = "dict_" ++ cls ++ "_" ++ v
+-- | The name of the dictionary parameter for a constraint: dict_Eq_a,
+-- dict_MonadState_Int_m.
+dictName :: Pred -> Name
+dictName (IsIn cls ts) = "dict_" ++ cls ++ concatMap (("_" ++) . tag) ts
+  where
+    tag = \case
+      TVar v -> v
+      TCon c as -> con c ++ concatMap (("_" ++) . tag) as
+      TFun a b -> "Fn_" ++ tag a ++ "_" ++ tag b
+      TApp f x -> tag f ++ "_" ++ tag x
+      TMeta m -> "X" ++ show m
+    con = \case
+      "[]" -> "List"
+      "()" -> "Unit"
+      "->" -> "Fn"
+      c | Just n <- tupleArity c -> "Tup" ++ show n
+      c -> map (\x -> if isAlphaNum x then x else '_') c
 
 -- | Splits a function type into its first n argument types and the rest.
 splitFun :: Int -> Type -> ([Type], Type)

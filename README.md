@@ -89,8 +89,16 @@ label t = traverse step t
   `data StateT s m a = StateT (s -> m (a, s))`. Go has no such type parameters, so each use gets
   its own Go type: `StateT s IO a` becomes `StateT__IO[S, A]`, generated only for the
   combinations the program uses. `examples/transformers.hgo` defines `StateT`, `ExceptT`,
-  `MonadTrans` and `MonadIO`, and runs a stack machine on
-  `StateT [Int] (ExceptT String IO)`.
+  `MonadTrans`, `MonadIO`, `MonadState` and `MonadError`, and runs one stack machine on
+  `StateT [Int] (ExceptT String IO)` and on `ExceptT String (StateT [Int] IO)`.
+- **Classes can have several parameters, with a functional dependency** from one of them to
+  the others, as in mtl: `class Monad m => MonadState s m | m -> s`. The monad chooses the
+  instance and fixes the state's type, so with `MonadState Int m`, `n <- get` makes `n` an
+  `Int`. Instances that pass the operations through other transformers
+  (`MonadState s m => MonadState s (ExceptT e m)`) make `get`, `put` and `throwError` work
+  anywhere in a stack without `lift`, and a function asks only for what it uses:
+  `pop :: (MonadState [Int] m, MonadError String m) => m Int`. Each stack it is used with gets
+  its own copy, so this costs nothing at run time.
 - **Instances can be partial applications,** as in `Functor (Either e)`, `Monad ((->) r)` (a
   reader) and `Monoid w => Monad ((,) w)` (a writer).
 - **`deriving (Eq, Ord, Show)`** expands into ordinary instances before type checking.
@@ -361,7 +369,8 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
   functions, guards, `where`, `let`, `case`, `if`, lambdas, `do` in any monad, as-patterns,
   pattern bindings (`let (q, r) = ...`), `e :: t` annotations, literals with exponents.
 - `class` with superclasses, default methods and constrained methods, `instance` with contexts,
-  classes over types and over type constructors. `Int`, `Double`, `Char`, `String`, `Bool`.
+  classes over types and over type constructors, classes with several parameters and a
+  functional dependency. `Int`, `Double`, `Char`, `String`, `Bool`.
 - Operators with `infixl`/`infixr`/`infix` declarations, sections, backquotes, tuples of up to
   fifteen elements (as Haskell 98 asks; past that, a record), list literals, and ranges (`[a ..]`, `[a, b ..]`, `[a .. c]`, `[a, b .. c]`) over any `Enum`.
 - Let-polymorphism, with dependency analysis of unsigned bindings, for local functions too: a
@@ -378,8 +387,8 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
   manager.
 - **Long loops in pure monads like `State` use stack,** because their `>>=` is a chain of Go
   calls. Write those loops with `tailRecM`. In IO and transformers over IO they are flat.
-- **No multi-parameter classes,** so no mtl-style `MonadState s m`: transformers come with
-  explicit `lift`.
+- **A class with several parameters needs one functional dependency,** from one of them to all
+  the others, which chooses the instance. `class Convert a b`, without one, is rejected.
 - **Some local definitions stay monomorphic:** values (as with Haskell's monomorphism
   restriction, so they are computed once), and functions with constraints on the types of the
   function around them, whose dictionaries belong to that function.

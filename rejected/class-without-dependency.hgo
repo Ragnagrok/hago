@@ -1,0 +1,6 @@
+-- expects: in Convert: a class with several parameters needs one functional dependency, from one of them to all the others
+class Convert a b where
+  convert :: a -> b
+
+main :: IO ()
+main = pure ()

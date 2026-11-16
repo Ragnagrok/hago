@@ -109,9 +109,26 @@ fromSType env vars = go
 rigid :: SType -> M.Map Name Type
 rigid st = M.fromList [(v, TVar v) | v <- stypeVars st]
 
-contextPreds :: Env -> Context -> TC [Pred]
-contextPreds env ctx = forM ctx $ \(c, v) ->
-  if M.member c (envClasses env) then pure (IsIn c (TVar v)) else throw ("unknown class: " ++ c)
+-- | The constraints of a context, over the given type variables. Each
+-- constrains a type variable, as in Haskell 98; in a class with several
+-- parameters, the one that chooses the instance (the others can be any
+-- type, as in MonadState Int m).
+contextPreds :: Env -> M.Map Name Type -> Context -> TC [Pred]
+contextPreds env vars ctx = forM ctx $ \(c, sts) -> case M.lookup c (envClasses env) of
+  Nothing -> throw ("unknown class: " ++ c)
+  Just ci -> do
+    unless (length sts == length (clsVars ci)) (throw (classArity c ci (length sts)))
+    ts <- mapM (fromSType env vars) sts
+    case ts !! clsKey ci of
+      TVar _ -> pure (IsIn c ts)
+      t -> throw ("a constraint is on a type variable, and this one is on " ++ prettyAtom t ++ ": " ++ showPred (IsIn c ts))
+
+classArity :: Name -> ClassInfo -> Int -> String
+classArity c ci n = "the class " ++ c ++ " takes " ++ show (length (clsVars ci)) ++ " type(s), and is given " ++ show n
+
+-- | The type variables a context mentions.
+contextVars :: Context -> [Name]
+contextVars ctx = nub (concatMap stypeVars (concatMap snd ctx))
 
 -- Constructors ---------------------------------------------------------------------
 
@@ -307,25 +324,17 @@ infer env e = case e of
     pure (CCon k targs t, t)
   ELit (LInt n) -> do
     t <- fresh
-    d <- newHole (IsIn "Num" t)
+    d <- newHole (IsIn "Num" [t])
     pure (CNum n t d, t)
   ELit (LDouble x) -> do
     t <- fresh
-    d <- newHole (IsIn "Fractional" t)
+    d <- newHole (IsIn "Fractional" [t])
     pure (CFrac x t d, t)
   ELit l -> pure (CLit l, litType l)
-  EApp {} -> do
-    let (f, args) = spine e
-    case (unLoc f, args) of
-      -- f $ x is f x: a Lazy parameter of f stays lazy
-      (EVar "$", g : x : rest) | not (S.member "$" (envLocal env)) -> infer env (foldl EApp (EApp g x) rest)
-      _ -> do
-        (cf, tf) <- infer env f
-        (cargs, tr) <- applyArgs tf args
-        pure (CApp cf cargs, tr)
+  EApp {} -> inferApp env Nothing e
   EDo ss -> do
     m <- fresh
-    d <- newHole (IsIn "Monad" m)
+    d <- newHole (IsIn "Monad" [m])
     (r, cs) <- doStmts env m ss
     pure (CDo m d r cs, tApp m r)
   EAnn x st -> do
@@ -340,21 +349,41 @@ infer env e = case e of
     t <- fresh
     c <- check env e t
     pure (c, t)
-  where
-    spine (EApp f a) = let (h, as) = spine f in (h, as ++ [a])
-    spine x = (x, [])
-    -- A lambda argument is checked after the arguments that follow it, so
-    -- in map (.name) people the type of people says which name is meant.
-    applyArgs t args = do
-      (slots, tr) <- walk t args
+
+-- | An application, and the type expected of it when it is known: the
+-- result is unified with it before the lambda arguments are checked, so
+-- they see what it fixes.
+inferApp :: Env -> Maybe Type -> Expr -> TC (CExpr, Type)
+inferApp env expected e = do
+  let (f, args) = spine e
+  case (unLoc f, args) of
+    -- f $ x is f x: a Lazy parameter of f stays lazy
+    (EVar "$", g : x : rest) | not (S.member "$" (envLocal env)) -> inferApp env expected (foldl EApp (EApp g x) rest)
+    _ -> do
+      (cf, tf) <- infer env f
+      (slots, tr) <- walk tf args
+      when (any isLeftSlot slots) $ do
+        forM_ expected $ \ex -> do
+          tr' <- zonkT tr
+          ex' <- zonkT ex
+          unless (lazyMismatch tr' ex' || isLazy tr' || isLazy ex') (unify tr' ex')
+        improve env
       cargs <- mapM (either (uncurry (check env)) pure) slots
-      pure (cargs, tr)
+      pure (CApp cf cargs, tr)
+  where
+    spine (EApp g a) = let (h, as) = spine g in (h, as ++ [a])
+    spine x = (x, [])
+    -- A lambda argument is checked after the other arguments, so in
+    -- map (.name) people the type of people says which name is meant, and
+    -- after the result type, so in get >>= \n -> ... the state's type is
+    -- known.
     walk t [] = pure ([], t)
     walk t (a : as) = do
       (p, r) <- splitArrow t
-      slot <- if isLam a && not (all isLam as) then pure (Left (a, p)) else Right <$> check env a p
+      slot <- if isLam a then pure (Left (a, p)) else Right <$> check env a p
       (rest, tr) <- walk r as
       pure (slot : rest, tr)
+    isLeftSlot = either (const True) (const False)
     isLam = \case
       ELoc _ x -> isLam x
       ELam _ _ -> True
@@ -383,6 +412,15 @@ check env e expected = do
           t' -> unify t' inner >> pure (CDelay inner c)
       _ -> CDelay inner <$> check env e inner
     (ELam ps body, _) -> checkLam env ps body ex
+    (EApp {}, _) -> do
+      (c, t) <- inferApp env (Just ex) e
+      adapt c t ex
+    -- the monad is known before the statements are checked
+    (EDo ss, _) | Just m <- monadOf ex -> do
+      d <- newHole (IsIn "Monad" [m])
+      (r, cs) <- doStmts env m ss
+      unify (tApp m r) ex
+      pure (CDo m d r cs)
     (EIf c a b, _) -> CIf <$> check env c tBool <*> check env a ex <*> check env b ex <*> pure ex
     (ECase s alts, _) -> do
       (cs, ts) <- infer env s
@@ -398,6 +436,14 @@ check env e expected = do
     _ -> do
       (c, t) <- infer env e
       adapt c t ex
+
+-- | The monad of a known type m a.
+monadOf :: Type -> Maybe Type
+monadOf = \case
+  TCon k ts@(_ : _) | k /= "Lazy" -> Just (TCon k (init ts))
+  TApp f _ -> Just f
+  TFun a _ -> Just (TCon "->" [a])
+  _ -> Nothing
 
 -- | Unifies the inferred type with the expected one. When both are function
 -- types that differ only in which parameters are Lazy, wraps the function
@@ -463,11 +509,9 @@ lazyParams :: Type -> Bool
 lazyParams (TFun p r) = isLazy p || lazyParams r
 lazyParams _ = False
 
-isLazy, isMeta :: Type -> Bool
+isLazy :: Type -> Bool
 isLazy (TCon "Lazy" _) = True
 isLazy _ = False
-isMeta (TMeta _) = True
-isMeta _ = False
 
 checkLam :: Env -> [Pat] -> Expr -> Type -> TC CExpr
 checkLam env ps body ex = do
@@ -503,8 +547,8 @@ checkPat env p t = do
       (cq, bs) <- checkPat env q t'
       pure (CPAs x t' cq, (x, t') : bs)
     (PLit (LInt n), _) -> do
-      dEq <- newHole (IsIn "Eq" t')
-      dNum <- newHole (IsIn "Num" t')
+      dEq <- newHole (IsIn "Eq" [t'])
+      dNum <- newHole (IsIn "Num" [t'])
       pure (CPNum n t' dEq dNum, [])
     (PLit l, _) -> unify t' (litType l) >> pure (CPLit l, [])
     (PCon k ps, _) -> do
@@ -552,6 +596,7 @@ doStmts env m = \case
   SBind x e : rest -> do
     a <- fresh
     c <- check env e (tApp m a)
+    improve env
     let env' = if x == "_" then env else extend env [(x, a)]
     (r, cs) <- doStmts env' m rest
     pure (r, CSBind x a c : cs)
@@ -560,9 +605,6 @@ doStmts env m = \case
     (r, cs) <- doStmts env' m rest
     pure (r, CSLet bs : cs)
 
--- | Local bindings (let and where): recursive and monomorphic, since Go
--- function literals cannot be generic. Their constraints are solved together
--- with those of the enclosing top-level binding.
 -- | let and where, a group of mutually recursive definitions at a time.
 --
 -- A group of functions whose types have variables nothing else fixes is
@@ -598,11 +640,11 @@ localBinds env0 ds = do
       let wanted = [p | (_, p, _) <- wantedNew]
       zts <- mapM zonkT tys
       envTs <- mapM zonkT (envMono env)
-      newPreds <- mapM (\(IsIn c t) -> IsIn c <$> zonkT t) wanted
+      newPreds <- mapM (\(IsIn c ts) -> IsIn c <$> mapM zonkT ts) wanted
       let bodies = map snd results
           envMetas = S.fromList (concatMap metas envTs)
           gen = nub [m | t <- zts, m <- metas t, not (S.member m envMetas)]
-          ownOnly (IsIn _ t) = all (`elem` gen) (metas t) && null (tyVarsOf t)
+          ownOnly (IsIn _ ts) = all (\t -> all (`elem` gen) (metas t) && null (tyVarsOf t)) ts
           liftable = not (null gen) && all ((> 0) . fst) results && all ownOnly newPreds
             && not (any (`elem` ns) (coreBinders bodies))
           local = (envG, acc ++ [CBind n t ar body | ((n, t), (ar, body)) <- zip (zip ns tys) results])
@@ -612,14 +654,15 @@ localBinds env0 ds = do
         passed <- forM used $ \x -> case M.lookup x (envVars env) of
           Just (Forall [] [] t, _) -> (,) x <$> zonkT t
           _ -> throw ("internal: " ++ x ++ " is not a local variable")
-        vs <- mapM (const (uniq "l")) gen
+        vs0 <- mapM (const (uniq "l")) gen
         -- the group's own constraints, solved apart from those of the
         -- function around it
         modify (\st -> st {stWanted = wantedNew})
-        preds <- withCtx (unwords ns) (solve env (M.fromList (zip gen vs)))
+        (preds, extra) <- withCtx (unwords ns) (solveGen env (M.fromList (zip gen vs0)))
         modify (\st -> st {stWanted = wantedOld ++ stWanted st})
-        zipWithM_ (\m v -> bindMeta m (TVar v)) gen vs
-        let dicts = [DParam (dictName c v) | IsIn c (TVar v) <- preds]
+        let vs = vs0 ++ map snd extra
+        zipWithM_ (\m v -> bindMeta m (TVar v)) (gen ++ map fst extra) vs
+        let dicts = map (DParam . dictName) preds
         zts' <- mapM zonkT tys
         lifted <- mapM (\n -> ((n ++ "'") ++) . drop 1 <$> uniq "") ns
         -- inside, the group calls itself with its own type variables and the
@@ -637,7 +680,7 @@ localBinds env0 ds = do
               body' = case rewrite body of
                 CLam ps r inner -> CLam (passed ++ ps) r inner
                 other -> other
-          modify (\st -> st {stLifted = (TopBind ln vs [(dictName c v, p) | p@(IsIn c (TVar v)) <- preds] ft (length passed + ar) body' False, vs) : stLifted st})
+          modify (\st -> st {stLifted = (TopBind ln vs [(dictName p, p) | p <- preds] ft (length passed + ar) body' False, vs) : stLifted st})
         -- outside, the variables are passed through names nothing can shadow
         aliases <- forM passed $ \(x, xt) -> do
           a <- uniq "cap"
@@ -739,44 +782,63 @@ tcModule ds = do
              , let ar = M.unionsWith max [stypeArities st | ConDecl _ fs _ <- ddCons d, (_, st) <- fs] ]
       envC = envD {envCons = cons, envRecords = M.fromList (concatMap snd checked)}
   -- classes
-  let classDecls = [(sup, c, v, body) | DClass sup c v body <- ds]
-      kindOf v body = maximum (0 : [M.findWithDefault 0 v (stypeArities st) | DSig _ _ st <- body])
-      envK = envC {envClasses = M.fromList [(c, ClassInfo v (kindOf v body) (map fst sup) [] []) | (sup, c, v, body) <- classDecls]}
-  classes <- fmap M.fromList . forM classDecls $ \(sup, c, v, body) -> withCtx c $ do
-    let kind = kindOf v body
-    forM_ sup $ \(s, sv) -> do
-      unless (sv == v) (throw "a superclass must constrain the class variable")
-      case M.lookup s (envClasses envK) of
-        Nothing -> throw ("unknown class: " ++ s)
-        Just sci -> unless (clsKind sci == kind) (throw ("superclass " ++ s ++ " is over a different kind"))
+  let classDecls = [(sup, c, vs, deps, body) | DClass sup c vs deps body <- ds]
+      kindOf body v = maximum (0 : [M.findWithDefault 0 v (stypeArities st) | DSig _ _ st <- body])
+  keys <- fmap M.fromList . forM classDecls $ \(_, c, vs, deps, _) -> withCtx c $ do
+    forM_ (take 1 (vs \\ nub vs)) $ \v -> throw ("the class parameter " ++ v ++ " appears twice")
+    k <- case (vs, deps) of
+      ([_], []) -> pure 0
+      (_, [([d], rest)]) | d `elem` vs, L.sort (d : rest) == L.sort vs -> pure (length (takeWhile (/= d) vs))
+      _ -> throw "a class with several parameters needs one functional dependency, from one of them to all the others, as in | m -> s"
+    pure (c, k)
+  let envK = envC {envClasses = M.fromList [(c, ClassInfo vs (map (kindOf body) vs) (keys M.! c) [] [] []) | (_, c, vs, _, body) <- classDecls]}
+  classes <- fmap M.fromList . forM classDecls $ \(sup, c, vs, _, body) -> withCtx c $ do
+    let kinds = map (kindOf body) vs
+        key = keys M.! c
+        vmap = M.fromList [(v, TVar v) | v <- vs]
+    supers <- contextPreds envK vmap sup
+    forM_ supers $ \(IsIn s sts) ->
+      forM_ (zip sts (clsKinds (envClasses envK M.! s))) $ \case
+        (TVar v, k) | lookup v (zip vs kinds) == Just k -> pure ()
+        (TVar _, _) -> throw ("superclass " ++ s ++ " is over a different kind")
+        _ -> throw "a superclass must constrain the class variables"
+    let supNames = [s | IsIn s _ <- supers]
+    forM_ (take 1 (supNames \\ nub supNames)) $ \n -> throw ("the superclass " ++ n ++ " appears twice")
     methods <- fmap concat . forM [(ns, ctx, st) | DSig ns ctx st <- body] $ \(ns, ctx, st) -> do
-      let own = filter (/= v) (stypeVars st)
+      let own = filter (`notElem` vs) (stypeVars st)
       -- a dictionary of a class over plain types is a Go struct at run time,
       -- and struct fields cannot be generic
-      when (kind == 0 && (not (null own) || not (null ctx))) $
+      when (kinds !! key == 0 && (not (null own) || not (null ctx))) $
         throw "methods of a class over plain types may only mention the class variable"
       t <- fromSType envK (rigid st) st
-      mpreds <- contextPreds envK ctx
-      when (any (\(IsIn _ pt) -> pt == TVar v) mpreds) (throw "a method cannot constrain the class variable again")
-      pure [(n, Forall (v : own) (IsIn c (TVar v) : mpreds) t) | n <- ns]
+      mpreds <- contextPreds envK (rigid st) ctx
+      when (any (\(IsIn _ pts) -> any (`elem` map TVar vs) pts) mpreds) (throw "a method cannot constrain the class variable again")
+      pure [(n, Forall (vs ++ own) (IsIn c (map TVar vs) : mpreds) t) | n <- ns]
     let defaults = [n | DBind n _ <- body]
     forM_ defaults $ \n -> unless (n `elem` map fst methods) (throw (n ++ " is not a method of " ++ c))
-    pure (c, ClassInfo v kind (map fst sup) methods defaults)
+    pure (c, ClassInfo vs kinds key supers methods defaults)
   let envCl = envK {envClasses = classes}
   -- instance heads
-  instDecls <- forM [(l, ctx, c, st, body) | DInstance l ctx c st body <- ds] $ \(l, ctx, c, st, body) -> atLoc l $ withCtx ("instance " ++ c) $ do
-    unless (M.member c classes) (throw ("unknown class: " ++ c))
-    t <- fromSType envCl (rigid st) st
-    (k, vs) <- case t of
+  instDecls <- forM [(l, ctx, c, sts, body) | DInstance l ctx c sts body <- ds] $ \(l, ctx, c, sts, body) -> atLoc l $ withCtx ("instance " ++ unqual c) $ do
+    ci <- maybe (throw ("unknown class: " ++ c)) pure (M.lookup c classes)
+    unless (length sts == length (clsVars ci)) (throw (classArity c ci (length sts)))
+    let vars = M.fromList [(v, TVar v) | st <- sts, v <- stypeVars st]
+    ts <- mapM (fromSType envCl vars) sts
+    let keyT = ts !! clsKey ci
+    (k, vs) <- case keyT of
       TCon k args | all isTVar args, length (nub args) == length args -> pure (k, [v | TVar v <- args])
       TFun (TVar a) (TVar b) | a /= b -> pure ("->", [a, b])
       _ -> throw "an instance type must be a type constructor applied to distinct variables"
-    let kind = clsKind (classes M.! c)
+    let kind = clsKinds ci !! clsKey ci
         arity = M.findWithDefault 0 k (envTypes envCl)
     unless (length vs + kind == arity) $
       throw ("the instance type must take " ++ show kind ++ " more argument(s) to match the class")
-    preds <- contextPreds envCl ctx
-    pure ((c, k), InstHead ("inst_" ++ c ++ "_" ++ tyconId k) vs preds, t, (l, body))
+    preds <- contextPreds envCl vars ctx
+    -- the other types may only use what the chosen type, or the context, fixes
+    let rest = nub (concat [tyVarsOf t | (i, t) <- zip [0 ..] ts, i /= clsKey ci]) \\ vs
+    forM_ rest $ \v -> unless (any (\(IsIn _ pts) -> v `elem` concatMap tyVarsOf pts) preds) $
+      throw ("the type variable " ++ v ++ " is not fixed by " ++ prettyAtom keyT ++ ", which chooses the instance")
+    pure ((c, k), InstHead ("inst_" ++ c ++ "_" ++ tyconId k) (vs ++ rest) preds ts, ts, (l, body))
   case [key | (key, n) <- M.toList (M.fromListWith (+) [(key, 1 :: Int) | (key, _, _, _) <- instDecls]), n > 1] of
     ((c, k) : _) -> throw ("duplicate instance " ++ c ++ " " ++ k)
     [] -> pure ()
@@ -793,9 +855,13 @@ tcModule ds = do
     (n : _) -> throw ("in " ++ n ++ ": defined more than once")
     [] -> pure ()
   sigSchemes <- forM (M.toList sigs) $ \(n, (ctx, st)) -> withCtx n $ do
-    t <- fromSType env0 (rigid st) st
-    preds <- contextPreds env0 ctx
-    pure (n, Forall (stypeVars st) preds t)
+    -- a variable only in the context is fixed by a dependency, as s in
+    -- MonadState s m => m ()
+    let vs = nub (stypeVars st ++ contextVars ctx)
+        vars = M.fromList [(v, TVar v) | v <- vs]
+    t <- fromSType env0 vars st
+    preds <- contextPreds env0 vars ctx
+    pure (n, Forall vs preds t)
   let env1 = env0
         { envVars = M.fromList ([(n, (sc, False)) | (n, sc) <- M.toList primSchemes]
             ++ [(n, (sc, False)) | (n, (sc, _)) <- foreigns]
@@ -815,7 +881,7 @@ tcModule ds = do
     _ <- solve envG M.empty
     pure (topBind n vs preds t ar body)
   -- default methods, as ordinary constrained functions
-  defaultBinds <- fmap concat . forM classDecls $ \(_, c, _, body) -> do
+  defaultBinds <- fmap concat . forM classDecls $ \(_, c, _, _, body) -> do
     let ci = classes M.! c
     forM [(m, cs) | DBind m cs <- body] $ \(m, cs) -> withCtx (c ++ "." ++ m) $ do
       let Forall vs preds t = M.fromList (clsMethods ci) M.! m
@@ -824,15 +890,16 @@ tcModule ds = do
       _ <- solve envG M.empty
       pure ((topBind (defaultName c m) vs preds t (arrows t) body') {tbShared = False})
   -- instance bodies
-  insts <- forM instDecls $ \((c, _), ih, headT, (l, body)) -> atLoc l $ withCtx ("instance " ++ c ++ " " ++ prettyAtom headT) $ do
+  insts <- forM instDecls $ \((c, _), ih, heads, (l, body)) -> atLoc l $ withCtx ("instance " ++ showPred (IsIn c heads)) $ do
     let ci = classes M.! c
+        headMap = M.fromList (zip (clsVars ci) heads)
         defined = M.fromListWith (flip (++)) [(m, cs) | DBind m cs <- body]
-        self = DInst (ihId ih) (map TVar (ihVars ih)) [DParam (dictName pc pv) | IsIn pc (TVar pv) <- ihCtx ih]
+        self = DInst (ihId ih) (map TVar (ihVars ih)) (map (DParam . dictName) (ihCtx ih))
     forM_ (M.keys defined) $ \m -> unless (m `elem` map fst (clsMethods ci)) (throw (m ++ " is not a method of " ++ c))
     methods <- forM (clsMethods ci) $ \(m, Forall mvs mps mt) -> withCtx m $ do
-      let own = drop 1 mvs
+      let own = drop (length (clsVars ci)) mvs
           mpreds = drop 1 mps
-          t = norm (substT (M.fromList [(clsVar ci, headT)]) mt)
+          t = norm (substT headMap mt)
           envG = withGivens env2 (ihCtx ih ++ mpreds)
       case M.lookup m defined of
         Just cs -> do
@@ -844,15 +911,15 @@ tcModule ds = do
               let n = arrows t
                   (ps, r) = splitFun n t
                   argNames = ["_arg" ++ show i | i <- [0 .. n - 1]]
-                  dm = CVar (defaultName c m) (Inst (headT : map TVar own) (self : [DParam (dictName pc pv) | IsIn pc (TVar pv) <- mpreds])) t
+                  dm = CVar (defaultName c m) (Inst (heads ++ map TVar own) (self : map (DParam . dictName) mpreds)) t
               pure (m, Just (if n == 0 then dm else CLam (zip argNames ps) r (CApp dm [CVar a (Inst [] []) p | (a, p) <- zip argNames ps])))
           | otherwise -> pure (m, Nothing)
-    supers <- forM (clsSupers ci) $ \s -> do
+    supers <- forM (clsSupers ci) $ \(IsIn s sts) -> do
       let envG = withGivens env2 (ihCtx ih)
-      d <- newHole (IsIn s headT)
+      d <- newHole (IsIn s (map (substT headMap) sts))
       _ <- solve envG M.empty
       pure (s, d)
-    pure (InstInfo (ihId ih) c (ihVars ih) (ihCtx ih) headT methods supers)
+    pure (InstInfo (ihId ih) c (ihVars ih) (ihCtx ih) heads methods supers)
   -- main must be an IO action
   let mainLoc = case [l | DBind "main" (Clause _ (Rhs ((_, ELoc l _) : _) _) : _) <- ds] of
         (l : _) -> Just l
@@ -895,11 +962,12 @@ tcModule ds = do
       let ms = nub (concatMap metas zts)
           vs = ["t" ++ show gi ++ "_" ++ show i | i <- [1 .. length ms]]
           gen = M.fromList (zip ms vs)
-      preds <- if restricted then pure [] else withCtx (unwords (map fst members)) (solve env gen)
-      zipWithM_ (\m v -> bindMeta m (TVar v)) ms vs
+      (preds, extra) <- if restricted then pure ([], []) else withCtx (unwords (map fst members)) (solveGen env gen)
+      let vs' = vs ++ map snd extra
+      zipWithM_ (\m v -> bindMeta m (TVar v)) (ms ++ map fst extra) vs'
       zts' <- mapM zonkT tys
-      let env' = env {envVars = foldr (\((n, _), t) -> M.insert n (Forall vs preds t, False)) (envVars env) (zip members zts')}
-      pure (env', acc ++ [topBind n vs preds t ar body | (((n, _), t), (ar, body)) <- zip (zip members zts') results])
+      let env' = env {envVars = foldr (\((n, _), t) -> M.insert n (Forall vs' preds t, False)) (envVars env) (zip members zts')}
+      pure (env', acc ++ [topBind n vs' preds t ar body | (((n, _), t), (ar, body)) <- zip (zip members zts') results])
 
 -- | Adds the local functions moved to the top. Each also takes the type
 -- variables of the functions around it that it mentions, or that the lifted
@@ -923,7 +991,7 @@ withLifted sub lifted prog = everywhere passExtras prog {progBinds = progBinds p
 
 topBind :: Name -> [Name] -> [Pred] -> Type -> Int -> CExpr -> TopBind
 topBind n vs preds t ar body =
-  TopBind n vs [(dictName c v, p) | p@(IsIn c (TVar v)) <- preds] t ar body (ar == 0 && null vs && null preds)
+  TopBind n vs [(dictName p, p) | p <- preds] t ar body (ar == 0 && null vs && null preds)
 
 defaultName :: Name -> Name -> Name
 defaultName c m = "_dm_" ++ c ++ "_" ++ m

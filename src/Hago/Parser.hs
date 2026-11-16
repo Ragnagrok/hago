@@ -201,16 +201,19 @@ context :: Parser Context
 context = option [] (try (preds <* key "=>"))
   where
     preds = (pure <$> predicate) <|> parens (predicate `sepBy` special ",")
-    predicate = (,) <$> conId <*> varId
+    predicate = (,) <$> conId <*> many1 aType
 
 classDecl :: Parser Decl
 classDecl = do
   key "class"
   supers <- context
   cls <- conId
-  v <- varId
+  vs <- many1 varId
+  deps <- option [] (key "|" >> funDep `sepBy1` special ",")
   body <- option [] (key "where" >> localDecls)
-  pure (DClass supers cls v body)
+  pure (DClass supers cls vs deps body)
+  where
+    funDep = (,) <$> many1 varId <* key "->" <*> many1 varId
 
 instanceDecl :: Parser Decl
 instanceDecl = do
@@ -218,9 +221,9 @@ instanceDecl = do
   key "instance"
   ctx <- context
   cls <- conId
-  t <- aType
+  ts <- many1 aType
   body <- option [] (key "where" >> localDecls)
-  pure (DInstance (Just l) ctx cls t body)
+  pure (DInstance (Just l) ctx cls ts body)
 
 conDecl :: Parser ConDecl
 conDecl = try infixCon <|> try recordCon <|> prefixCon
@@ -655,12 +658,12 @@ resolveFixity ds = map (rDecl fixities) ds
 
 allDecls :: [Decl] -> [Decl]
 allDecls ds = ds ++ concat [concatMap whereDecls cs | DBind _ cs <- ds]
-  ++ concat [allDecls b | DClass _ _ _ b <- ds] ++ concat [allDecls b | DInstance _ _ _ _ b <- ds]
+  ++ concat [allDecls b | DClass _ _ _ _ b <- ds] ++ concat [allDecls b | DInstance _ _ _ _ b <- ds]
   where whereDecls (Clause _ (Rhs _ w)) = allDecls w
 
 rDecl :: Fixities -> Decl -> Decl
 rDecl fx (DBind n cs) = DBind n [Clause ps (rRhs fx r) | Clause ps r <- cs]
-rDecl fx (DClass sup c v ds) = DClass sup c v (map (rDecl fx) ds)
+rDecl fx (DClass sup c vs deps ds) = DClass sup c vs deps (map (rDecl fx) ds)
 rDecl fx (DInstance l ctx c t ds) = DInstance l ctx c t (map (rDecl fx) ds)
 rDecl _ d = d
 

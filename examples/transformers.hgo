@@ -1,5 +1,10 @@
 -- Monad transformers: data types whose parameter is a type constructor.
 -- StateT s m a is compiled to one Go type per m it is used with.
+--
+-- MonadState and MonadError have two parameters, and the monad fixes the
+-- other one (| m -> s). Their instances pass the operations through the
+-- other transformers, so get, put and throwError work anywhere in a stack
+-- without lift, and a function can ask only for what it uses.
 
 class MonadTrans t where
   lift :: Monad m => m a -> t m a
@@ -32,14 +37,18 @@ instance MonadTrans (StateT s) where
 instance MonadIO m => MonadIO (StateT s m) where
   liftIO m = lift (liftIO m)
 
-getS :: Monad m => StateT s m s
-getS = StateT (\s -> pure (s, s))
+class Monad m => MonadState s m | m -> s where
+  get :: m s
+  put :: s -> m ()
 
-putS :: Monad m => s -> StateT s m ()
-putS s = StateT (\_ -> pure ((), s))
+instance Monad m => MonadState s (StateT s m) where
+  get = StateT (\s -> pure (s, s))
+  put s = StateT (\_ -> pure ((), s))
 
-modifyS :: Monad m => (s -> s) -> StateT s m ()
-modifyS f = StateT (\s -> pure ((), f s))
+modify :: MonadState s m => (s -> s) -> m ()
+modify f = do
+  s <- get
+  put (f s)
 
 -- Errors over any monad.
 newtype ExceptT e m a = ExceptT (m (Either e a))
@@ -65,25 +74,41 @@ instance MonadTrans (ExceptT e) where
 instance MonadIO m => MonadIO (ExceptT e m) where
   liftIO m = lift (liftIO m)
 
-throwE :: Monad m => e -> ExceptT e m a
-throwE e = ExceptT (pure (Left e))
+class Monad m => MonadError e m | m -> e where
+  throwError :: e -> m a
+  catchError :: m a -> (e -> m a) -> m a
 
--- A stack machine: a stack in StateT, failure in ExceptT, output in IO.
-data Instr = Push Int | Add | Mul | Print
+instance Monad m => MonadError e (ExceptT e m) where
+  throwError e = ExceptT (pure (Left e))
+  catchError (ExceptT m) h = ExceptT (m >>= \r -> case r of
+    Left e -> runExceptT (h e)
+    Right a -> pure (Right a))
 
-pop :: StateT [Int] (ExceptT String IO) Int
+-- each transformer passes the other's operations through
+instance MonadState s m => MonadState s (ExceptT e m) where
+  get = lift get
+  put s = lift (put s)
+
+instance MonadError e m => MonadError e (StateT s m) where
+  throwError e = lift (throwError e)
+  catchError m h = StateT (\s -> catchError (runStateT m s) (\e -> runStateT (h e) s))
+
+-- A stack machine: a stack, failure and output, in any monad that has them.
+data Instr = Push Int | Add | Mul | Div | Print
+
+pop :: (MonadState [Int] m, MonadError String m) => m Int
 pop = do
-  st <- getS
+  st <- get
   case st of
-    [] -> lift (throwE "stack underflow")
+    [] -> throwError "stack underflow"
     (x:rest) -> do
-      putS rest
+      put rest
       pure x
 
-push :: Int -> StateT [Int] (ExceptT String IO) ()
-push x = modifyS (\st -> x : st)
+push :: MonadState [Int] m => Int -> m ()
+push x = modify (\st -> x : st)
 
-step :: Instr -> StateT [Int] (ExceptT String IO) ()
+step :: (MonadState [Int] m, MonadError String m, MonadIO m) => Instr -> m ()
 step (Push n) = push n
 step Add = do
   a <- pop
@@ -93,11 +118,20 @@ step Mul = do
   a <- pop
   b <- pop
   push (a * b)
+step Div = do
+  st <- get
+  case st of
+    (0 : _) -> throwError "division by zero"
+    _ -> do
+      a <- pop
+      b <- pop
+      push (b `div` a)
 step Print = do
   x <- pop
   liftIO (putStrLn ("top: " ++ show x))
   push x
 
+-- The same machine in two stacks. With the state outside, an error loses it.
 run :: [Instr] -> IO ()
 run program = do
   r <- runExceptT (runStateT (mapM_ step program) [])
@@ -105,13 +139,29 @@ run program = do
     Left err -> putStrLn ("error: " ++ err)
     Right (_, st) -> putStrLn ("final stack: " ++ show st)
 
+-- With the state inside, the stack at the error survives.
+runKeeping :: [Instr] -> IO ()
+runKeeping program = do
+  (r, st) <- runStateT (runExceptT (mapM_ step program)) []
+  case r of
+    Left err -> putStrLn ("error: " ++ err ++ ", stack: " ++ show st)
+    Right _ -> putStrLn ("final stack: " ++ show st)
+
+-- catchError recovers, with the state as it was before the failing action.
+safePop :: (MonadState [Int] m, MonadError String m) => m Int
+safePop = pop `catchError` \_ -> pure 0
+
 -- A million steps of StateT over IO stay flat, because IO is trampolined.
 countUp :: Int -> StateT Int IO ()
-countUp n = mapM_ (\i -> modifyS (\s -> s + i)) [1..n]
+countUp n = mapM_ (\i -> modify (\s -> s + i)) [1..n]
 
 main :: IO ()
 main = do
   run [Push 2, Push 3, Add, Print, Push 4, Mul, Print]
   run [Push 1, Add]
+  run [Push 7, Push 0, Div]
+  runKeeping [Push 7, Push 0, Div]
+  r <- runExceptT (runStateT (mapM (const safePop) [1, 2, 3]) [5])
+  print r
   (_, total) <- runStateT (countUp 1000000) 0
   print total

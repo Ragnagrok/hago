@@ -27,7 +27,7 @@ instanceFor d cls = either (Left . ((showLoc (ddLoc d) ++ ": cannot derive " ++ 
     "Enum"
       | (k : _) <- [conName c | c <- cons, not (null (conFields c))] ->
           Left ("its constructor " ++ unqual k ++ " has fields, and only types whose constructors have none can be counted")
-      | otherwise -> Right (DInstance Nothing [] cls (STCon n (map STVar ps))
+      | otherwise -> Right (DInstance Nothing [] cls [STCon n (map STVar ps)]
           [ DBind "fromEnum" [Clause [PCon (conName c) []] (plain (ELit (LInt i))) | (i, c) <- zip [0 ..] cons]
           , DBind "toEnum" ([Clause [PLit (LInt i)] (plain (EApp (ECon "Just") (ECon (conName c)))) | (i, c) <- zip [0 ..] cons]
               ++ [Clause [PWild] (plain (ECon "Nothing"))]) ])
@@ -38,7 +38,7 @@ instanceFor d cls = either (Left . ((showLoc (ddLoc d) ++ ": cannot derive " ++ 
         , DBind "maxBound" [Clause [] (plain (app (ECon (conName c)) [EVar "maxBound" | _ <- conFields c]))] ]
       _ | (k : _) <- [conName c | c <- cons, not (null (conFields c))] ->
             Left ("it has several constructors and " ++ unqual k ++ " has fields: the first and last constructors are its bounds only when none has fields")
-      first : more -> Right (DInstance Nothing [] cls (STCon n (map STVar ps))
+      first : more -> Right (DInstance Nothing [] cls [STCon n (map STVar ps)]
             [ DBind "minBound" [Clause [] (plain (ECon (conName first)))]
             , DBind "maxBound" [Clause [] (plain (ECon (conName (last (first : more)))))] ])
     _ -> Left "only Eq, Ord, Show, Read, Enum, Bounded, Functor, Foldable and Traversable can be derived"
@@ -46,14 +46,14 @@ instanceFor d cls = either (Left . ((showLoc (ddLoc d) ++ ": cannot derive " ++ 
     n = ddName d
     ps = ddParams d
     cons = ddCons d
-    plainInstance methods = Right (DInstance Nothing [(cls, p) | p <- ps] cls (STCon n (map STVar ps)) methods)
+    plainInstance methods = Right (DInstance Nothing [(cls, [STVar p]) | p <- ps] cls [STCon n (map STVar ps)] methods)
     -- Functor and friends map over the last parameter: Tree, Either e
     overLast method mk = case reverse ps of
       [] -> Left "it has no type parameter"
       a : rest -> do
         clauses <- mapM (mk a) cons
         let heads = nub [h | c <- cons, (_, t) <- conFields c, h <- functorHeads a t]
-        pure (DInstance Nothing [(cls, h) | h <- heads] cls (STCon n (map STVar (reverse rest))) [DBind method clauses])
+        pure (DInstance Nothing [(cls, [STVar h]) | h <- heads] cls [STCon n (map STVar (reverse rest))] [DBind method clauses])
 
 -- | Type variables applied to the mapped parameter, as f in @f a@: the
 -- instance needs the class for them too.

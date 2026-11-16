@@ -89,8 +89,17 @@ label t = traverse step t
   transformadores de mónadas: `data StateT s m a = StateT (s -> m (a, s))`. Go no tiene ese
   tipo de parámetros, así que cada uso tiene su propio tipo de Go: `StateT s IO a` se vuelve
   `StateT__IO[S, A]`, generado sólo para las combinaciones que el programa usa.
-  `examples/transformers.hgo` define `StateT`, `ExceptT`, `MonadTrans` y `MonadIO`, y corre una
-  máquina de pila sobre `StateT [Int] (ExceptT String IO)`.
+  `examples/transformers.hgo` define `StateT`, `ExceptT`, `MonadTrans`, `MonadIO`, `MonadState`
+  y `MonadError`, y corre una misma máquina de pila sobre `StateT [Int] (ExceptT String IO)` y
+  sobre `ExceptT String (StateT [Int] IO)`.
+- **Las clases pueden tener varios parámetros, con una dependencia funcional** de uno de ellos
+  a los demás, como en mtl: `class Monad m => MonadState s m | m -> s`. La mónada elige la
+  instancia y fija el tipo del estado, así que con `MonadState Int m`, `n <- get` hace que `n`
+  sea un `Int`. Las instancias que pasan las operaciones a través de otros transformadores
+  (`MonadState s m => MonadState s (ExceptT e m)`) hacen que `get`, `put` y `throwError` anden
+  en cualquier lugar de la pila sin `lift`, y que una función pida sólo lo que usa:
+  `pop :: (MonadState [Int] m, MonadError String m) => m Int`. Cada pila con la que se usa tiene
+  su propia copia, así que no cuesta nada en tiempo de ejecución.
 - **Las instancias pueden ser aplicaciones parciales,** como `Functor (Either e)`,
   `Monad ((->) r)` (un *reader*) y `Monoid w => Monad ((,) w)` (un *writer*).
 - **`deriving (Eq, Ord, Show)`** se expande a instancias comunes antes del type checking.
@@ -378,8 +387,8 @@ Haskell 98.
   as-patterns, bindings con patrón (`let (q, r) = ...`), anotaciones `e :: t`, literales con
   exponente.
 - `class` con superclases, métodos por defecto y métodos con restricciones, `instance` con
-  contextos, clases sobre tipos y sobre constructores de tipos. `Int`, `Double`, `Char`,
-  `String`, `Bool`.
+  contextos, clases sobre tipos y sobre constructores de tipos, clases de varios parámetros con
+  una dependencia funcional. `Int`, `Double`, `Char`, `String`, `Bool`.
 - Operadores con declaraciones `infixl`/`infixr`/`infix`, secciones, backquotes, tuplas de hasta
   quince elementos (lo que pide Haskell 98; para más, un record), listas literales, y rangos (`[a ..]`, `[a, b ..]`, `[a .. c]`, `[a, b .. c]`) sobre cualquier `Enum`.
 - Polimorfismo de let, con análisis de dependencias de las definiciones sin firma, también para
@@ -397,8 +406,8 @@ Haskell 98.
 - **Los loops largos en mónadas puras como `State` consumen pila,** porque su `>>=` es una
   cadena de llamadas de Go. Esos loops se escriben con `tailRecM`. En IO y en transformadores
   sobre IO no consumen pila.
-- **No hay clases de varios parámetros,** así que no hay `MonadState s m` al estilo mtl: los
-  transformadores se usan con `lift` explícito.
+- **Una clase de varios parámetros necesita una dependencia funcional,** de uno de ellos a todos
+  los demás, que es el que elige la instancia. `class Convert a b`, sin ninguna, se rechaza.
 - **Algunas definiciones locales siguen siendo monomórficas:** los valores (como con la
   restricción de monomorfismo de Haskell, así se calculan una sola vez) y las funciones con
   restricciones sobre los tipos de la función que las contiene, cuyos diccionarios son de esa

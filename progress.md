@@ -33,9 +33,12 @@ From easiest to hardest, which is the order we take them in.
       parameters passed where a plain one is expected takes plain arguments (`liftA2 (:)`,
       `map (False &&)`), and `f $ x` is `f x`. Fixed on the way: `foldr (+) 0 xs` and
       `foldr id` were rejected with an infinite type.
-- [ ] **Multi-parameter classes with functional dependencies.** `class Monad m => MonadState s m | m -> s`,
-      so `get`, `put`, `throwError` and `ask` work through any transformer stack without `lift`
-      (mtl style). Specialisation already removes dictionaries, so this costs nothing at run time.
+- [x] **Multi-parameter classes with functional dependencies.** `class Monad m => MonadState s m | m -> s`:
+      the parameter on the left chooses the instance and fixes the others, also while checking
+      (after `n <- get`, `n`'s type is known). `get`, `put` and `throwError` work through any
+      stack without `lift`; `examples/transformers.hgo` runs one machine on two stacks. One
+      dependency, from one parameter to all the others, is required. On the way: code generation
+      lost its run-time dictionaries, which specialisation had made unreachable.
 - [ ] **Stack-safe pure monads.** Long loops in `State` grow the Go stack and need `tailRecM`; IO and
       transformers over IO are already trampolined.
 - [ ] **Separate compilation.** Today every module is compiled together with the program.

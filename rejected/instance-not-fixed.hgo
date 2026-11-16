@@ -1,0 +1,12 @@
+-- expects: rejected/instance-not-fixed.hgo:7:1: in instance MonadState: the type variable s is not fixed by Maybe, which chooses the instance
+class Monad m => MonadState s m | m -> s where
+  get :: m s
+  put :: s -> m ()
+
+-- Maybe would have every state type at once
+instance MonadState s Maybe where
+  get = Nothing
+  put _ = Nothing
+
+main :: IO ()
+main = pure ()

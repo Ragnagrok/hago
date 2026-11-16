@@ -116,15 +116,19 @@ data DataDecl = DataDecl
   }
   deriving (Eq, Show, Data)
 
--- | A class constraint on a type variable, as in @Eq a =>@.
-type Context = [(Name, Name)]
+-- | Class constraints, as in @(Eq a, MonadState Int m) =>@: each class with
+-- its types.
+type Context = [(Name, [SType])]
+
+-- | A functional dependency, as in @| m -> s@.
+type FunDep = ([Name], [Name])
 
 data Decl
   = DData DataDecl
   | DType Name [Name] SType                -- ^ a type synonym
   | DSig [Name] Context SType
-  | DClass Context Name Name [Decl]       -- ^ superclasses, class, variable, signatures and defaults
-  | DInstance (Maybe Loc) Context Name SType [Decl]   -- ^ where, context, class, instance type, methods
+  | DClass Context Name [Name] [FunDep] [Decl]   -- ^ superclasses, class, variables, dependencies, signatures and defaults
+  | DInstance (Maybe Loc) Context Name [SType] [Decl]   -- ^ where, context, class, instance types, methods
   | DBind Name [Clause]
   | DFixity Assoc Int [Name]
   | DForeign String Name SType   -- ^ Go symbol, Hago name, type
