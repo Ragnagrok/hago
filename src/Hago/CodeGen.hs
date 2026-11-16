@@ -367,11 +367,23 @@ genMatch ctx scruts rows = do
     s -> do
       n <- freshName "s"
       s' <- genExpr ctx s
-      pure ([n ++ " := " ++ s', "_ = " ++ n], n)
+      -- a constructor's Go value has its struct type; matching needs the
+      -- interface of its data type
+      let decl = case conHead s of
+            Just (k, targs) | tupleArity k == Nothing, k `notElem` ["()", "True", "False"] ->
+              "var " ++ n ++ " " ++ goTy ctx (TCon (ciType (progCons (cxProg ctx) M.! k)) targs) ++ " = " ++ s'
+            _ -> n ++ " := " ++ s'
+      pure ([decl, "_ = " ++ n], n)
   rowLines <- forM rows $ \(CRow pats binds guards) -> do
     ls <- genPats ctx (zip (map snd prepared) pats) (\ctx' -> genRow ctx' binds guards)
     pure (["{"] ++ ls ++ ["}"])
   pure (concatMap fst prepared ++ concat rowLines ++ ["panic(\"pattern match failure\")"])
+
+conHead :: CExpr -> Maybe (Name, [Type])
+conHead = \case
+  CCon k targs _ -> Just (k, targs)
+  CApp f _ -> conHead f
+  _ -> Nothing
 
 genRow :: Ctx -> [CBind] -> [(Maybe CExpr, CExpr)] -> Gen [String]
 genRow ctx binds guards = do

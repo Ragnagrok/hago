@@ -13,6 +13,7 @@ Ana works at Acme
 [9,25]
 [1,2,4,5,7]
 [10,11,12,13,14]
+Box {item = "three", label = "n"}
 Node (Node Leaf 10 (Node (Node Leaf 20 (Node Leaf 50 Leaf)) 80 Leaf)) 90 Leaf
 (25,5,[1,2,5,8,9])
 Just (Node (Node Leaf 1 (Node (Node Leaf 2 (Node Leaf 5 Leaf)) 8 Leaf)) 9 Leaf)

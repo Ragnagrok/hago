@@ -213,7 +213,8 @@ If the type of `p` is not known yet and two types have the field, the compiler a
 annotation instead of guessing. To make that rare, arguments that are lambdas are checked after
 the others: in `map (.name) people`, the type of `people` is known before `(.name)` is checked.
 
-An update cannot change the type of the record yet (from `Box Int` to `Box String`).
+As in Haskell 98, an update can change a type parameter that only the updated fields mention:
+setting the `item` of a `Box Int` to a string gives a `Box String`.
 
 ## Newtypes are free
 
@@ -364,7 +365,6 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
   type) cannot be specialised, and is rejected.
 - **`Read`.**
 - **`String` is Go's `string`, not `[Char]`.** Convert with `pack` and `unpack`.
-- Updates that change a record's type.
 - **Modules compile together with the program,** with no separate compilation or package
   manager.
 - **Long loops in pure monads like `State` use stack,** because their `>>=` is a chain of Go

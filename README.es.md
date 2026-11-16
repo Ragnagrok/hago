@@ -221,7 +221,8 @@ anotación en lugar de adivinar. Para que eso pase poco, los argumentos que son 
 chequean después que los demás: en `map (.name) people`, el tipo de `people` se conoce antes de
 chequear `(.name)`.
 
-Por ahora una actualización no puede cambiar el tipo del record (de `Box Int` a `Box String`).
+Como en Haskell 98, una actualización puede cambiar un parámetro de tipo que sólo aparece en
+los campos que se actualizan: darle un string al `item` de una `Box Int` da una `Box String`.
 
 ## Los newtypes son gratis
 
@@ -380,7 +381,6 @@ Haskell 98.
   en un tipo más grande) no se puede especializar, y se rechaza.
 - **`Read`.**
 - **`String` es el `string` de Go, no `[Char]`.** Se convierte con `pack` y `unpack`.
-- Actualizaciones que cambien el tipo de un record.
 - **Los módulos se compilan junto con el programa,** sin compilación separada ni gestor de
   paquetes.
 - **Los loops largos en mónadas puras como `State` consumen pila,** porque su `>>=` es una

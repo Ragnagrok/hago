@@ -15,7 +15,8 @@ From easiest to hardest, which is the order we take them in.
 - [x] **`Enum` and `Bounded`.** Total (`toEnum`, `succ`, `pred` return `Maybe`), all four range
       forms, instances for `Int`, `Char`, `Bool`, `Ordering`, `()`, `Bounded` tuples, `deriving
       (Enum, Bounded)`. No `Enum Double`, on purpose.
-- [ ] **Type-changing record updates.** `b { item = "x" }` from `Box Int` to `Box String`.
+- [x] **Type-changing record updates.** `b { item = "x" }` from `Box Int` to `Box String`, with
+      Haskell 98's rule. Fixed on the way: `case` on a constructor application made invalid Go.
 - [ ] **`Read`** (at least for `Int`, `Double` and derived types).
 - [ ] **Share polymorphic top-level values.** `xs = []` becomes a generic Go function and is
       re-evaluated on each use; cache one value per instantiation.

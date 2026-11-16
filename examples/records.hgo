@@ -26,6 +26,11 @@ data Tree a = Leaf | Node (Tree a) a (Tree a)
 
 data Stream a = Cons { headS :: a, tailS :: ~(Stream a) }
 
+-- an update can change the type of a parameter that only the updated
+-- fields mention
+data Box a = Box { item :: a, label :: String }
+  deriving (Show)
+
 nats :: Int -> Stream Int
 nats n = Cons { headS = n, tailS = nats (n + 1) }
 
@@ -76,6 +81,7 @@ main = do
   print [n * n | Just n <- [Just 3, Nothing, Just 5]]
   print (take 5 [n | n <- [1 ..], let sq = n * n, sq `mod` 3 == 1])
   print (takeS 5 (nats 10))
+  print ((Box { item = 3, label = "n" }) { item = "three" })
   let t = foldr insert Leaf [5, 2, 8, 1, 9 :: Int]
   print (fmap (* 10) t)
   print (sum t, length t, toList t)

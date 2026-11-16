@@ -14,6 +14,7 @@ import Data.Graph (flattenSCC, flattenSCCs, stronglyConnComp)
 import qualified Data.IntMap as IM
 import Data.List (intercalate, nub, sortOn, (\\))
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Hago.Core
 import Hago.Syntax
 import Hago.TcMonad
@@ -227,29 +228,39 @@ inferRecordCon env k fs = do
 
 -- | @r { x = v }@: one row per constructor, each rebuilding it with the new
 -- values, which are computed once, before.
+-- | r { f = v, ... }. As in Haskell 98, a type parameter that appears only in
+-- the fields being replaced, in every constructor, can change: updating the
+-- item of a Box Int with a string gives a Box String.
 inferRecordUpd :: Env -> Expr -> [(Name, Expr)] -> [Name] -> TC (CExpr, Type)
 inferRecordUpd env x fs cands = do
   noRepeats "changed" (map fst fs)
   (cx, tx) <- inferStrict env x
   (c, args, r) <- recordOf env (map fst fs) cands tx
-  let ty = TCon c args
-  news <- forM fs $ \(l, v) -> do
-    (lz, t, at) <- totalField c args r l
+  places <- forM fs $ \(l, _) -> (\(_, _, at) -> at) <$> totalField c args r l
+  infos <- mapM (\k -> (,) k <$> lookupCon env k) (recCons r)
+  let replacedAt = S.fromList (concat places)
+      kept = S.fromList
+        [ v | (k, ci) <- infos, (i, (_, ft)) <- zip [0 ..] (ciFields ci)
+            , not (S.member (k, i) replacedAt), v <- tyVarsOf ft ]
+  args' <- forM (zip (recParams r) args) $ \(p, a) -> if S.member p kept then pure a else fresh
+  let ty' = TCon c args'
+  news <- forM (zip fs places) $ \((l, v), at) -> do
+    (lz, t, _) <- totalField c args' r l
     let stored = if lz then tLazy t else t
     cv <- check env v stored
     n <- uniq "new"
     pure (n, stored, cv, at)
-  rows <- forM (recCons r) $ \k -> do
-    ci <- lookupCon env k
+  rows <- forM infos $ \(k, ci) -> do
     let (fts, _) = conSig ci args
+        (fts', _) = conSig ci args'
         replaced = M.fromList [(i, CVar n (Inst [] []) t) | (n, t, _, at) <- news, (k', i) <- at, k' == k]
     olds <- forM (zip [0 :: Int ..] fts) $ \(i, ft) ->
       if M.member i replaced then pure (CPWild, Nothing) else do
         o <- uniq "old"
         pure (CPVar o ft, Just (CVar o (Inst [] []) ft))
     let argsE = [maybe (replaced M.! i) id old | (i, (_, old)) <- zip [0 ..] olds]
-    pure (CRow [CPCon k args (map fst olds)] [] [(Nothing, CApp (CCon k args (foldr TFun ty fts)) argsE)])
-  pure (CLet [CBind n t 0 cv | (n, t, cv, _) <- news] (CMatch [cx] rows ty) ty, ty)
+    pure (CRow [CPCon k args (map fst olds)] [] [(Nothing, CApp (CCon k args' (foldr TFun ty' fts')) argsE)])
+  pure (CLet [CBind n t 0 cv | (n, t, cv, _) <- news] (CMatch [cx] rows ty') ty', ty')
 
 -- Expressions ---------------------------------------------------------------------
 
