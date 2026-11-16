@@ -46,6 +46,8 @@ data SS = SS
   , ssQueue :: [Job]
   , ssOut :: [TopBind]
   , ssJobs :: Int
+  , ssPlain :: S.Set Name     -- ^ functions that need no copy, emitted or about to be
+  , ssPlainQueue :: [Ent]
   }
 
 type SM = StateT SS (Either String)
@@ -191,7 +193,9 @@ specialize prog = do
             -- a type nothing fixes is (), as everywhere else
             ts = if isValue ent then map defaultMetas ts0 else ts0
         if null hk
-          then pure (CVar x (Inst ts ds) t)
+          then do
+            needPlain x
+            pure (CVar x (Inst ts ds) t)
           else do
             let tpairs = zip (eTParams ent) ts
                 dpairs = zip (eDicts ent) ds
@@ -271,20 +275,36 @@ specialize prog = do
 
       emit b = modify (\s -> s {ssOut = b : ssOut s})
 
+      -- only what main reaches is emitted
+      needPlain x = do
+        seen <- gets ssPlain
+        unless (S.member x seen) $
+          modify (\s -> s {ssPlain = S.insert x (ssPlain s), ssPlainQueue = ents M.! x : ssPlainQueue s})
+
       drain = do
-        q <- gets ssQueue
-        case q of
-          [] -> pure ()
-          (j : rest) -> do
-            n <- gets ssJobs
-            when (n > 5000) $ lift (Left "specialisation does not terminate (polymorphic recursion over a type constructor?)")
-            modify (\s -> s {ssQueue = rest, ssJobs = n + 1})
-            runJob j
+        pq <- gets ssPlainQueue
+        case pq of
+          e : more -> do
+            modify (\s -> s {ssPlainQueue = more})
+            plain e
             drain
+          [] -> do
+            q <- gets ssQueue
+            case q of
+              [] -> pure ()
+              (j : rest) -> do
+                n <- gets ssJobs
+                when (n > 5000) $ lift (Left "specialisation does not terminate (polymorphic recursion over a type constructor?)")
+                modify (\s -> s {ssQueue = rest, ssJobs = n + 1})
+                runJob j
+                drain
+
+      -- main, and append, which code generation calls for ++ on lists
+      roots = [r | r <- ["main", "append"], Just e <- [M.lookup r ents], not (isTemplate e)]
 
   final <- execStateT
-    (mapM_ plain [e | e <- topEnts ++ instEnts, not (isTemplate e)] >> drain)
-    (SS M.empty (M.keysSet ents) [] [] 0)
+    (mapM_ needPlain roots >> drain)
+    (SS M.empty (M.keysSet ents) [] [] 0 S.empty [])
   pure prog
     { progBinds = reverse (ssOut final)
     -- no dictionary is left at run time

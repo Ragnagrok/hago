@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Builds the compiler, compiles and runs every example program comparing its
 # output with the .out file next to it, and checks that every file in rejected/ fails
-# with the error announced on its "-- expects:" line.
+# with the error announced on its "-- expects:" line. Modules are compiled with an
+# empty cache, and every example again with the cache full, which must give the
+# same Go.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -9,6 +11,7 @@ cabal build -v0 exe:hago
 hago=$(cabal list-bin -v0 exe:hago)
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
+export HAGO_CACHE="$out/cache"
 
 failures=0
 # a program has an .out next to it; the other .hgo files are its modules
@@ -25,6 +28,15 @@ for expected_out in examples/*.out; do
     echo "FAIL $f printed:"; echo "$actual"; failures=1
   fi
 done
+
+# separate compilation: what the cache keeps gives the same program
+for expected_out in examples/*.out; do
+  name=$(basename "$expected_out" .out)
+  if [ -f "$out/$name/main.go" ] && ! { "$hago" build "examples/$name.hgo" -o "$out/$name/again.go" && cmp -s "$out/$name/main.go" "$out/$name/again.go"; }; then
+    echo "FAIL examples/$name.hgo gives different Go with the cache full"; failures=1
+  fi
+done
+echo "ok   every example gives the same Go with the cache full"
 
 for f in rejected/*.hgo; do
   expected=$(sed -n 's/^-- expects: //p' "$f")

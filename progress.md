@@ -43,7 +43,18 @@ From easiest to hardest, which is the order we take them in.
       `Reader`, `Except` and `Trans`, mtl style, over `Data.Functor.Identity`, which is
       trampolined like IO. Ten million steps in `State` run in 10 MB; a hand-written
       `s -> (a, s)` monad still needs `tailRecM` (Go has no tail calls).
-- [ ] **Separate compilation.** Today every module is compiled together with the program.
+- [x] **Separate compilation.** Each module is renamed and type checked on its own, with what its
+      imports give it and nothing else, and the result (every type resolved) is cached under a
+      key of the compiler, its source and its imports' keys. Specialisation and code generation
+      still see the whole program, and now start from `main`: hello world went from 124 KB of Go
+      to 5 KB. Compiling an example: 0.35 s cold, 0.15–0.25 s warm.
+
+Known rough edges, found on the way and not fixed yet:
+
+- [ ] **Errors in type signatures have no location** (a context with the wrong number of types, an
+      unknown class), only the file and the definition's name.
+- [ ] **A record update that changes a type parameter some other field fixes** is reported as the
+      type mismatch it causes (`no instance for Num String`), not as the field that cannot change.
 
 ## Out of scope, on purpose
 
@@ -73,5 +84,6 @@ From easiest to hardest, which is the order we take them in.
 
 `./check.sh` builds the compiler, compiles and runs every example program (each `examples/*.hgo`
 with an `.out` next to it; the rest are modules) comparing its output with that `.out`, and checks that every program in `rejected/` fails with the error on its
-`-- expects:` line.
+`-- expects:` line. It compiles with an empty cache, then compiles every example again with the
+cache full and checks the Go is the same.
 CI runs the same script on every push.

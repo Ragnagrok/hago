@@ -208,8 +208,25 @@ Each class passes through the other transformers, as in mtl, so a function can a
 them. `examples/mtl.hgo` uses all of them.
 
 A renaming pass resolves every name to an internal one qualified by its module
-(`Geometry.Shapes.area`). After it, the compiler works on one flat program, and the Go output
-is still a single file.
+(`Geometry.Shapes.area`), so modules never clash once compiled.
+
+### Separate compilation
+
+Each module is renamed and type checked on its own, with what its imports give it (directly or
+through other imports) and nothing else, which is also what decides which instances it sees.
+What a module gives the modules after it (its names, synonyms, fixities, and its checked
+declarations with every type resolved) is kept in a cache, under a key made of the compiler,
+the module's source and its imports' keys. The next compilation reuses it while that key does
+not change: the Prelude and the library are checked once, and so is every module you have not
+touched or whose imports have not changed.
+
+Specialisation and Go generation still see the whole program, as monomorphisation does in Rust:
+a template is copied for the types each program uses it at. They start from `main` and only
+emit what it reaches, so a program that prints a number is 5 KB of Go, not the whole Prelude.
+
+The cache lives in `~/.cache/hago`; `HAGO_CACHE=dir` moves it, and `HAGO_CACHE=off` turns it
+off. Compiling an example takes about 0.35 s the first time and 0.15 s to 0.25 s after that,
+plus `go build`.
 
 ## Records, without Haskell's mistakes
 
@@ -406,8 +423,8 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 - **Polymorphic recursion through a constraint** (a function that calls itself at a bigger
   type) cannot be specialised, and is rejected.
 - **`String` is Go's `string`, not `[Char]`.** Convert with `pack` and `unpack`.
-- **Modules compile together with the program,** with no separate compilation or package
-  manager.
+- **There is no package manager,** and the Go output is one file: specialisation needs the
+  whole program, so only the type checking of each module is kept between compilations.
 - **A monad you write as a function, like `newtype State s a = State (s -> (a, s))`, uses a Go
   stack frame per `>>=`,** because Go has no tail calls. Write long loops in it with `tailRecM`,
   or build it on the library's transformers, whose loops are flat.
@@ -430,7 +447,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 |---|---|
 | `src/Hago/Lexer.hs` | tokens and the layout rule |
 | `src/Hago/Parser.hs` | Parsec over tokens, fixity resolution |
-| `src/Hago/Rename.hs` | modules: imports, exports and scopes, into one flat program |
+| `src/Hago/Rename.hs` | modules: imports, exports and scopes, into qualified names |
 | `src/Hago/Expand.hs` | `type` synonyms, expanded away |
 | `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show, Read, Enum, Bounded, Functor, Foldable, Traversable)` |
 | `src/Hago/TcMonad.hs` | unification and the constraint solver (instances, defaulting) |
@@ -439,6 +456,8 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `src/Hago/Specialize.hs` | copies of code over type constructors; instance methods become functions |
 | `src/Hago/Newtype.hs` | newtypes replaced by the type they wrap |
 | `src/Hago/CodeGen.hs` | Go generation |
+| `src/Hago/Cache.hs` | separate compilation: what each module gives, kept on disk |
+| `src/Hago/Driver.hs` | finding modules, compiling each, then the whole program |
 | `runtime/runtime.go` | lists, thunks and trampolined IO, copied into every program |
 | `prelude/Prelude.hgo` | the prelude, written in Hago |
 | `lib/` | the standard library (`Control.Monad.State` and friends), written in Hago |

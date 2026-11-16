@@ -2,7 +2,7 @@
 
 -- | Parser from tokens (after layout) to the surface syntax, plus fixity
 -- resolution of operator sequences.
-module Hago.Parser (parseModule, resolveFixity) where
+module Hago.Parser (parseModule, resolveFixity, fixitiesOf) where
 
 import Control.Monad
 import Data.List (groupBy, nub)
@@ -651,10 +651,16 @@ opExpr op = if isConName op then ECon op else EVar op
 
 type Fixities = M.Map Name (Assoc, Int)
 
-resolveFixity :: [Decl] -> [Decl]
-resolveFixity ds = map (rDecl fixities) ds
+-- | Resolves operators with the fixities a module declares and those of the
+-- modules before it.
+resolveFixity :: [(Name, (Assoc, Int))] -> [Decl] -> [Decl]
+resolveFixity before ds = map (rDecl fixities) ds
   where
-    fixities = M.fromList ((":", (AssocR, 5)) : [(op, (a, p)) | DFixity a p ops <- allDecls ds, op <- ops])
+    fixities = M.fromList ((":", (AssocR, 5)) : before ++ fixitiesOf ds)
+
+-- | The fixities declared anywhere in a module.
+fixitiesOf :: [Decl] -> [(Name, (Assoc, Int))]
+fixitiesOf ds = [(op, (a, p)) | DFixity a p ops <- allDecls ds, op <- ops]
 
 allDecls :: [Decl] -> [Decl]
 allDecls ds = ds ++ concat [concatMap whereDecls cs | DBind _ cs <- ds]

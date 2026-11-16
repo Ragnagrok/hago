@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE LambdaCase #-}
 
 -- | The type checker's monad: unification, instantiation, and the solver
@@ -7,6 +8,7 @@ module Hago.TcMonad where
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.State
+import Data.Data (Data)
 import qualified Data.IntMap as IM
 import Data.List (intercalate, nub)
 import qualified Data.Map as M
@@ -17,6 +19,7 @@ import Hago.Syntax (Loc, Name, showLoc, tupleArity, unqual)
 -- | An instance: its name, its type variables (those of the type that
 -- chooses it first), its context, and its types, one per class parameter.
 data InstHead = InstHead {ihId :: Name, ihVars :: [Name], ihCtx :: [Pred], ihHead :: [Type]}
+  deriving (Show, Data)
 
 data Env = Env
   { envVars :: M.Map Name (Scheme, Bool)   -- ^ scheme, and whether it is a recursive group member
@@ -35,6 +38,7 @@ data Env = Env
 -- | A record type: its constructors, and each field's laziness, type (over
 -- the type's parameters) and position in the constructors that have it.
 data Record = Record {recParams :: [Name], recCons :: [Name], recFields :: M.Map Name (Bool, Type, [(Name, Int)])}
+  deriving (Show, Data)
 
 data St = St
   { stNext :: Int
@@ -43,6 +47,7 @@ data St = St
   , stSolved :: IM.IntMap Dict
   , stLoc :: Maybe Loc                     -- ^ the innermost expression or pattern being checked
   , stLifted :: [(TopBind, [Name])]        -- ^ local functions moved to the top, with their own type variables
+  , stModule :: Name                       -- ^ the module being checked, which names what it moves to the top
   }
 
 -- | An error: where, inside which definitions (outermost first), and what.

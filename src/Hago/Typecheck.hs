@@ -1,12 +1,14 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE LambdaCase #-}
 
 -- | Hindley-Milner type inference with type classes, which also elaborates
 -- the program into the typed core. Laziness is type-directed: an expression
 -- checked against @Lazy t@ is suspended, and a variable of type @Lazy t@ used
 -- where a @t@ is expected is forced. Constraints become dictionaries.
-module Hago.Typecheck (typecheck, primSchemes, pretty) where
+module Hago.Typecheck (Checked (..), typecheckModule, programOf, primSchemes, pretty) where
 
 import Data.Bifunctor (first)
+import Data.Data (Data)
 
 import Control.Monad
 import Control.Monad.State
@@ -667,7 +669,9 @@ localBinds env0 ds = do
         zipWithM_ (\m v -> bindMeta m (TVar v)) (gen ++ map fst extra) vs
         let dicts = map (DParam . dictName) preds
         zts' <- mapM zonkT tys
-        lifted <- mapM (\n -> ((n ++ "'") ++) . drop 1 <$> uniq "") ns
+        modName' <- gets stModule
+        let inModule n = if modName' == "Prelude" then n else modName' ++ "." ++ n
+        lifted <- mapM (\n -> ((inModule n ++ "'") ++) . drop 1 <$> uniq "") ns
         -- inside, the group calls itself with its own type variables and the
         -- variables as they are, now parameters
         let selfCall n t = case lookup n (zip ns (zip lifted zts')) of
@@ -741,8 +745,75 @@ etaTo t (k, body) = do
 -- Module --------------------------------------------------------------------------
 
 -- | Errors without a location of their own are reported against the file.
-typecheck :: FilePath -> [Decl] -> Either String Program
-typecheck file ds = first (formatErr file) (evalStateT (tcModule ds) (St 0 IM.empty [] IM.empty Nothing []))
+-- | What checking a module gives the modules after it, and the program:
+-- every type in it is resolved and every dictionary filled in, so it can be
+-- kept and reused while the module does not change.
+data Checked = Checked
+  { ckVars :: M.Map Name Scheme           -- ^ top-level values, methods and foreign imports
+  , ckCons :: M.Map Name ConInfo
+  , ckTypes :: M.Map Name Int
+  , ckClasses :: M.Map Name ClassInfo
+  , ckInsts :: M.Map (Name, Name) InstHead
+  , ckRecords :: M.Map Name Record
+  , ckData :: M.Map Name DataInfo
+  , ckForeign :: M.Map Name Foreign
+  , ckInstInfos :: [InstInfo]
+  , ckBinds :: [TopBind]
+  }
+  deriving (Show, Data)
+
+instance Semigroup Checked where
+  a <> b = Checked
+    { ckVars = M.union (ckVars a) (ckVars b)
+    , ckCons = M.union (ckCons a) (ckCons b)
+    , ckTypes = M.union (ckTypes a) (ckTypes b)
+    , ckClasses = M.union (ckClasses a) (ckClasses b)
+    , ckInsts = M.union (ckInsts a) (ckInsts b)
+    , ckRecords = M.union (ckRecords a) (ckRecords b)
+    , ckData = M.union (ckData a) (ckData b)
+    , ckForeign = M.union (ckForeign a) (ckForeign b)
+    , ckInstInfos = ckInstInfos a ++ ckInstInfos b
+    , ckBinds = ckBinds a ++ ckBinds b
+    }
+
+instance Monoid Checked where
+  mempty = Checked M.empty M.empty M.empty M.empty M.empty M.empty M.empty M.empty [] []
+
+-- | Checks one module against what the modules before it give (its imports
+-- among them). Errors without a location of their own are reported against
+-- the module's file.
+typecheckModule :: FilePath -> Name -> Checked -> [Decl] -> Either String Checked
+typecheckModule file m before ds =
+  first (formatErr file) (evalStateT (tcModule m before ds) (St 0 IM.empty [] IM.empty Nothing [] m))
+
+-- | The whole program, from what every module gives.
+programOf :: Checked -> Program
+programOf ck = Program
+  { progData = M.union builtinData (ckData ck)
+  , progCons = M.union builtinCons (ckCons ck)
+  , progForeign = ckForeign ck
+  , progClasses = ckClasses ck
+  , progInsts = ckInstInfos ck
+  , progBinds = ckBinds ck
+  , progSubst = IM.empty
+  , progSolved = IM.empty
+  }
+
+builtinData :: M.Map Name DataInfo
+builtinData = M.fromList [("[]", DataInfo ["a"] [0] ["[]", ":"] False), ("Bool", DataInfo [] [] ["False", "True"] False)]
+
+-- | Resolves every unification variable and fills in every dictionary.
+closeUp :: Subst -> IM.IntMap Dict -> Checked -> Checked
+closeUp sub solved = everywhere (zonk sub) . everywhere fill
+  where
+    fill = \case
+      DHole h | Just d <- IM.lookup h solved -> fillAll d
+      d -> d
+    fillAll = \case
+      DHole h | Just d <- IM.lookup h solved -> fillAll d
+      DInst i ts ds -> DInst i ts (map fillAll ds)
+      DSuper d s -> DSuper (fillAll d) s
+      d -> d
 
 tyconId :: Name -> String
 tyconId = \case
@@ -752,11 +823,12 @@ tyconId = \case
   k | Just n <- tupleArity k -> "Tup" ++ show n
   k -> k
 
-tcModule :: [Decl] -> TC Program
-tcModule ds = do
+tcModule :: Name -> Checked -> [Decl] -> TC Checked
+tcModule modName' before ds = do
   let datas = [d | DData d <- ds]
-      types = M.union builtinTypes (M.fromList [(ddName d, length (ddParams d)) | d <- datas])
-      envD = Env M.empty builtinCons types M.empty M.empty [] M.empty S.empty [] M.empty
+      ownTypes = M.fromList [(ddName d, length (ddParams d)) | d <- datas]
+      types = M.unions [builtinTypes, ckTypes before, ownTypes]
+      envD = Env M.empty (M.union builtinCons (ckCons before)) types M.empty M.empty [] (ckRecords before) S.empty [] M.empty
   -- data types
   checked <- forM datas $ \d -> atLoc (Just (ddLoc d)) $ withCtx (ddName d) $ do
     let n = ddName d
@@ -777,13 +849,13 @@ tcModule ds = do
     let record = [(n, Record ps [k | (k, _, _) <- cs] (M.fromList fields)) | not (null fields)]
     pure ([(k, ci) | (k, ci, _) <- cs], record)
   let userCons = concatMap fst checked
-      cons = M.union builtinCons (M.fromList userCons)
-      dataInfos = M.fromList $
-        [("[]", DataInfo ["a"] [0] ["[]", ":"] False), ("Bool", DataInfo [] [] ["False", "True"] False)]
-          ++ [ (ddName d, DataInfo (ddParams d) [M.findWithDefault 0 p ar | p <- ddParams d] [k | ConDecl k _ _ <- ddCons d] (ddNewtype d))
+      ownRecords = M.fromList (concatMap snd checked)
+      cons = M.unions [builtinCons, ckCons before, M.fromList userCons]
+      dataInfos = M.fromList
+          [ (ddName d, DataInfo (ddParams d) [M.findWithDefault 0 p ar | p <- ddParams d] [k | ConDecl k _ _ <- ddCons d] (ddNewtype d))
              | d <- datas
              , let ar = M.unionsWith max [stypeArities st | ConDecl _ fs _ <- ddCons d, (_, st) <- fs] ]
-      envC = envD {envCons = cons, envRecords = M.fromList (concatMap snd checked)}
+      envC = envD {envCons = cons, envRecords = M.union (ckRecords before) ownRecords}
   -- classes
   let classDecls = [(sup, c, vs, deps, body) | DClass sup c vs deps body <- ds]
       kindOf body v = maximum (0 : [M.findWithDefault 0 v (stypeArities st) | DSig _ _ st <- body])
@@ -794,7 +866,7 @@ tcModule ds = do
       (_, [([d], rest)]) | d `elem` vs, L.sort (d : rest) == L.sort vs -> pure (length (takeWhile (/= d) vs))
       _ -> throw "a class with several parameters needs one functional dependency, from one of them to all the others, as in | m -> s"
     pure (c, k)
-  let envK = envC {envClasses = M.fromList [(c, ClassInfo vs (map (kindOf body) vs) (keys M.! c) [] [] []) | (_, c, vs, _, body) <- classDecls]}
+  let envK = envC {envClasses = M.union (ckClasses before) (M.fromList [(c, ClassInfo vs (map (kindOf body) vs) (keys M.! c) [] [] []) | (_, c, vs, _, body) <- classDecls])}
   classes <- fmap M.fromList . forM classDecls $ \(sup, c, vs, _, body) -> withCtx c $ do
     let kinds = map (kindOf body) vs
         key = keys M.! c
@@ -820,10 +892,10 @@ tcModule ds = do
     let defaults = [n | DBind n _ <- body]
     forM_ defaults $ \n -> unless (n `elem` map fst methods) (throw (n ++ " is not a method of " ++ c))
     pure (c, ClassInfo vs kinds key supers methods defaults)
-  let envCl = envK {envClasses = classes}
+  let envCl = envK {envClasses = M.union (ckClasses before) classes}
   -- instance heads
   instDecls <- forM [(l, ctx, c, sts, body) | DInstance l ctx c sts body <- ds] $ \(l, ctx, c, sts, body) -> atLoc l $ withCtx ("instance " ++ unqual c) $ do
-    ci <- maybe (throw ("unknown class: " ++ c)) pure (M.lookup c classes)
+    ci <- maybe (throw ("unknown class: " ++ c)) pure (M.lookup c (envClasses envCl))
     unless (length sts == length (clsVars ci)) (throw (classArity c ci (length sts)))
     let vars = M.fromList [(v, TVar v) | st <- sts, v <- stypeVars st]
     ts <- mapM (fromSType envCl vars) sts
@@ -842,10 +914,11 @@ tcModule ds = do
     forM_ rest $ \v -> unless (any (\(IsIn _ pts) -> v `elem` concatMap tyVarsOf pts) preds) $
       throw ("the type variable " ++ v ++ " is not fixed by " ++ prettyAtom keyT ++ ", which chooses the instance")
     pure ((c, k), InstHead ("inst_" ++ c ++ "_" ++ tyconId k) (vs ++ rest) preds ts, ts, (l, body))
-  case [key | (key, n) <- M.toList (M.fromListWith (+) [(key, 1 :: Int) | (key, _, _, _) <- instDecls]), n > 1] of
+  case [key | (key, n) <- M.toList (M.fromListWith (+) ([(key, 1 :: Int) | (key, _, _, _) <- instDecls] ++ [(key, 1) | key <- M.keys (ckInsts before)])), n > 1] of
     ((c, k) : _) -> throw ("duplicate instance " ++ c ++ " " ++ k)
     [] -> pure ()
-  let env0 = envCl {envInsts = M.fromList [(key, ih) | (key, ih, _, _) <- instDecls]}
+  let ownInsts = M.fromList [(key, ih) | (key, ih, _, _) <- instDecls]
+      env0 = envCl {envInsts = M.union (ckInsts before) ownInsts}
   -- foreign imports, signatures and bindings
   foreigns <- forM [(s, n, st) | DForeign s n st <- ds] $ \(s, n, st) -> withCtx n $ do
     t <- fromSType env0 (rigid st) st
@@ -854,6 +927,7 @@ tcModule ds = do
       binds = [(n, cs) | DBind n cs <- ds]
       names = map fst binds
       methodSchemes = [(m, sc) | ci <- M.elems classes, (m, sc) <- clsMethods ci]
+      beforeVars = [(n, (sc, False)) | (n, sc) <- M.toList (ckVars before)]
   case [n | (n, k) <- M.toList (M.fromListWith (+) [(n, 1 :: Int) | n <- names ++ map fst methodSchemes]), k > 1] of
     (n : _) -> throw ("in " ++ n ++ ": defined more than once")
     [] -> pure ()
@@ -867,6 +941,7 @@ tcModule ds = do
     pure (n, Forall vs preds t)
   let env1 = env0
         { envVars = M.fromList ([(n, (sc, False)) | (n, sc) <- M.toList primSchemes]
+            ++ beforeVars
             ++ [(n, (sc, False)) | (n, (sc, _)) <- foreigns]
             ++ [(n, (sc, False)) | (n, sc) <- sigSchemes]
             ++ [(n, (sc, False)) | (n, sc) <- methodSchemes]) }
@@ -894,7 +969,7 @@ tcModule ds = do
       pure ((topBind (defaultName c m) vs preds t (arrows t) body') {tbShared = False})
   -- instance bodies
   insts <- forM instDecls $ \((c, _), ih, heads, (l, body)) -> atLoc l $ withCtx ("instance " ++ showPred (IsIn c heads)) $ do
-    let ci = classes M.! c
+    let ci = envClasses envCl M.! c
         headMap = M.fromList (zip (clsVars ci) heads)
         defined = M.fromListWith (flip (++)) [(m, cs) | DBind m cs <- body]
         self = DInst (ihId ih) (map TVar (ihVars ih)) (map (DParam . dictName) (ihCtx ih))
@@ -927,7 +1002,7 @@ tcModule ds = do
   let mainLoc = case [l | DBind "main" (Clause _ (Rhs ((_, ELoc l _) : _) _) : _) <- ds] of
         (l : _) -> Just l
         [] -> Nothing
-  case M.lookup "main" (envVars env2) of
+  when (modName' == "Main") $ case M.lookup "main" (envVars env2) of
     Nothing -> throw "no main defined"
     Just (sc, _) -> atLoc mainLoc $ withCtx "main" $ do
       (t, _, _) <- instantiate sc
@@ -939,15 +1014,28 @@ tcModule ds = do
         [(n, n, filter (`M.member` byName) (clausesRefs cs)) | (n, cs) <- binds])
       defaults = [tbName b | b <- defaultBinds]
   st <- get
-  pure $ withLifted (stSub st) (reverse (stLifted st)) Program
-    { progData = dataInfos
-    , progCons = cons
-    , progForeign = M.fromList [(n, f) | (n, (_, f)) <- foreigns]
-    , progClasses = classes
-    , progInsts = insts
-    , progBinds = map (byName M.!) (order ++ defaults)
-    , progSubst = stSub st
-    , progSolved = stSolved st
+  let prog = withLifted (stSub st) (reverse (stLifted st)) Program
+        { progData = dataInfos
+        , progCons = M.fromList userCons
+        , progForeign = M.fromList [(n, f) | (n, (_, f)) <- foreigns]
+        , progClasses = classes
+        , progInsts = insts
+        , progBinds = map (byName M.!) (order ++ defaults)
+        , progSubst = stSub st
+        , progSolved = stSolved st
+        }
+      own n = not (M.member n (ckVars before) || M.member n primSchemes)
+  pure $ closeUp (stSub st) (stSolved st) Checked
+    { ckVars = M.map fst (M.filterWithKey (\n _ -> own n) (envVars env2))
+    , ckCons = progCons prog
+    , ckTypes = ownTypes
+    , ckClasses = classes
+    , ckInsts = ownInsts
+    , ckRecords = ownRecords
+    , ckData = progData prog
+    , ckForeign = progForeign prog
+    , ckInstInfos = progInsts prog
+    , ckBinds = progBinds prog
     }
   where
     isTVar (TVar _) = True

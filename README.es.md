@@ -219,8 +219,26 @@ pedir `(MonadReader Config m, MonadState Int m, MonadError String m)` y correr s
 pila que los tenga. `examples/mtl.hgo` los usa a todos.
 
 Un paso de renombrado resuelve cada nombre a uno interno, calificado por su módulo
-(`Geometry.Shapes.area`). Después de ese paso el compilador trabaja sobre un programa plano, y la
-salida en Go sigue siendo un solo archivo.
+(`Geometry.Shapes.area`), así que los módulos nunca chocan una vez compilados.
+
+### Compilación separada
+
+Cada módulo se renombra y se chequea por su cuenta, con lo que le dan sus importaciones
+(directamente o a través de otras importaciones) y nada más, que es también lo que decide qué
+instancias ve. Lo que un módulo les da a los que vienen después (sus nombres, sinónimos,
+fixities, y sus declaraciones chequeadas con todos los tipos resueltos) se guarda en una caché,
+bajo una clave hecha del compilador, la fuente del módulo y las claves de sus importaciones. La
+compilación siguiente lo reusa mientras esa clave no cambie: el Prelude y la biblioteca se
+chequean una vez, y también cada módulo que no se tocó y cuyas importaciones no cambiaron.
+
+La especialización y la generación de Go siguen viendo el programa entero, como la
+monomorfización en Rust: una plantilla se copia para los tipos con que cada programa la usa.
+Arrancan desde `main` y sólo emiten lo que alcanza, así que un programa que imprime un número son
+5 KB de Go, no el Prelude entero.
+
+La caché vive en `~/.cache/hago`; `HAGO_CACHE=dir` la mueve y `HAGO_CACHE=off` la apaga.
+Compilar un ejemplo tarda unos 0,35 s la primera vez y de 0,15 s a 0,25 s las siguientes, más
+`go build`.
 
 ## Records, sin los errores de Haskell
 
@@ -425,8 +443,8 @@ Haskell 98.
 - **La recursión polimórfica a través de una restricción** (una función que se llama a sí misma
   en un tipo más grande) no se puede especializar, y se rechaza.
 - **`String` es el `string` de Go, no `[Char]`.** Se convierte con `pack` y `unpack`.
-- **Los módulos se compilan junto con el programa,** sin compilación separada ni gestor de
-  paquetes.
+- **No hay gestor de paquetes,** y la salida en Go es un solo archivo: la especialización necesita
+  el programa entero, así que entre compilaciones sólo se guarda el chequeo de cada módulo.
 - **Una mónada que se escribe como función, como `newtype State s a = State (s -> (a, s))`,
   suma un marco a la pila de Go por cada `>>=`,** porque Go no tiene llamadas de cola. Los loops
   largos en ella se escriben con `tailRecM`, o se la construye sobre los transformadores de la
@@ -451,7 +469,7 @@ Haskell 98.
 |---|---|
 | `src/Hago/Lexer.hs` | tokens y regla de layout |
 | `src/Hago/Parser.hs` | Parsec sobre tokens, resolución de fixity |
-| `src/Hago/Rename.hs` | módulos: importaciones, exportaciones y alcances, a un programa plano |
+| `src/Hago/Rename.hs` | módulos: importaciones, exportaciones y alcances, a nombres calificados |
 | `src/Hago/Expand.hs` | sinónimos con `type`, que se expanden y desaparecen |
 | `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show, Read, Enum, Bounded, Functor, Foldable, Traversable)` |
 | `src/Hago/TcMonad.hs` | unificación y el solver de restricciones (instancias, defaulting) |
@@ -460,6 +478,8 @@ Haskell 98.
 | `src/Hago/Specialize.hs` | copias del código sobre constructores de tipos; los métodos de instancia pasan a ser funciones |
 | `src/Hago/Newtype.hs` | los newtypes, reemplazados por el tipo que envuelven |
 | `src/Hago/CodeGen.hs` | generación de Go |
+| `src/Hago/Cache.hs` | compilación separada: lo que da cada módulo, guardado en disco |
+| `src/Hago/Driver.hs` | encontrar los módulos, compilar cada uno, y después el programa entero |
 | `runtime/runtime.go` | listas, thunks e IO con trampolín; se copia en cada programa |
 | `prelude/Prelude.hgo` | el prelude, escrito en Hago |
 | `lib/` | la biblioteca estándar (`Control.Monad.State` y compañía), escrita en Hago |

@@ -9,16 +9,18 @@ import Control.Monad (foldM)
 import Data.Char (isAlphaNum, isDigit)
 import Data.List (intercalate, isPrefixOf)
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Hago.CodeGen (generate)
 import Hago.Derive (expandDeriving)
 import Hago.Embed (embedFile)
-import Hago.Expand (expandSynonyms)
+import Hago.Expand (expandSynonyms, synonymsOf)
 import Hago.Newtype (eraseNewtypes)
-import Hago.Parser (parseModule, resolveFixity)
-import Hago.Rename (renameModules)
+import Hago.Parser (fixitiesOf, parseModule, resolveFixity)
+import Hago.Cache
+import Hago.Rename (renameModule)
 import Hago.Specialize (specialize)
 import Hago.Syntax
-import Hago.Typecheck (typecheck)
+import Hago.Typecheck (Checked (..), programOf, typecheckModule)
 import System.Directory (doesFileExist)
 import System.FilePath (takeDirectory, (<.>), (</>))
 
@@ -74,18 +76,63 @@ tupleInstances = unlines (concatMap instances [2 .. maxTuple])
             | (i, x) <- zip [1 :: Int ..] xs ]
           ++ [ "    pure (" ++ tuple xs ++ ", r" ++ show n ++ "))" ]
 
+-- | Compiles one module, given what its imports give.
+compileModule :: Iface -> (FilePath, Module) -> Either String Iface
+compileModule before (path, m) = do
+  (renamed, rn) <- renameModule (ifRenamed before) m
+  expanded <- expandSynonyms (ifSynonyms before) renamed
+  decls <- expandDeriving expanded
+  checked <- typecheckModule path (modName m) (ifChecked before) (resolveFixity (ifFixities before) decls)
+  pure (Iface rn (synonymsOf renamed) (fixitiesOf renamed) checked)
+
+-- | A module to compile: its file, name, source, and, but for the Prelude,
+-- which is parsed only when it has to be checked, its parse.
+data Unit = Unit FilePath Name String (Maybe Module)
+
 compileFile :: FilePath -> IO (Either String String)
 compileFile file = do
   loaded <- loadAll file
+  stamp <- compilerStamp
+  cache <- cacheDirectory
+  let preludeUnit = Unit "Prelude.hgo" "Prelude" (preludeSource ++ tupleInstances) Nothing
+  result <- case loaded of
+    Left e -> pure (Left e)
+    Right mods -> compileUnits stamp cache (preludeUnit : [Unit path (modName m) src (Just m) | (path, src, m) <- mods])
   either (fmap Left . quoteSource) (pure . Right) $ do
-    mods <- loaded
-    prelude <- parseModule "Prelude.hgo" (preludeSource ++ tupleInstances)
-    renamed <- renameModules (prelude {modName = "Prelude"} : mods)
-    expanded <- expandSynonyms renamed
-    decls <- expandDeriving expanded
-    checked <- typecheck file (resolveFixity decls)
-    prog <- either (Left . ((file ++ ": ") ++)) Right (specialize checked)
+    ifaces <- result
+    let checked = map (ifChecked . snd) ifaces
+    -- two modules that do not import each other can still give the same instance
+    case [(c, k) | ((c, k), n) <- M.toList (M.fromListWith (+) [(key, 1 :: Int) | ck <- checked, key <- M.keys (ckInsts ck)]), n > 1] of
+      (c, k) : _ -> Left (file ++ ": two modules define the instance " ++ c ++ " " ++ k)
+      [] -> pure ()
+    prog <- either (Left . ((file ++ ": ") ++)) Right (specialize (programOf (mconcat checked)))
     pure (generate runtimeSource (eraseNewtypes prog))
+
+-- | Compiles each module, dependencies first, reusing what the cache keeps
+-- for a module whose source and imports have not changed. Each module is
+-- checked with what its imports give, directly or not, and nothing else.
+compileUnits :: String -> Maybe FilePath -> [Unit] -> IO (Either String [(Name, Iface)])
+compileUnits stamp cache = go M.empty M.empty []
+  where
+    go _ _ done [] = pure (Right (reverse done))
+    go keys deps done (Unit path name src parsed : rest) = do
+      let direct = [i | name /= "Prelude", i <- "Prelude" : maybe [] (map impModule . modImports) parsed]
+          below = S.unions (S.fromList direct : [M.findWithDefault S.empty i deps | i <- direct])
+          key = moduleKey stamp src [M.findWithDefault "" i keys | i <- direct]
+          before = mconcat [iface | (n, iface) <- reverse done, S.member n below]
+      kept <- maybe (pure Nothing) (\dir -> readIface dir name key) cache
+      r <- case kept of
+        Just iface -> pure (Right iface)
+        Nothing -> case maybe (parseModule path src) Right parsed of
+          Left e -> pure (Left e)
+          Right m -> case compileModule before (path, m {modName = name}) of
+            Left e -> pure (Left e)
+            Right iface -> do
+              mapM_ (\dir -> writeIface dir name key iface) cache
+              pure (Right iface)
+      case r of
+        Left e -> pure (Left e)
+        Right iface -> go (M.insert name key keys) (M.insert name below deps) ((name, iface) : done) rest
 
 -- | Follows an error that starts with file:line:column with that line of the
 -- source and a mark under the place:
@@ -130,7 +177,7 @@ quoteSource err = case location err of
 
 -- | The main module and everything it imports, dependencies first. A module
 -- A.B lives in A/B.hgo, next to the main file, or in the standard library.
-loadAll :: FilePath -> IO (Either String [Module])
+loadAll :: FilePath -> IO (Either String [(FilePath, String, Module)])
 loadAll mainFile = do
   r <- load [] (Right (M.empty, [])) ("Main", mainFile, Nothing)
   pure (fmap (reverse . snd) r)
@@ -158,5 +205,5 @@ loadAll mainFile = do
                     | otherwise -> do
                         let deps = [(impModule i, root </> moduleFile (impModule i), Just (impLoc i)) | i <- modImports m, impModule i /= "Prelude"]
                         r <- foldM (load (name : stack)) (Right (seen, done)) deps
-                        pure (fmap (\(seen', done') -> (M.insert name () seen', m : done')) r)
+                        pure (fmap (\(seen', done') -> (M.insert name () seen', (path', src, m) : done')) r)
     moduleFile n = map (\c -> if c == '.' then '/' else c) n <.> "hgo"

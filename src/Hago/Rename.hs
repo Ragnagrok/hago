@@ -8,7 +8,7 @@
 -- Scoping: locals shadow everything, a module's own definitions shadow what
 -- it imports, and a name imported from two modules with different meanings
 -- is ambiguous. Instances are global, as in Haskell.
-module Hago.Rename (renameModules, moduleQualify) where
+module Hago.Rename (Table (..), Renamed (..), renameModule, moduleQualify) where
 
 import Control.Monad
 import Data.List (intercalate, nub, sort)
@@ -121,28 +121,38 @@ imported imp t = (M.filterWithKey keepV (tVals t), M.filterWithKey keepT (tTypes
     keepV k _ = maybe True (const (S.member k onlyV)) (impOnly imp) && not (S.member k hideV)
     keepT k _ = maybe True (const (S.member k onlyT)) (impOnly imp) && not (S.member k hideT)
 
--- | Renames every module (the Prelude first) into one list of declarations.
--- Modules come with their dependencies first, so what a module exports,
--- which can include what it imports, is known before anyone imports it.
-renameModules :: [Module] -> Rn [Decl]
-renameModules mods = do
-  let tables = M.fromList [(modName m, tableOf m) | m <- mods]
-      children = M.fromList
-        [ (i, M.findWithDefault [] k (tChildren t))
-        | t <- M.elems tables, (k, i) <- M.toList (tTypes t) ]
-  exportTables <- foldM
-    (\acc m -> do
-        brought <- importsOf acc m
-        e <- exportsOf children brought (tables M.! modName m) m
-        pure (M.insert (modName m) e acc))
-    M.empty mods
-  let fields = M.fromListWith (++)
+-- | What renaming a module gives the modules after it.
+data Renamed = Renamed
+  { rnExports :: M.Map Name Table             -- ^ what each module exports
+  , rnChildren :: M.Map Name [Name]           -- ^ a type's or class's internal name to its constructors or methods
+  , rnFields :: M.Map Name [(Name, [Name])]   -- ^ a field name to the record types that have it, and their constructors
+  }
+
+instance Semigroup Renamed where
+  a <> b = Renamed (M.union (rnExports a) (rnExports b)) (M.union (rnChildren a) (rnChildren b)) (M.unionWith (++) (rnFields a) (rnFields b))
+
+instance Monoid Renamed where
+  mempty = Renamed M.empty M.empty M.empty
+
+-- | Renames one module, given what the modules before it give: its
+-- dependencies come first, so what a module exports, which can include what
+-- it imports, is known before anyone imports it. Returns the declarations
+-- and what the module gives.
+renameModule :: Renamed -> Module -> Rn ([Decl], Renamed)
+renameModule before m = do
+  let ownTable = tableOf m
+      q = moduleQualify (modName m)
+      ownChildren = M.fromList [(i, M.findWithDefault [] k (tChildren ownTable)) | (k, i) <- M.toList (tTypes ownTable)]
+      ownFields = M.fromListWith (++)
         [ (lab, [(q (ddName d), map q ks)])
-        | m <- mods, let q = moduleQualify (modName m), DData d <- modDecls m
+        | DData d <- modDecls m
         , let ks = [k | ConDecl k _ _ <- ddCons d], lab <- nub (concat [ls | ConDecl _ _ ls <- ddCons d]) ]
-  concat <$> forM mods (\m -> do
-    brought <- importsOf exportTables m
-    renameModule exportTables brought fields (tables M.! modName m) m)
+      children = M.union (rnChildren before) ownChildren
+      fields = M.unionWith (++) (rnFields before) ownFields
+  brought <- importsOf (rnExports before) m
+  exports <- exportsOf children brought ownTable m
+  ds <- renameDecls (M.insert (modName m) exports (rnExports before)) brought fields ownTable m
+  pure (ds, Renamed (M.singleton (modName m) exports) ownChildren ownFields)
 
 -- | Each import of a module, with what it brings.
 importsOf :: M.Map Name Table -> Module -> Rn [(Import, (M.Map Name Name, M.Map Name Name))]
@@ -155,8 +165,8 @@ importsOf exportTables m = do
 
 -- | The fields of a record type can be used wherever one of its constructors
 -- is in scope, qualified or not: a type exported abstractly keeps them hidden.
-renameModule :: M.Map Name Table -> [(Import, (M.Map Name Name, M.Map Name Name))] -> M.Map Name [(Name, [Name])] -> Table -> Module -> Rn [Decl]
-renameModule exportTables brought fields ownTable m = do
+renameDecls :: M.Map Name Table -> [(Import, (M.Map Name Name, M.Map Name Name))] -> M.Map Name [(Name, [Name])] -> Table -> Module -> Rn [Decl]
+renameDecls exportTables brought fields ownTable m = do
   let prelude = M.findWithDefault (Table M.empty M.empty M.empty) "Prelude" exportTables
       unq f = M.fromListWith (++) [(k, [v]) | (imp, bs) <- brought, not (impQualified imp), (k, v) <- M.toList (f bs)]
       qual f = M.fromList $

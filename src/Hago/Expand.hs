@@ -7,7 +7,7 @@
 -- | Type synonyms, expanded away after renaming: the rest of the compiler
 -- never sees them. A synonym must be given all its parameters, and a
 -- synonym that refers to itself, directly or not, is an error.
-module Hago.Expand (expandSynonyms) where
+module Hago.Expand (Synonyms, expandSynonyms, synonymsOf) where
 
 import Control.Monad
 import Data.Data (Data, gmapM)
@@ -20,9 +20,14 @@ import Hago.Syntax
 
 type Synonyms = M.Map Name ([Name], SType)
 
-expandSynonyms :: [Decl] -> Either String [Decl]
-expandSynonyms ds = do
-  let syns = M.fromList [(n, (ps, t)) | DType n ps t <- ds]
+-- | The synonyms a module declares.
+synonymsOf :: [Decl] -> Synonyms
+synonymsOf ds = M.fromList [(n, (ps, t)) | DType n ps t <- ds]
+
+-- | Expands a module's synonyms, and those of the modules before it.
+expandSynonyms :: Synonyms -> [Decl] -> Either String [Decl]
+expandSynonyms before ds = do
+  let syns = M.union (synonymsOf ds) before
   forM_ (stronglyConnComp [(n, n, conNames t) | (n, (_, t)) <- M.toList syns]) $ \case
     CyclicSCC ns -> Left ("type synonyms cannot refer to themselves: " ++ intercalate ", " (map unqual ns))
     AcyclicSCC _ -> pure ()
