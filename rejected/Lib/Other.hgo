@@ -1,0 +1,4 @@
+module Lib.Other (value) where
+
+value :: Int
+value = 4

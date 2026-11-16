@@ -143,6 +143,27 @@ calls. Hago handles this in two ways, following PureScript:
   `Either e` have instances, you can write one for your own monad (see `examples/monads.hgo`),
   and `forever` is built on it.
 
+## Modules
+
+```haskell
+module Data.Stack (Stack, empty, push, pop) where   -- Stack is abstract
+
+import qualified Data.Stack as S
+import Geometry.Shapes (Shape(..), area)
+import Geometry.Shapes hiding (perimeter)
+```
+
+- **A module `A.B` lives in `A/B.hgo`,** next to the main file, which is `Main`.
+- **Export and import lists, `qualified`, `as` and `hiding`** work as in Haskell. A type
+  exported without `(..)` is abstract.
+- **Your own definitions shadow imported ones,** so a module can define its own `toList`. Two
+  imports giving the same name a different meaning are ambiguous only where the name is used.
+- **Instances are global,** as in Haskell.
+
+A renaming pass resolves every name to an internal one qualified by its module
+(`Geometry.Shapes.area`). After it, the compiler works on one flat program, and the Go output
+is still a single file.
+
 ## What the Go looks like
 
 `map` compiles to a generic Go function. Data types become a Go interface with one struct per
@@ -218,8 +239,8 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # just compile
 ```
 
 The `examples/` folder has lazy lists, ADTs with pattern matching and guards, type classes,
-monads (State, Maybe, Either, lists, reader, writer, Traversable), monad transformers, calls to
-Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
+monads (State, Maybe, Either, lists, reader, writer, Traversable), monad transformers, modules,
+calls to Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
 programs the type checker must refuse, each with the error it expects.
 
 ## What is there and what isn't
@@ -244,8 +265,9 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
   type) cannot be specialised, and is rejected.
 - **`Read` and `Enum`.** `[a..b]` only works on `Int`.
 - **`String` is Go's `string`, not `[Char]`.** Convert with `pack` and `unpack`.
-- Modules and imports, records, `newtype` semantics, list comprehensions, `type` synonyms, tuples
-  beyond three.
+- Records, `newtype` semantics, list comprehensions, `type` synonyms, tuples beyond three.
+- **Modules compile together with the program,** with no separate compilation or package
+  manager, and a module cannot re-export another (`module M` in an export list).
 - **Long loops in pure monads like `State` use stack,** because their `>>=` is a chain of Go
   calls. Write those loops with `tailRecM`. In IO and transformers over IO they are flat.
 - **No multi-parameter classes,** so no mtl-style `MonadState s m`: transformers come with
@@ -266,6 +288,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 |---|---|
 | `src/Hago/Lexer.hs` | tokens and the layout rule |
 | `src/Hago/Parser.hs` | Parsec over tokens, fixity resolution |
+| `src/Hago/Rename.hs` | modules: imports, exports and scopes, into one flat program |
 | `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show)` |
 | `src/Hago/TcMonad.hs` | unification and the constraint solver (instances, defaulting) |
 | `src/Hago/Typecheck.hs` | inference and elaboration, where `Lazy` and dictionaries are inserted |

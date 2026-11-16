@@ -18,11 +18,11 @@ import qualified Text.Parsec as P
 -- | The user state is the file being parsed, for locations.
 type Parser = Parsec [Token] FilePath
 
-parseModule :: FilePath -> String -> Either String [Decl]
+parseModule :: FilePath -> String -> Either String Module
 parseModule file src = do
   toks <- either (\e -> Left (file ++ ":" ++ e)) Right (lexer src)
   ds <- either (Left . showParseError file) Right (runParser pModule file file (layout toks))
-  pure (groupClauses ds)
+  pure ds
 
 -- Token primitives -----------------------------------------------------------
 
@@ -122,12 +122,39 @@ operator = varSym <|> conSym <|> (special "`" *> (varId <|> conId) <* special "`
 
 -- Module and declarations ---------------------------------------------------
 
-pModule :: Parser [Decl]
+pModule :: Parser Module
 pModule = do
-  optional (key "module" >> conId >> key "where")
-  ds <- block topDecl
+  header <- optionMaybe $ do
+    key "module"
+    name <- conId
+    exports <- optionMaybe (parens (item `sepEndBy` special ","))
+    key "where"
+    pure (name, exports)
+  items <- block ((Left <$> importDecl) <|> (Right <$> topDecl))
   eof
-  pure (concat ds)
+  let (name, exports) = maybe ("Main", Nothing) id header
+  pure (Module name exports [i | Left i <- items] (groupClauses (concat [d | Right d <- items])))
+
+-- | An entry of an import or export list.
+item :: Parser Item
+item = (IVar <$> var) <|> do
+  t <- conId
+  sub <- option SubNone $ parens $
+    (SubAll <$ key "..") <|> (SubSome <$> ((var <|> conId) `sepBy` special ","))
+  pure (IType t sub)
+
+importDecl :: Parser Import
+importDecl = do
+  l <- here
+  key "import"
+  q <- option False (True <$ tokEq (TVarId "qualified"))
+  m <- conId
+  as <- optionMaybe (tokEq (TVarId "as") >> conId)
+  hiding <- option False (True <$ tokEq (TVarId "hiding"))
+  list <- optionMaybe (parens (item `sepEndBy` special ","))
+  pure $ if hiding
+    then Import m q as Nothing (maybe [] id list) l
+    else Import m q as list [] l
 
 topDecl :: Parser [Decl]
 topDecl = choice
@@ -135,12 +162,8 @@ topDecl = choice
   , pure <$> foreignDecl
   , pure <$> classDecl
   , pure <$> instanceDecl
-  , [] <$ (key "import" >> skipMany1 (satisfyT notSemi))
   , decl
   ]
-  where notSemi (TSpecial ";") = Nothing
-        notSemi (TSpecial "}") = Nothing
-        notSemi _ = Just ()
 
 dataDecl :: Parser Decl
 dataDecl = do
@@ -342,7 +365,7 @@ expr :: Parser Expr
 expr = do
   neg <- optionMaybe (tokEq (TVarSym "-"))
   e0 <- expr10
-  let first = maybe e0 (const (EApp (EVar "negate") e0)) neg
+  let first = maybe e0 (const (EApp (EVar "Prelude.negate") e0)) neg
   rest <- many (try ((,) <$> operator <*> expr10))
   let e = if null rest then first else EOpSeq first rest
   option e (EAnn e <$> (key "::" *> pType))
@@ -426,7 +449,7 @@ listExpr = (ECon "[]" <$ special "]") <|> do
     [ do key ".."
          hi <- optionMaybe expr
          special "]"
-         pure $ maybe (EApp (EVar "enumFrom") e) (EApp (EApp (EVar "enumFromTo") e)) hi
+         pure $ maybe (EApp (EVar "Prelude.enumFrom") e) (EApp (EApp (EVar "Prelude.enumFromTo") e)) hi
     , do es <- many (special "," *> expr)
          special "]"
          pure (foldr (\x acc -> EApp (EApp (ECon ":") x) acc) (ECon "[]") (e : es))

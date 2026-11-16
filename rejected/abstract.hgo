@@ -1,0 +1,5 @@
+-- expects: rejected/abstract.hgo:5:15: in main: unknown constructor: Stack
+import Data.Stack (Stack, empty)
+
+main :: IO ()
+main = print (Stack [1, 2])

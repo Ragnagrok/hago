@@ -11,7 +11,7 @@ import qualified Data.IntMap as IM
 import Data.List (intercalate, nub)
 import qualified Data.Map as M
 import Hago.Core
-import Hago.Syntax (Loc, Name, showLoc)
+import Hago.Syntax (Loc, Name, showLoc, unqual)
 
 data InstHead = InstHead {ihId :: Name, ihVars :: [Name], ihCtx :: [Pred]}
 
@@ -59,7 +59,7 @@ atLoc = maybe id withLoc
 -- | file:line:col: in f, in g: message. Without a location, the file alone.
 formatErr :: FilePath -> TcErr -> String
 formatErr file (TcErr l cs m) =
-  maybe file showLoc l ++ ": " ++ (if null cs then "" else "in " ++ intercalate ", in " cs ++ ": ") ++ m
+  maybe file showLoc l ++ ": " ++ (if null cs then "" else "in " ++ intercalate ", in " (map unqual cs) ++ ": ") ++ m
 
 next :: TC Int
 next = do
@@ -214,8 +214,8 @@ pretty = go (0 :: Int)
     go _ (TCon c ts) | take 2 c == "(,", length ts == length c - 1 = "(" ++ intercalate ", " (map (go 0) ts) ++ ")"
     go p (TCon "->" [a]) = paren (p > 1) ("(->) " ++ go 2 a)
     go p (TCon c ts) | take 2 c == "(,", not (null ts) = paren (p > 1) (unwords (c : map (go 2) ts))
-    go _ (TCon c []) = c
-    go p (TCon c ts) = paren (p > 1) (unwords (c : map (go 2) ts))
+    go _ (TCon c []) = unqual c
+    go p (TCon c ts) = paren (p > 1) (unwords (unqual c : map (go 2) ts))
     go p (TFun a b) = paren (p > 0) (go 1 a ++ " -> " ++ go 0 b)
     go p (TApp f x) = paren (p > 1) (go 1 f ++ " " ++ go 2 x)
     paren True s = "(" ++ s ++ ")"

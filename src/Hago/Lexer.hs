@@ -50,7 +50,7 @@ lexer = go 1 1
               t | w `elem` keywords = TKey w
                 | isUpper ch = TConId w
                 | otherwise = TVarId w
-           in emit t (length w) rest
+           in if isUpper ch then qualified w rest else emit t (length w) rest
       | isDigit ch =
           let (d, rest) = span isDigit s
            in case rest of
@@ -73,6 +73,21 @@ lexer = go 1 1
       where
         pos = show l ++ ":" ++ show c
         emit t n rest = (Token l c t :) <$> go l (c + n) rest
+        -- A.B.x, A.B.C and A.+ are single qualified tokens
+        qualified prefix rest = case rest of
+          '.' : r@(x : _)
+            | isUpper x ->
+                let (w, rest') = span isIdChar r in qualified (prefix ++ "." ++ w) rest'
+            | isAlpha x || x == '_' ->
+                let (w, rest') = span isIdChar r
+                 in if w `elem` keywords
+                      then emit (TConId prefix) (length prefix) rest
+                      else emit (TVarId (prefix ++ "." ++ w)) (length prefix + 1 + length w) rest'
+            | symChar x && x /= '.' ->
+                let (o, rest') = span symChar r
+                    t = if x == ':' then TConSym (prefix ++ "." ++ o) else TVarSym (prefix ++ "." ++ o)
+                 in emit t (length prefix + 1 + length o) rest'
+          _ -> emit (TConId prefix) (length prefix) rest
         lexString acc n ('"' : rest) = emit (TStr (reverse acc)) (n + 1) rest
         lexString acc n rest = case lexChar rest of
           Just (v, k, rest') -> lexString (v : acc) (n + k) rest'

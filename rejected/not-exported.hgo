@@ -1,0 +1,5 @@
+-- expects: rejected/not-exported.hgo:5:25: in main: not in scope: secret
+import Lib.Secret
+
+main :: IO ()
+main = print (visible + secret)

@@ -1,0 +1,5 @@
+-- expects: rejected/missing-module.hgo:2:1: cannot find module Lib.Nope
+import Lib.Nope
+
+main :: IO ()
+main = print 1

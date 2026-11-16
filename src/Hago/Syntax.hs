@@ -1,6 +1,9 @@
 -- | Surface syntax: what the parser produces, before type checking.
 module Hago.Syntax where
 
+import Data.Char (isAlphaNum, isUpper)
+import Data.List (intercalate)
+
 type Name = String
 
 -- | Where something is in the source: file, line, column.
@@ -89,5 +92,45 @@ data Decl
   deriving (Eq, Show)
 
 isConName :: Name -> Bool
-isConName (c : _) = c `elem` (':' : ['A' .. 'Z']) || c == '(' || c == '['
-isConName [] = False
+isConName n = case unqual n of
+  (c : _) -> c `elem` (':' : ['A' .. 'Z']) || c == '(' || c == '['
+  [] -> False
+
+-- | Splits a qualified name: "Data.Map.lookup" is (Just "Data.Map", "lookup"),
+-- "Main.<+>" is (Just "Main", "<+>"), and "." is (Nothing, ".").
+splitQual :: Name -> (Maybe Name, Name)
+splitQual = go []
+  where
+    go acc s = case s of
+      (c : _) | isUpper c, (seg, '.' : rest@(_ : _)) <- span idChar s -> go (acc ++ [seg]) rest
+      _ -> (if null acc then Nothing else Just (intercalate "." acc), s)
+    idChar x = isAlphaNum x || x == '_' || x == '\''
+
+unqual :: Name -> Name
+unqual = snd . splitQual
+
+-- | What an import or export list names: a value, or a type or class with
+-- none, all or some of its constructors or methods.
+data Item = IVar Name | IType Name Sub
+  deriving (Eq, Show)
+
+data Sub = SubNone | SubAll | SubSome [Name]
+  deriving (Eq, Show)
+
+data Import = Import
+  { impModule :: Name
+  , impQualified :: Bool
+  , impAs :: Maybe Name
+  , impOnly :: Maybe [Item]
+  , impHiding :: [Item]
+  , impLoc :: Loc
+  }
+  deriving (Eq, Show)
+
+data Module = Module
+  { modName :: Name
+  , modExports :: Maybe [Item]
+  , modImports :: [Import]
+  , modDecls :: [Decl]
+  }
+  deriving (Show)

@@ -18,7 +18,8 @@ instanceFor n ps cons cls = do
     "Ord" -> Right [DBind "compare" (ordClauses cons)]
     "Show" -> Right [DBind "showsPrec" (map showClause cons)]
     _ -> Left ("cannot derive " ++ cls ++ " for " ++ n ++ " (only Eq, Ord and Show)")
-  pure (DInstance Nothing [(cls, p) | p <- ps] cls (STCon n (map STVar ps)) methods)
+  let pcls = "Prelude." ++ cls
+  pure (DInstance Nothing [(pcls, p) | p <- ps] pcls (STCon n (map STVar ps)) methods)
 
 -- | Two patterns for the same constructor, with fields named a1.. and b1..
 fieldsOf :: ConDecl -> (Name, Int)
@@ -41,25 +42,25 @@ op o a b = app (EVar o) [a, b]
 
 eqClauses :: [ConDecl] -> [Clause]
 eqClauses cons =
-  [ Clause [conPat k as, conPat k bs] (plain (conj [op "==" (EVar a) (EVar b) | (a, b) <- zip as bs]))
+  [ Clause [conPat k as, conPat k bs] (plain (conj [op "Prelude.==" (EVar a) (EVar b) | (a, b) <- zip as bs]))
   | c <- cons, let (k, m) = fieldsOf c, let as = vars "a" m, let bs = vars "b" m ]
-    ++ [Clause [PWild, PWild] (plain (ECon "False")) | length cons > 1]
+    ++ [Clause [PWild, PWild] (plain (ECon "Prelude.False")) | length cons > 1]
   where
-    conj [] = ECon "True"
-    conj xs = foldr1 (op "&&") xs
+    conj [] = ECon "Prelude.True"
+    conj xs = foldr1 (op "Prelude.&&") xs
 
 -- | Same constructor: compare the fields left to right. Different ones:
 -- compare their position in the declaration.
 ordClauses :: [ConDecl] -> [Clause]
 ordClauses cons =
-  [ Clause [conPat k as, conPat k bs] (plain (lexi [op "compare" (EVar a) (EVar b) | (a, b) <- zip as bs]))
+  [ Clause [conPat k as, conPat k bs] (plain (lexi [op "Prelude.compare" (EVar a) (EVar b) | (a, b) <- zip as bs]))
   | c <- cons, let (k, m) = fieldsOf c, let as = vars "a" m, let bs = vars "b" m ]
-    ++ [ Clause [PVar "x", PVar "y"] (Rhs [(Nothing, op "compare" (EApp (EVar "tag") (EVar "x")) (EApp (EVar "tag") (EVar "y")))]
+    ++ [ Clause [PVar "x", PVar "y"] (Rhs [(Nothing, op "Prelude.compare" (EApp (EVar "tag") (EVar "x")) (EApp (EVar "tag") (EVar "y")))]
            [DBind "tag" [Clause [PCon k (replicate m PWild)] (plain (ELit (LInt i))) | (i, c) <- zip [0 ..] cons, let (k, m) = fieldsOf c]])
        | length cons > 1 ]
   where
-    lexi [] = ECon "EQ"
-    lexi xs = foldr1 (op "thenCmp") xs
+    lexi [] = ECon "Prelude.EQ"
+    lexi xs = foldr1 (op "Prelude.thenCmp") xs
 
 showClause :: ConDecl -> Clause
 showClause c =
@@ -68,8 +69,8 @@ showClause c =
       name = case k of
         (ch : _) | isAlpha ch -> k
         _ -> "(" ++ k ++ ")"
-      body = foldl (\acc a -> op "++" acc (op "++" (ELit (LStr " ")) (app (EVar "showsPrec") [ELit (LInt 11), EVar a])))
+      body = foldl (\acc a -> op "Prelude.++" acc (op "Prelude.++" (ELit (LStr " ")) (app (EVar "Prelude.showsPrec") [ELit (LInt 11), EVar a])))
                    (ELit (LStr name)) as
    in if m == 0
         then Clause [PWild, PCon k []] (plain (ELit (LStr name)))
-        else Clause [PVar "d", conPat k as] (plain (app (EVar "showParenString") [op ">" (EVar "d") (ELit (LInt 10)), body]))
+        else Clause [PVar "d", conPat k as] (plain (app (EVar "Prelude.showParenString") [op "Prelude.>" (EVar "d") (ELit (LInt 10)), body]))

@@ -1,0 +1,15 @@
+-- A module with an export list: helper stays private.
+module Geometry.Shapes (Shape(..), area, perimeter) where
+
+data Shape = Circle Double | Rect Double Double deriving (Show)
+
+area :: Shape -> Double
+area (Circle r) = pi * r * r
+area (Rect w h) = w * h
+
+perimeter :: Shape -> Double
+perimeter (Circle r) = helper * pi * r
+perimeter (Rect w h) = helper * (w + h)
+
+helper :: Double
+helper = 2.0

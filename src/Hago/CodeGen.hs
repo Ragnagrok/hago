@@ -12,7 +12,7 @@ import qualified Data.IntMap as IM
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
 import Hago.Core
-import Hago.Syntax (Lit (..), Name)
+import Hago.Syntax (Lit (..), Name, splitQual, unqual)
 import Hago.Specialize (instMethodName, typeTag)
 import Hago.Typecheck (primSchemes)
 import Numeric (showHex)
@@ -95,13 +95,21 @@ mangle n
   | any (`isPrefixOf` s) ["rt_", "hg_"] = "u_" ++ s
   | otherwise = s
   where
-    s = concatMap (\c -> if c == '\'' then "_q" else if isAlphaNum c || c == '_' then [c] else "_" ++ symWord c) n
+    s = concatMap (\c -> if c == '\'' then "_q" else if c == '.' then "_" else if isAlphaNum c || c == '_' then [c] else "_" ++ symWord c) n'
+    -- a qualified operator: the module part as a prefix, the operator spelled out
+    n' = case splitQual n of
+      (Just q, base) | isSymbolic base -> q ++ ".op_" ++ concatMap symWord base
+      _ -> n
     symWord c = fromMaybe "x" (lookup c symNames)
     symNames =
       [ ('+', "plus"), ('-', "minus"), ('*', "star"), ('/', "slash"), ('.', "dot"), ('<', "lt")
       , ('>', "gt"), ('=', "eq"), ('!', "bang"), ('$', "dollar"), ('&', "amp"), ('|', "bar")
       , (':', "colon"), ('^', "caret"), ('%', "pct"), ('@', "at"), ('#', "hash"), ('?', "qm")
       , ('~', "tilde"), ('\\', "bslash") ]
+
+-- | A constructor's part of its struct name: without its module, operators spelled out.
+conSuffix :: Name -> String
+conSuffix k = let b = unqual k in if isSymbolic b then mangle b else b
 
 -- | Operators and operator constructors, as opposed to alphanumeric names.
 isSymbolic :: Name -> Bool
@@ -112,7 +120,8 @@ tyVar :: Name -> String
 tyVar v = "T_" ++ concatMap (\c -> if c == '\'' then "_q" else [c]) v
 
 typeName :: Name -> String
-typeName c = if c `elem` goReserved then c ++ "_" else c
+typeName c = if c' `elem` goReserved then c' ++ "_" else c'
+  where c' = map (\x -> if x == '.' then '_' else x) c
 
 conStruct :: Program -> Name -> String
 conStruct prog k = case k of
@@ -120,7 +129,7 @@ conStruct prog k = case k of
   ":" -> "Cons"
   "(,)" -> "Tup2"
   "(,,)" -> "Tup3"
-  _ -> typeName (ciType (progCons prog M.! k)) ++ "_" ++ (if isSymbolic k then mangle k else k)
+  _ -> typeName (ciType (progCons prog M.! k)) ++ "_" ++ conSuffix k
 
 splitSymbol :: String -> (String, String)
 splitSymbol s = case break (== '.') (reverse s) of
@@ -201,7 +210,7 @@ conRef :: Ctx -> Name -> [Type] -> String
 conRef ctx k targs = case M.lookup k (progCons prog) of
   Just ci | not (null (hkPositions prog (ciType ci))) ->
     let (n, args) = dataInst prog (ciType ci) (map (zonk (progSubst prog)) targs)
-     in n ++ "_" ++ (if isSymbolic k then mangle k else k) ++ typeArgs ctx args
+     in n ++ "_" ++ conSuffix k ++ typeArgs ctx args
   _ -> conStruct prog k ++ typeArgs ctx targs
   where prog = cxProg ctx
 
@@ -241,7 +250,7 @@ genHkData prog (c, canon) =
     marker = "is" ++ name
     ctx = Ctx M.empty Nothing params [] prog
     recv k = name ++ "_" ++ suffix k ++ (if null params then "" else "[" ++ commas (map tyVar params) ++ "]")
-    suffix k = if isSymbolic k then mangle k else k
+    suffix = conSuffix
     con k =
       let ci = progCons prog M.! k
           fields = ["F" ++ show i ++ " " ++ goTy ctx (substTV s (if lz then tLazy t else t)) | (i, (lz, t)) <- zip [0 :: Int ..] (ciFields ci)]

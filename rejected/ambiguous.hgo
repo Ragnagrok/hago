@@ -1,0 +1,6 @@
+-- expects: rejected/ambiguous.hgo:6:14: ambiguous name value: it could be Lib.Other.value or Lib.Secret.value
+import Lib.Secret
+import Lib.Other
+
+main :: IO ()
+main = print value

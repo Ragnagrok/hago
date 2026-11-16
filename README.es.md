@@ -148,6 +148,28 @@ Go no elimina llamadas de cola. Hago lo resuelve de dos maneras, siguiendo a Pur
   `Either e` tienen instancia, se puede escribir una para una mónada propia (ver
   `examples/monads.hgo`), y `forever` está construido encima.
 
+## Módulos
+
+```haskell
+module Data.Stack (Stack, empty, push, pop) where   -- Stack es abstracto
+
+import qualified Data.Stack as S
+import Geometry.Shapes (Shape(..), area)
+import Geometry.Shapes hiding (perimeter)
+```
+
+- **Un módulo `A.B` vive en `A/B.hgo`,** junto al archivo principal, que es `Main`.
+- **Las listas de exportación e importación, `qualified`, `as` y `hiding`** funcionan como en
+  Haskell. Un tipo exportado sin `(..)` es abstracto.
+- **Las definiciones propias tapan a las importadas,** así que un módulo puede definir su propio
+  `toList`. Dos importaciones que le dan significados distintos a un mismo nombre son ambiguas
+  sólo donde ese nombre se usa.
+- **Las instancias son globales,** como en Haskell.
+
+Un paso de renombrado resuelve cada nombre a uno interno, calificado por su módulo
+(`Geometry.Shapes.area`). Después de ese paso el compilador trabaja sobre un programa plano, y la
+salida en Go sigue siendo un solo archivo.
+
 ## Cómo queda el Go
 
 `map` se compila a una función genérica de Go. Los tipos de datos son una interfaz de Go con un
@@ -225,8 +247,8 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # sólo compilar
 ```
 
 En `examples/` hay listas perezosas, ADTs con pattern matching y guardas, type classes, mónadas
-(State, Maybe, Either, listas, reader, writer, Traversable), transformadores de mónadas, llamadas
-a Go y loops.
+(State, Maybe, Either, listas, reader, writer, Traversable), transformadores de mónadas, módulos,
+llamadas a Go y loops.
 Cada ejemplo tiene un `.out` con la salida esperada. En `rejected/` hay programas que el type
 checker tiene que rechazar, cada uno con el error que espera.
 
@@ -255,8 +277,10 @@ Haskell 98.
   en un tipo más grande) no se puede especializar, y se rechaza.
 - **`Read` y `Enum`.** `[a..b]` sólo funciona con `Int`.
 - **`String` es el `string` de Go, no `[Char]`.** Se convierte con `pack` y `unpack`.
-- Módulos e imports, records, la semántica de `newtype`, listas por comprensión, sinónimos con
-  `type`, tuplas de más de tres.
+- Records, la semántica de `newtype`, listas por comprensión, sinónimos con `type`, tuplas de más
+  de tres.
+- **Los módulos se compilan junto con el programa,** sin compilación separada ni gestor de
+  paquetes, y un módulo no puede reexportar otro (`module M` en una lista de exportación).
 - **Los loops largos en mónadas puras como `State` consumen pila,** porque su `>>=` es una
   cadena de llamadas de Go. Esos loops se escriben con `tailRecM`. En IO y en transformadores
   sobre IO no consumen pila.
@@ -280,6 +304,7 @@ Haskell 98.
 |---|---|
 | `src/Hago/Lexer.hs` | tokens y regla de layout |
 | `src/Hago/Parser.hs` | Parsec sobre tokens, resolución de fixity |
+| `src/Hago/Rename.hs` | módulos: importaciones, exportaciones y alcances, a un programa plano |
 | `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show)` |
 | `src/Hago/TcMonad.hs` | unificación y el solver de restricciones (instancias, defaulting) |
 | `src/Hago/Typecheck.hs` | inferencia y elaboración, donde se insertan `Lazy` y los diccionarios |

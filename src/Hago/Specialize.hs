@@ -332,4 +332,4 @@ typeTag = \case
       "(,)" -> "Tup2"
       "(,,)" -> "Tup3"
       "->" -> "Fn"
-      c -> c
+      c -> map (\x -> if x == '.' then '_' else x) c
