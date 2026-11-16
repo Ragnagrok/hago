@@ -151,7 +151,11 @@ lexChar ('\\' : e : rest) = case e of
   'n' -> Just ('\n', 2, rest)
   't' -> Just ('\t', 2, rest)
   'r' -> Just ('\r', 2, rest)
-  '0' -> Just ('\0', 2, rest)
+  'a' -> Just ('\a', 2, rest)
+  'b' -> Just ('\b', 2, rest)
+  'f' -> Just ('\f', 2, rest)
+  'v' -> Just ('\v', 2, rest)
+  'x' | (h@(_ : _), r) <- span isHexDigit rest -> Just (chr (read ("0x" ++ h)), length h + 2, r)
   '\\' -> Just ('\\', 2, rest)
   '\'' -> Just ('\'', 2, rest)
   '"' -> Just ('"', 2, rest)
@@ -191,12 +195,14 @@ markers (t : ts) = case tokVal t of
 
 -- | The algorithm L. Each context remembers the bracket depth it was opened
 -- at and the keyword that opened it, so a closing bracket, a comma, an @in@
--- (after let) or a @where@ (after do) can end an implicit block (a cheap stand-in for the report's
+-- (after let), a @where@ (after do, or in the block's column) can end an implicit block (a cheap stand-in for the report's
 -- parse-error(t) rule).
 resolve :: [Token] -> [(Int, Int, String)] -> Int -> [Token]
 resolve [] ctx _ = [Token 0 0 (TSpecial "}") | (m, _, _) <- ctx, m /= 0]
 resolve (t : ts) ctx depth = case (tokVal t, ctx) of
   (TLineN n, (m, _, _) : ms)
+    -- no item of a block starts with where, so a where in its column ends it
+    | m == n, (w : _) <- ts, tokVal w == TKey "where" -> sym "}" : resolve ts ms depth
     | m == n -> sym ";" : resolve ts ctx depth
     | n < m -> sym "}" : resolve (t : ts) ms depth
   (TLineN _, _) -> resolve ts ctx depth

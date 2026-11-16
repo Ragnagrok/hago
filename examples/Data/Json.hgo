@@ -1,0 +1,158 @@
+-- JSON (RFC 8259): a parser with positions in its errors, a compact printer,
+-- and a pretty printer that puts on one line whatever fits in the width.
+module Data.Json (Json (..), decode, encode, pretty) where
+
+import qualified Data.String as S
+import Text.Parser
+import Text.Pretty
+
+foreign import go "strconv.ParseFloat" parseFloat :: String -> Int -> Either String Double
+
+-- Objects keep their keys in the order they were written.
+data Json
+  = JNull
+  | JBool Bool
+  | JNumber Double
+  | JString String
+  | JArray [Json]
+  | JObject [(String, Json)]
+  deriving (Eq, Show)
+
+-- Parsing -----------------------------------------------------------------------
+
+decode :: String -> Either String Json
+decode s = case parse document s of
+  Right j -> Right j
+  Left e -> Left (showError e)
+
+document :: Parser Json
+document = spaces *> value <* eof
+
+-- A value and the white space after it.
+value :: Parser Json
+value = (object <|> array <|> fmap JString stringLiteral <|> number <|> constant) <* spaces
+  <?> "a value"
+
+symbol :: Char -> Parser Char
+symbol c = char c <* spaces
+
+object :: Parser Json
+object = JObject <$> between (symbol '{') (symbol '}') (sepBy member (symbol ','))
+  where
+    member = liftA2 (,) (stringLiteral <* spaces <* symbol ':') value
+
+array :: Parser Json
+array = JArray <$> between (symbol '[') (symbol ']') (sepBy value (symbol ','))
+
+constant :: Parser Json
+constant = (JNull <$ string "null") <|> (JBool True <$ string "true") <|> (JBool False <$ string "false")
+
+-- The grammar is stricter than ParseFloat's, so it is checked here first:
+-- no leading zeros, no "+", digits on both sides of the point.
+number :: Parser Json
+number = do
+  sign <- option "" (string "-")
+  int <- string "0" <|> fmap pack (liftA2 (:) (oneOf "123456789") (many digit))
+  frac <- option "" (fmap (\ds -> "." ++ pack ds) ((char '.' <?> "a fraction") *> some digit))
+  ex <- option "" exponent
+  case parseFloat (sign ++ int ++ frac ++ ex) 64 of
+    Right x -> pure (JNumber x)
+    Left err -> fail err
+  where
+    digit = satisfy isDigit <?> "a digit"
+    exponent = do
+      e <- oneOf "eE" <?> "an exponent"
+      s <- option "" (fmap (\c -> pack [c]) (oneOf "+-"))
+      ds <- some digit
+      pure (pack [e] ++ s ++ pack ds)
+
+instance MonadFail Parser where
+  fail msg = empty <?> msg
+
+stringLiteral :: Parser String
+stringLiteral = fmap pack (char '"' *> many character <* (char '"' <?> "the closing quote"))
+  where
+    character = (char '\\' *> escape) <|> satisfy plain <?> "a character"
+    plain c = c /= '"' && c /= '\\' && ord c >= 32
+    escape = simple <|> (char 'u' *> unicode) <?> "an escape"
+    simple = do
+      c <- oneOf "\"\\/bfnrt"
+      pure (case c of
+        'b' -> '\b'
+        'f' -> '\f'
+        'n' -> '\n'
+        'r' -> '\r'
+        't' -> '\t'
+        _ -> c)
+    -- characters outside the first plane come as two escapes, a surrogate pair
+    unicode = do
+      hi <- hex4
+      if hi >= 55296 && hi < 56320
+        then do
+          lo <- string "\\u" *> hex4
+          if lo >= 56320 && lo < 57344
+            then pure (chr (65536 + (hi - 55296) * 1024 + (lo - 56320)))
+            else fail "the second half of a surrogate pair"
+        else pure (chr hi)
+    hex4 = fmap (foldl (\n d -> n * 16 + d) 0) (count 4 hexDigit)
+    hexDigit = fmap hexValue (satisfy isHexDigit) <?> "a hex digit"
+    isHexDigit c = isDigit c || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+    hexValue c
+      | isDigit c = ord c - ord '0'
+      | c >= 'a' = ord c - ord 'a' + 10
+      | otherwise = ord c - ord 'A' + 10
+
+-- Printing ----------------------------------------------------------------------
+
+-- On one line, with no spaces.
+encode :: Json -> String
+encode j = render 0 (flat j)
+  where
+    flat x = case x of
+      JArray xs -> text "[" <> commas (map flat xs) <> text "]"
+      JObject ms -> text "{" <> commas [text (quote k) <> text ":" <> flat v | (k, v) <- ms] <> text "}"
+      _ -> text (scalar x)
+    commas ds = mconcat (punctuate (text ",") ds)
+
+-- Indented by two, with every array and object that fits on one line in
+-- width columns printed on one line.
+pretty :: Int -> Json -> String
+pretty width j = render width (doc j)
+
+doc :: Json -> Doc
+doc x = case x of
+  JArray [] -> text "[]"
+  JArray xs -> block "[" "]" (map doc xs)
+  JObject [] -> text "{}"
+  JObject ms -> block "{" "}" [text (quote k ++ ": ") <> doc v | (k, v) <- ms]
+  _ -> text (scalar x)
+  where
+    block open close ds =
+      group (text open <> nest 2 (linebreak <> mconcat (punctuate (text "," <> line) ds)) <> linebreak <> text close)
+
+scalar :: Json -> String
+scalar x = case x of
+  JNull -> "null"
+  JBool True -> "true"
+  JBool False -> "false"
+  JNumber n -> number' n
+  JString s -> quote s
+  _ -> ""
+  where
+    -- whole numbers without a fraction, as they are usually written
+    number' n
+      | n == fromIntegral (truncate n) && abs n < 1.0e15 = show (truncate n)
+      | otherwise = show n
+
+quote :: String -> String
+quote s = S.concat ("\"" : map escape (unpack s) ++ ["\""])
+  where
+    escape c = case c of
+      '"' -> "\\\""
+      '\\' -> "\\\\"
+      '\n' -> "\\n"
+      '\r' -> "\\r"
+      '\t' -> "\\t"
+      _ | ord c < 32 -> pack ['\\', 'u', '0', '0', hexDigit (ord c `div` 16), hexDigit (ord c `mod` 16)]
+        | otherwise -> pack [c]
+    hexDigit n = if n < 10 then chr (ord '0' + n) else chr (ord 'a' + n - 10)

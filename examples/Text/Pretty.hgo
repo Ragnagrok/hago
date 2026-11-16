@@ -1,0 +1,84 @@
+-- Wadler's pretty printer, in the form Lindig gave it for strict languages
+-- ("Strictly Pretty", 2000): a group is printed flat when it fits in what is
+-- left of the line, and the choice is made by measuring instead of by building
+-- both layouts lazily.
+module Text.Pretty
+  ( Doc, text, line, linebreak, nest, group, hsep, punctuate, layout, render
+  ) where
+
+import qualified Data.String as S
+
+
+-- Line s is a line break, or s where its group is printed flat.
+data Doc = Nil | Text String | Line String | Cat Doc Doc | Nest Int Doc | Group Doc
+
+instance Semigroup Doc where
+  a <> b = Cat a b
+
+instance Monoid Doc where
+  mempty = Nil
+
+text :: String -> Doc
+text s = Text s
+
+-- A line break, or a space.
+line :: Doc
+line = Line " "
+
+-- A line break, or nothing.
+linebreak :: Doc
+linebreak = Line ""
+
+nest :: Int -> Doc -> Doc
+nest i d = Nest i d
+
+group :: Doc -> Doc
+group d = Group d
+
+hsep :: [Doc] -> Doc
+hsep [] = Nil
+hsep [d] = d
+hsep (d : ds) = d <> text " " <> hsep ds
+
+punctuate :: Doc -> [Doc] -> [Doc]
+punctuate _ [] = []
+punctuate _ [d] = [d]
+punctuate p (d : ds) = (d <> p) : punctuate p ds
+
+data Mode = Flat | Break
+
+-- Whether the rest of the line holds everything up to the next break.
+fits :: Int -> [(Int, Mode, Doc)] -> Bool
+fits w _ | w < 0 = False
+fits _ [] = True
+fits w ((i, m, d) : z) = case d of
+  Nil -> fits w z
+  Text s -> fits (w - S.length s) z
+  Line s -> case m of
+    Flat -> fits (w - S.length s) z
+    Break -> True
+  Cat a b -> fits w ((i, m, a) : (i, m, b) : z)
+  Nest j x -> fits w ((i + j, m, x) : z)
+  Group x -> fits w ((i, Flat, x) : z)
+
+-- The pieces of the text, in order; the list is built as it is consumed.
+layout :: Int -> Doc -> [String]
+layout w d = go 0 [(0, Break, d)]
+  where
+    go _ [] = []
+    go k ((i, m, x) : z) = case x of
+      Nil -> go k z
+      Text s -> s : go (k + S.length s) z
+      Line s -> case m of
+        Flat -> s : go (k + S.length s) z
+        Break -> ("\n" ++ S.replicate i " ") : go i z
+      Cat a b -> go k ((i, m, a) : (i, m, b) : z)
+      Nest j y -> go k ((i + j, m, y) : z)
+      Group y -> case m of
+        Flat -> go k ((i, Flat, y) : z)
+        Break ->
+          let flat = (i, Flat, y)
+           in if fits (w - k) (flat : z) then go k (flat : z) else go k ((i, Break, y) : z)
+
+render :: Int -> Doc -> String
+render w d = S.concat (layout w d)

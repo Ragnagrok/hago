@@ -1,0 +1,47 @@
+-- Functions on String, which is Go's string: taking the first character off
+-- slices it without copying, so a String can be read from the front as a
+-- list would, without making one. Most names are also the Prelude's names
+-- for lists, so this module is meant to be imported qualified.
+module Data.String
+  ( uncons, null, length, elem, isPrefixOf, stripPrefix, concat, intercalate, replicate
+  ) where
+
+foreign import go "rt_firstRune" firstRune :: String -> Char
+foreign import go "rt_dropRune" dropRune :: String -> String
+foreign import go "strings.TrimPrefix" trimPrefix :: String -> String -> String
+foreign import go "strings.Repeat" repeatString :: String -> Int -> String
+
+-- The number of characters, not of bytes.
+foreign import go "unicode/utf8.RuneCountInString" length :: String -> Int
+
+foreign import go "strings.HasPrefix" hasPrefix :: String -> String -> Bool
+foreign import go "strings.ContainsRune" containsRune :: String -> Char -> Bool
+
+-- Joins the strings in one pass.
+foreign import go "rt_concatStrings" concat :: [String] -> String
+
+-- The first character and the rest, in constant time.
+uncons :: String -> Maybe (Char, String)
+uncons s = if s == "" then Nothing else Just (firstRune s, dropRune s)
+
+null :: String -> Bool
+null s = s == ""
+
+elem :: Char -> String -> Bool
+elem c s = containsRune s c
+
+isPrefixOf :: String -> String -> Bool
+isPrefixOf p s = hasPrefix s p
+
+stripPrefix :: String -> String -> Maybe String
+stripPrefix p s = if hasPrefix s p then Just (trimPrefix s p) else Nothing
+
+intercalate :: String -> [String] -> String
+intercalate sep xs = concat (go xs)
+  where
+    go [] = []
+    go [x] = [x]
+    go (x : rest) = x : sep : go rest
+
+replicate :: Int -> String -> String
+replicate n s = repeatString s n

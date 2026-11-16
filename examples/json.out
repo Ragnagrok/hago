@@ -1,0 +1,55 @@
+{
+  "name": "hago",
+  "version": [0, 1, 0],
+  "strict": true,
+  "targets": [
+    {"os": "linux", "arch": "amd64"},
+    {"os": "darwin", "arch": "arm64"}
+  ],
+  "description": "Haskell's syntax,\nGo's runtime",
+  "license": null,
+  "limits": {
+    "tuple": 15,
+    "ratio": 0.75,
+    "big": 6.02e+23,
+    "empty": [],
+    "none": {}
+  },
+  "escapes": "tab\there é 😀"
+}
+{
+  "name": "hago",
+  "version": [0, 1, 0],
+  "strict": true,
+  "targets": [
+    {
+      "os": "linux",
+      "arch": "amd64"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64"
+    }
+  ],
+  "description": "Haskell's syntax,\nGo's runtime",
+  "license": null,
+  "limits": {
+    "tuple": 15,
+    "ratio": 0.75,
+    "big": 6.02e+23,
+    "empty": [],
+    "none": {}
+  },
+  "escapes": "tab\there é 😀"
+}
+{"name":"hago","version":[0,1,0],"strict":true,"targets":[{"os":"linux","arch":"amd64"},{"os":"darwin","arch":"arm64"}],"description":"Haskell's syntax,\nGo's runtime","license":null,"limits":{"tuple":15,"ratio":0.75,"big":6.02e+23,"empty":[],"none":{}},"escapes":"tab\there é 😀"}
+(True,True)
+"[1, 2,]" -> line 1, column 7: unexpected ']', expected a value
+"{\"a\": 1 \"b\": 2}" -> line 1, column 9: unexpected '"', expected ',' or '}'
+"[01]" -> line 1, column 3: unexpected '1', expected a fraction, an exponent, ',' or ']'
+"\"unterminated" -> line 1, column 14: unexpected end of input, expected a character or the closing quote
+"{\"a\": tru}" -> line 1, column 7: unexpected 't', expected a value
+"[1, 2] 3" -> line 1, column 8: unexpected '3', expected end of input
+"\"\\x\"" -> line 1, column 3: unexpected 'x', expected an escape
+"\"\\ud83d\\u0041\"" -> line 1, column 14: unexpected '"', expected the second half of a surrogate pair
+"" -> line 1, column 1: unexpected end of input, expected a value

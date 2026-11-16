@@ -35,7 +35,9 @@ libraryModules = M.fromList
   , ("Control.Monad.Trans", $(embedFile "lib/Control/Monad/Trans.hgo"))
   , ("Control.Monad.State", $(embedFile "lib/Control/Monad/State.hgo"))
   , ("Control.Monad.Except", $(embedFile "lib/Control/Monad/Except.hgo"))
-  , ("Control.Monad.Reader", $(embedFile "lib/Control/Monad/Reader.hgo")) ]
+  , ("Control.Monad.Reader", $(embedFile "lib/Control/Monad/Reader.hgo"))
+  , ("System.Environment", $(embedFile "lib/System/Environment.hgo"))
+  , ("Data.String", $(embedFile "lib/Data/String.hgo")) ]
 
 runtimeSource :: String
 runtimeSource = unlines (drop 1 (dropWhile (not . ("// --- runtime ---" `isPrefixOf`)) (lines raw)))

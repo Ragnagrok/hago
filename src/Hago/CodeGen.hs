@@ -11,7 +11,7 @@ import Control.Monad
 import Control.Monad.State
 import Data.Char
 import Data.Data (Data, gmapQ)
-import Data.Graph (flattenSCCs, stronglyConnComp)
+import Data.Graph (SCC (..), flattenSCCs, stronglyConnComp)
 import Data.List (intercalate, isPrefixOf, nub, sort)
 import qualified Data.IntMap as IM
 import qualified Data.Map as M
@@ -82,15 +82,29 @@ generate runtime prog = unlines (header ++ [runtime] ++ tupleDecls ++ dataDecls 
     dataDecls = concatMap (genData prog)
       [(n, d) | (n, d) <- M.toList (progData prog), n `notElem` ["[]", "Bool"], null (hkPositions prog n)]
     hkDecls = concatMap (genHkData prog) (hkInstances prog)
-    (tops, inits) = flip evalState (GS 0 False) (unzip <$> mapM (genTop ctx0) initOrder)
+    (tops, inits) = flip evalState (GS 0 False) (unzip <$> mapM (\b -> genTop ctx0 (S.member (tbName b) deferred) b) initOrder)
     initBlock = ["func init() {"] ++ concat inits ++ ["}"]
     -- values are initialised in order, so each comes after everything its
     -- computation reaches, functions included; copies made by specialisation
     -- would otherwise come after their users
-    initOrder =
+    sccs =
       let names = S.fromList (map tbName (progBinds prog))
-       in flattenSCCs (stronglyConnComp
-            [(b, tbName b, filter (`S.member` names) (coreRefs (tbBody b))) | b <- progBinds prog])
+       in stronglyConnComp
+            [(b, tbName b, filter (`S.member` names) (coreRefs (tbBody b))) | b <- progBinds prog]
+    initOrder = flattenSCCs sccs
+    -- Values defined in terms of each other (parsers built with combinators)
+    -- cannot be computed one after the other in a strict language. Those
+    -- that are functions, IO actions among them, start as a function that
+    -- computes the value the first time it is called and then calls it, so
+    -- every value in the group exists before any is computed.
+    deferred = S.fromList
+      [ tbName b
+      | CyclicSCC bs <- sccs, b <- bs, tbArity b == 0, tbShared b
+      , isFunctionType (zonk (progSubst prog) (tbType b)) ]
+    isFunctionType = \case
+      TFun _ _ -> True
+      TCon "IO" [_] -> True
+      _ -> False
     -- drop the global reference first, so actions already run can be collected
     mainFn = ["func main() {", "m := " ++ mangle "main", mangle "main" ++ " = nil", "rt_run(m)", "}"]
 
@@ -290,12 +304,23 @@ genData prog (n, DataInfo ps _ ks _)
 -- Top-level bindings ----------------------------------------------------------------
 
 -- | A top-level binding: its declaration, and its initialisation if it is a CAF.
-genTop :: Ctx -> TopBind -> Gen (String, [String])
-genTop ctx0 (TopBind n tps dicts t ar body shared) = do
+genTop :: Ctx -> Bool -> TopBind -> Gen (String, [String])
+genTop ctx0 deferred (TopBind n tps dicts t ar body shared) = do
   -- specialisation leaves no dictionary
   unless (null dicts) (error ("codegen: dictionaries left in " ++ n))
   let ctx = ctx0 {cxTParams = tps}
   case (ar, body) of
+    (0, _) | shared, deferred -> do
+      e <- genExpr ctx body
+      let ty = goTy ctx t
+          cell = mangle n ++ "__cell"
+          wrapper = case zonk (progSubst (cxProg ctx)) t of
+            TFun a r -> "func(hg_arg " ++ goTy ctx a ++ ") " ++ goTy ctx r ++ " { return " ++ cell ++ "()(hg_arg) }"
+            TCon "IO" [r] -> "func() IOStep[" ++ goTy ctx r ++ "] { return " ++ cell ++ "()() }"
+            _ -> error ("genTop: deferred value of type " ++ ty)
+      pure
+        ( "var " ++ mangle n ++ " " ++ ty ++ "\nvar " ++ cell ++ " func() " ++ ty
+        , [cell ++ " = rt_lazy(func() " ++ ty ++ " { return " ++ e ++ " })", mangle n ++ " = " ++ wrapper] )
     (0, _) | shared -> do
       e <- genExpr ctx body
       pure ("var " ++ mangle n ++ " " ++ goTy ctx t, [mangle n ++ " = " ++ e])
@@ -473,19 +498,6 @@ genBinds ctx binds = do
       e <- genExpr (noSelf ctx') body
       pure (mangle n ++ " = " ++ e)
   pure (ctx', map decl binds ++ assigns ++ ["_ = " ++ mangle n | n <- names])
-
-coreRefs :: CExpr -> [Name]
-coreRefs = \case
-  CVar x _ _ -> [x]
-  CApp f as -> coreRefs f ++ concatMap coreRefs as
-  CLam _ _ b -> coreRefs b
-  CLet bs b _ -> concat [coreRefs x | CBind _ _ _ x <- bs] ++ coreRefs b
-  CMatch ss rows _ -> concatMap coreRefs ss ++ concat [concat [coreRefs x | CBind _ _ _ x <- bs] ++ concat [maybe [] coreRefs g ++ coreRefs e | (g, e) <- gs] | CRow _ bs gs <- rows]
-  CIf a b c _ -> concatMap coreRefs [a, b, c]
-  CDelay _ e -> coreRefs e
-  CForce e -> coreRefs e
-  CDo _ _ _ ss -> concat [case s of CSBind _ _ e -> coreRefs e; CSExpr _ e -> coreRefs e; CSLet bs -> concat [coreRefs x | CBind _ _ _ x <- bs] | s <- ss]
-  _ -> []
 
 -- Expressions -------------------------------------------------------------------------
 

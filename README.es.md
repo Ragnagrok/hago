@@ -39,8 +39,14 @@ se evalúa cuando se liga, como en Go. La pereza existe sólo donde un tipo la p
   donde se espera una función común (`liftA2 (:)`, `map (False &&)`) recibe ahí argumentos
   comunes. `f $ x` es `f x`, así que `x` sigue siendo perezoso si `f` lo pide.
 
-Las suspensiones son thunks memoizados (`sync.OnceValue`): se evalúan como mucho una vez y se
-pueden compartir entre goroutines.
+Las suspensiones son thunks memoizados: se evalúan como mucho una vez. Un programa corre en una
+sola goroutine, así que no toman ningún lock, y cuestan dos allocations en vez de las siete de
+`sync.OnceValue`.
+
+Los valores de nivel superior se calculan al arrancar el programa, en orden. Los que se necesitan
+entre sí para calcularse (`x = y + 1`, `y = x + 1`) no se pueden calcular, y se rechazan. Los que
+son funciones sí pueden referirse entre sí, como hacen los parsers armados con combinadores: cada
+uno empieza siendo una función que calcula el valor la primera vez que se la llama.
 
 ## Type classes
 
@@ -213,6 +219,11 @@ del programa con el mismo nombre tiene prioridad):
 | `Control.Monad.Except` | `ExceptT`, `Except`, `MonadError` (`throwError`, `catchError`), `liftEither` |
 | `Control.Monad.Trans` | `MonadTrans` (`lift`), `MonadIO` (`liftIO`) |
 | `Data.Functor.Identity` | `Identity`, con trampolín |
+| `Data.String` | `uncons` en tiempo constante (un string de Go se recorta, no se copia), `length`, `elem`, `isPrefixOf`, `stripPrefix`, `concat` en una pasada, `intercalate`, `replicate`; se importa calificado |
+| `System.Environment` | `getArgs` |
+
+El Prelude lee y escribe archivos y la entrada estándar: `getContents`, y `readFile` y
+`writeFile`, que devuelven un `Either String` porque pueden fallar.
 
 Cada clase pasa a través de los otros transformadores, como en mtl, así que una función puede
 pedir `(MonadReader Config m, MonadState Int m, MonadError String m)` y correr sobre cualquier
@@ -381,6 +392,7 @@ Son números de una sola máquina, como referencia y no como benchmark.
 | `mapM_` sobre un millón de elementos en `StateT Int IO` | 0,25 s | ~8 MB |
 | cincuenta millones de sumas de un `newtype Meters = Meters Double` | 0,02 s | ~4 MB |
 | lo mismo con `data Meters = Meters Double` | 0,36 s | ~10 MB |
+| parsear e imprimir con formato 3,7 MB de JSON con `examples/Data/Json.hgo` (`jq .`: 0,13 s) | 3,5 s | ~140 MB |
 
 - **El código estricto en tipos concretos** se compila al Go que escribirías a mano, y rinde
   igual.
@@ -389,6 +401,10 @@ Son números de una sola máquina, como referencia y no como benchmark.
   cada tipo con que se usa.
 - **La cadena de listas perezosas** corre en memoria constante, pero cada celda reserva un
   thunk, así que es mucho más lenta que un loop de Go.
+- **Los combinadores de parsers** son lentos: cada paso devuelve un valor chico de un tipo suma
+  (`Ok` o `Failed`), y un tipo suma es una interfaz de Go, así que cada uno reserva memoria.
+  Parsear la entrada como `[Char]` (con `unpack`) era cuatro veces más lento todavía;
+  `Data.String.uncons` lee un `String` sin armar una lista.
 
 ## Uso
 
@@ -403,7 +419,10 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # sólo compilar
 
 En `examples/` hay listas perezosas, ADTs con pattern matching y guardas, type classes, mónadas
 (State, Maybe, Either, listas, reader, writer, Traversable), transformadores de mónadas, módulos,
-records, newtypes, tuplas, rangos, listas por comprensión, llamadas a Go y loops.
+records, newtypes, tuplas, rangos, listas por comprensión, llamadas a Go, archivos y loops.
+`examples/json.hgo` es un programa más grande: un parser de JSON con errores que dicen dónde y qué
+se esperaba (`examples/Text/Parser.hgo`, combinadores al estilo de Parsec) y un pretty-printer
+(`examples/Text/Pretty.hgo`, el de Wadler, en la forma estricta de Lindig).
 Cada ejemplo tiene un `.out` con la salida esperada. En `rejected/` hay programas que el type
 checker tiene que rechazar, cada uno con el error que espera.
 

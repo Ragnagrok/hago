@@ -1113,3 +1113,10 @@ unlines (l:ls) = l ++ "\n" ++ unlines ls
 
 print :: Show a => a -> IO ()
 print x = putStrLn (show x)
+
+-- All of standard input.
+foreign import go "rt_getContents" getContents :: IO String
+
+-- Reading or writing a file can fail, so the error comes back as a value.
+foreign import go "rt_readFile" readFile :: String -> IO (Either String String)
+foreign import go "rt_writeFile" writeFile :: String -> String -> IO (Either String ())

@@ -1,0 +1,33 @@
+-- A JSON parser and pretty printer, written on parser combinators
+-- (Text.Parser) and Wadler's pretty printer (Text.Pretty).
+import Data.Json
+
+config :: String
+config = unlines
+  [ "{\"name\": \"hago\", \"version\": [0, 1, 0], \"strict\": true,"
+  , " \"targets\": [{\"os\": \"linux\", \"arch\": \"amd64\"}, {\"os\": \"darwin\", \"arch\": \"arm64\"}],"
+  , " \"description\": \"Haskell's syntax,\\nGo's runtime\", \"license\": null,"
+  , " \"limits\": {\"tuple\": 15, \"ratio\": 0.75, \"big\": 6.02e23, \"empty\": [], \"none\": {}},"
+  , " \"escapes\": \"tab\\there \\u00e9 \\ud83d\\ude00\"}" ]
+
+broken :: [String]
+broken =
+  [ "[1, 2,]"
+  , "{\"a\": 1 \"b\": 2}"
+  , "[01]"
+  , "\"unterminated"
+  , "{\"a\": tru}"
+  , "[1, 2] 3"
+  , "\"\\x\""
+  , "\"\\ud83d\\u0041\""
+  , "" ]
+
+main :: IO ()
+main = case decode config of
+  Left err -> putStrLn err
+  Right j -> do
+    putStrLn (pretty 80 j)
+    putStrLn (pretty 30 j)
+    putStrLn (encode j)
+    print (decode (encode j) == Right j, decode (pretty 30 j) == Right j)
+    mapM_ (\s -> putStrLn (show s ++ " -> " ++ either id encode (decode s))) broken

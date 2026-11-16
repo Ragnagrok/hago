@@ -1,0 +1,11 @@
+-- expects: x and y are defined in terms of each other
+-- In a strict language a value is computed before the program starts, and
+-- these two would each need the other first.
+x :: Int
+x = y + 1
+
+y :: Int
+y = x + 1
+
+main :: IO ()
+main = print x

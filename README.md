@@ -39,8 +39,13 @@ is bound, like in Go. Laziness only exists where a type asks for it.
   parameters passed where a plain function is expected (`liftA2 (:)`, `map (False &&)`) takes
   plain arguments there. `f $ x` is `f x`, so `x` stays lazy when `f` asks for it.
 
-Suspensions are memoised thunks (`sync.OnceValue`), so they are evaluated at most once and are
-safe to share between goroutines.
+Suspensions are memoised thunks, evaluated at most once. A program runs on one goroutine, so
+they take no lock, which makes them cost two allocations instead of `sync.OnceValue`'s seven.
+
+Top-level values are computed when the program starts, in order. Values whose computations need
+each other (`x = y + 1`, `y = x + 1`) cannot be, and are rejected. Values that are functions can
+refer to each other, as parsers built from combinators do: each starts as a function that
+computes the value on its first call.
 
 ## Type classes
 
@@ -202,6 +207,11 @@ program with the same name comes first):
 | `Control.Monad.Except` | `ExceptT`, `Except`, `MonadError` (`throwError`, `catchError`), `liftEither` |
 | `Control.Monad.Trans` | `MonadTrans` (`lift`), `MonadIO` (`liftIO`) |
 | `Data.Functor.Identity` | `Identity`, trampolined |
+| `Data.String` | `uncons` in constant time (a Go string is sliced, not copied), `length`, `elem`, `isPrefixOf`, `stripPrefix`, `concat` in one pass, `intercalate`, `replicate`; import it qualified |
+| `System.Environment` | `getArgs` |
+
+The Prelude reads and writes files and standard input: `getContents`, and `readFile` and
+`writeFile`, which return an `Either String` since they can fail.
 
 Each class passes through the other transformers, as in mtl, so a function can ask for
 `(MonadReader Config m, MonadState Int m, MonadError String m)` and run on any stack that has
@@ -366,12 +376,17 @@ These numbers come from one machine, as a reference and not as a benchmark.
 | `mapM_` over a million elements in `StateT Int IO` | 0.25 s | ~8 MB |
 | fifty million additions of a `newtype Meters = Meters Double` | 0.02 s | ~4 MB |
 | the same with `data Meters = Meters Double` | 0.36 s | ~10 MB |
+| parse and pretty print 3.7 MB of JSON with `examples/Data/Json.hgo` (`jq .`: 0.13 s) | 3.5 s | ~140 MB |
 
 - **Strict code at concrete types** compiles to the Go you would write by hand, and runs like it.
 - **Constrained and constructor-polymorphic code** (`Num a =>`, `Monad m =>`) costs nothing
   extra, because it is specialised. The price is code size: one copy per type it is used at.
 - **The lazy list pipeline** streams in constant memory, but every cell allocates a thunk, so it
   is much slower than a Go loop.
+- **Parser combinators** are slow: every step returns a small value of a sum type (`Ok` or
+  `Failed`), and a sum type is a Go interface, so each one is allocated. Parsing the input as a
+  `[Char]` (with `unpack`) was four times slower again; `Data.String.uncons` reads a `String`
+  without a list.
 
 ## Using it
 
@@ -386,7 +401,10 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # just compile
 
 The `examples/` folder has lazy lists, ADTs with pattern matching and guards, type classes,
 monads (State, Maybe, Either, lists, reader, writer, Traversable), monad transformers, modules,
-records, newtypes, tuples, ranges, list comprehensions, calls to Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
+records, newtypes, tuples, ranges, list comprehensions, calls to Go, files, and loops.
+`examples/json.hgo` is a bigger program: a JSON parser with errors that say where and what was
+expected (`examples/Text/Parser.hgo`, Parsec-style combinators) and a pretty printer
+(`examples/Text/Pretty.hgo`, Wadler's, in Lindig's strict form). Each example has an `.out` file with its expected output. The `rejected/` folder has
 programs the type checker must refuse, each with the error it expects.
 
 An error says where it is, quotes the line and marks the place:

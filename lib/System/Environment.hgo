@@ -1,0 +1,5 @@
+-- The command line.
+module System.Environment (getArgs) where
+
+-- The arguments, without the program's name.
+foreign import go "rt_getArgs" getArgs :: IO [String]

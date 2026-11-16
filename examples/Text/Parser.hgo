@@ -1,0 +1,181 @@
+-- Parser combinators in the style of Parsec: a parser that fails after
+-- consuming input does not let <|> try the next one, so a choice looks at one
+-- character and errors point at the place where the input went wrong. An
+-- error lists everything that would have been accepted there.
+--
+-- The input is a String, read from the front with Data.String.uncons, which
+-- takes no copy: unpacking it into a [Char] first made parsing four times
+-- slower.
+module Text.Parser
+  ( Parser, Pos (..), ParseError (..), parse, showError
+  , satisfy, char, string, eof, oneOf, noneOf, label, (<?>)
+  , many, some, skipMany, sepBy, sepBy1, between, option, spaces, count
+  ) where
+
+import qualified Data.String as S
+
+infix 0 <?>
+
+data Pos = Pos { line :: Int, column :: Int } deriving (Eq, Ord, Show)
+
+-- The input left where the error is: only its first character is shown, but
+-- keeping it costs nothing, as it shares the text being parsed.
+data ParseError = ParseError { at :: Pos, expected :: [String], left :: String }
+
+data Input = Input { rest :: String, pos :: Pos }
+
+-- Whether the parser consumed input, and the error a longer parse would have
+-- had to avoid, so that choices made later can add to what was expected.
+data Reply a = Ok a Bool Input ParseError | Failed Bool ParseError
+
+newtype Parser a = Parser (Input -> Reply a)
+
+runP :: Parser a -> Input -> Reply a
+runP (Parser f) inp = f inp
+
+parse :: Parser a -> String -> Either ParseError a
+parse p s = case runP p (Input s (Pos 1 1)) of
+  Ok x _ _ _ -> Right x
+  Failed _ e -> Left e
+
+showError :: ParseError -> String
+showError e =
+  "line " ++ show e.at.line ++ ", column " ++ show e.at.column ++ ": unexpected "
+    ++ maybe "end of input" (\(c, _) -> show c) (S.uncons e.left)
+    ++ expecting (nubStrings e.expected)
+  where
+    expecting [] = ""
+    expecting [x] = ", expected " ++ x
+    expecting xs = ", expected " ++ commaList xs
+    commaList [x, y] = x ++ " or " ++ y
+    commaList (x : xs) = x ++ ", " ++ commaList xs
+    commaList [] = ""
+
+nubStrings :: [String] -> [String]
+nubStrings [] = []
+nubStrings (x : xs) = x : nubStrings (filter (/= x) xs)
+
+-- Of two errors, the one further on; at the same place, both expectations.
+merge :: ParseError -> ParseError -> ParseError
+merge a b = case compare a.at b.at of
+  LT -> b
+  GT -> a
+  EQ -> a { expected = a.expected ++ b.expected }
+
+noError :: Input -> ParseError
+noError inp = ParseError inp.pos [] inp.rest
+
+instance Functor Parser where
+  fmap f p = Parser (\inp -> case runP p inp of
+    Ok x c inp' e -> Ok (f x) c inp' e
+    Failed c e -> Failed c e)
+
+instance Applicative Parser where
+  pure x = Parser (\inp -> Ok x False inp (noError inp))
+  pf <*> px = pf >>= \f -> fmap f px
+  pa *> pb = pa >>= \_ -> pb
+
+instance Monad Parser where
+  p >>= k = Parser (\inp -> case runP p inp of
+    Failed c e -> Failed c e
+    Ok x c1 inp' e1 -> case runP (k x) inp' of
+      Ok y c2 inp'' e2 -> Ok y (c1 || c2) inp'' (if c2 then e2 else merge e1 e2)
+      Failed c2 e2 -> Failed (c1 || c2) (if c2 then e2 else merge e1 e2))
+
+instance Alternative Parser where
+  empty = Parser (\inp -> Failed False (noError inp))
+  p <|> q = Parser (\inp -> case runP p inp of
+    Failed False e1 -> case runP q inp of
+      Ok y False inp' e2 -> Ok y False inp' (merge e1 e2)
+      Failed False e2 -> Failed False (merge e1 e2)
+      other -> other
+    other -> other)
+
+advance :: Pos -> Char -> Pos
+advance p '\n' = Pos (p.line + 1) 1
+advance p _ = p { column = p.column + 1 }
+
+satisfy :: (Char -> Bool) -> Parser Char
+satisfy f = Parser (\inp -> case S.uncons inp.rest of
+  Just (c, cs) | f c ->
+    let inp' = Input cs (advance inp.pos c)
+     in Ok c True inp' (noError inp')
+  _ -> Failed False (noError inp))
+
+-- When p fails without consuming, it expected the thing called name.
+label :: String -> Parser a -> Parser a
+label name p = Parser (\inp -> case runP p inp of
+  Failed False e -> Failed False e { expected = [name] }
+  Ok x False inp' e -> Ok x False inp' e { expected = [name] }
+  other -> other)
+
+(<?>) :: Parser a -> String -> Parser a
+p <?> name = label name p
+
+char :: Char -> Parser Char
+char c = satisfy (== c) <?> show c
+
+-- The whole string or nothing: a failure consumes no input.
+string :: String -> Parser String
+string s = Parser (\inp -> case S.stripPrefix s inp.rest of
+  Just rest' ->
+    let inp' = Input rest' (foldl advance inp.pos (unpack s))
+     in Ok s True inp' (noError inp')
+  Nothing -> Failed False (expecting (show s) inp))
+
+expecting :: String -> Input -> ParseError
+expecting name inp = ParseError inp.pos [name] inp.rest
+
+eof :: Parser ()
+eof = Parser (\inp -> if S.null inp.rest
+  then Ok () False inp (noError inp)
+  else Failed False (expecting "end of input" inp))
+
+oneOf :: String -> Parser Char
+oneOf cs = satisfy (\c -> S.elem c cs)
+
+noneOf :: String -> Parser Char
+noneOf cs = satisfy (\c -> not (S.elem c cs))
+
+-- Zero or more, as a loop. p must consume when it succeeds, or many would
+-- never stop.
+many :: Parser a -> Parser [a]
+many p = Parser (\inp -> go [] False inp)
+  where
+    go acc c inp = case runP p inp of
+      Ok x True inp' _ -> go (x : acc) True inp'
+      Ok _ False _ _ -> error "many: the parser succeeded without consuming input"
+      Failed True e -> Failed True e
+      Failed False e -> Ok (reverse acc) c inp e
+
+some :: Parser a -> Parser [a]
+some p = liftA2 (:) p (many p)
+
+-- many, without keeping what p returns.
+skipMany :: Parser a -> Parser ()
+skipMany p = Parser (\inp -> go False inp)
+  where
+    go c inp = case runP p inp of
+      Ok _ True inp' _ -> go True inp'
+      Ok _ False _ _ -> error "skipMany: the parser succeeded without consuming input"
+      Failed True e -> Failed True e
+      Failed False e -> Ok () c inp e
+
+sepBy :: Parser a -> Parser s -> Parser [a]
+sepBy p sep = sepBy1 p sep <|> pure []
+
+sepBy1 :: Parser a -> Parser s -> Parser [a]
+sepBy1 p sep = liftA2 (:) p (many (sep *> p))
+
+between :: Parser o -> Parser c -> Parser a -> Parser a
+between open close p = open *> p <* close
+
+option :: a -> Parser a -> Parser a
+option x p = p <|> pure x
+
+count :: Int -> Parser a -> Parser [a]
+count n p = sequenceA (replicate n p)
+
+-- White space is never what an error says was expected.
+spaces :: Parser ()
+spaces = skipMany (satisfy isSpace)

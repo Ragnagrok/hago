@@ -8,11 +8,12 @@
 module Hago.Typecheck (Checked (..), typecheckModule, programOf, primSchemes, pretty) where
 
 import Data.Bifunctor (first)
-import Data.Data (Data)
+import Data.Data (Data, cast, gmapQ)
+import Data.Maybe (catMaybes, listToMaybe)
 
 import Control.Monad
 import Control.Monad.State
-import Data.Graph (flattenSCC, flattenSCCs, stronglyConnComp)
+import Data.Graph (SCC (..), flattenSCC, flattenSCCs, stronglyConnComp)
 import qualified Data.IntMap as IM
 import Data.List (intercalate, nub, sortOn, (\\))
 import qualified Data.List as L
@@ -1014,6 +1015,40 @@ tcModule modName' before ds = do
         [(n, n, filter (`M.member` byName) (clausesRefs cs)) | (n, cs) <- binds])
       defaults = [tbName b | b <- defaultBinds]
   st <- get
+  -- Values are computed in order when the program starts, so values whose
+  -- computations need each other cannot be. A function-typed value is
+  -- exempt: it starts as a function that computes it on its first call.
+  let sub = stSub st
+      allData = M.unions [dataInfos, ckData before, builtinData]
+      funLike :: Int -> Type -> Bool
+      funLike depth t = depth < 20 && case zonk sub t of
+        TFun _ _ -> True
+        TCon "IO" _ -> True
+        TCon c ts
+          | Just di <- M.lookup c allData, diNewtype di, [k] <- diCons di
+          , Just ci <- M.lookup k cons, [(_, ft)] <- ciFields ci ->
+              funLike (depth + 1) (substT (M.fromList (zip (ciParams ci) ts)) ft)
+        _ -> False
+      isValue b = tbArity b == 0 && null (tbDicts b)
+      edges b
+        | isValue b && funLike 0 (tbType b) = []
+        | isValue b = strictRefs (tbBody b)
+        | otherwise = coreRefs (tbBody b)
+      cycles = [ns | CyclicSCC ns <- stronglyConnComp
+                 [(n, n, filter (`M.member` byName) (edges b)) | (n, b) <- M.toList byName]]
+      sourceOrder = map fst binds
+  forM_ cycles $ \ns -> do
+    let vals = [n | n <- sourceOrder, n `elem` ns, isValue (byName M.! n)]
+        bindLoc n = listToMaybe [l | (m, cs) <- binds, m == n, Just l <- [firstLoc cs]]
+    case vals of
+      v : _ -> atLoc (bindLoc v) $ throw $
+        (case vals of
+          [_] -> unqual v ++ " is defined in terms of itself, so computing it never ends"
+          _ -> intercalate ", " (map unqual (init vals)) ++ " and " ++ unqual (last vals)
+                 ++ " are defined in terms of each other, so computing them never ends")
+          ++ "; a value can only refer to itself under a lambda, in a lazy field or argument, \
+             \or if it is a function"
+      [] -> pure ()
   let prog = withLifted (stSub st) (reverse (stLifted st)) Program
         { progData = dataInfos
         , progCons = M.fromList userCons
@@ -1086,6 +1121,12 @@ topBind n vs preds t ar body =
 
 defaultName :: Name -> Name -> Name
 defaultName c m = "_dm_" ++ c ++ "_" ++ m
+
+-- | The first source location inside.
+firstLoc :: Data a => a -> Maybe Loc
+firstLoc x = case cast x of
+  Just (ELoc l _) -> Just l
+  _ -> listToMaybe (catMaybes (gmapQ firstLoc x))
 
 -- Approximate references (ignores shadowing), used only for dependency order.
 clausesRefs :: [Clause] -> [Name]

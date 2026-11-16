@@ -49,10 +49,34 @@ From easiest to hardest, which is the order we take them in.
       still see the whole program, and now start from `main`: hello world went from 124 KB of Go
       to 5 KB. Compiling an example: 0.35 s cold, 0.15–0.25 s warm.
 
+- [x] **A real program: JSON.** `examples/json.hgo`, a JSON parser on Parsec-style combinators
+      (`Text.Parser`, errors with the place and everything expected there) and Wadler's pretty
+      printer in Lindig's strict form (`Text.Pretty`). It found, and these are fixed: `'\b'`,
+      `'\f'` and `'\x41'` were not escapes; a `where` in the column of a `case`'s alternatives
+      was a syntax error; values defined in terms of each other compiled to nil or to wrong
+      numbers (`x = y + 1; y = x + 1` printed 1), and now functions among them are computed on
+      their first call and the rest are rejected; thunks cost seven allocations
+      (`sync.OnceValue`), now two; there was no way to read a file, standard input or the
+      arguments (`readFile`, `writeFile`, `getContents`, `System.Environment`), nor to read a
+      `String` without unpacking it (`Data.String`). 3.7 MB of JSON: 10.3 s and 1.1 GB at first,
+      3.5 s and 140 MB now; `jq .` takes 0.13 s.
+
+Next, found by the JSON program:
+
+- [ ] **Small sum types without allocation.** A non-recursive sum type (`Maybe`, `Either`, a
+      parser's `Ok | Failed`) is a Go interface, so building one allocates; as a struct with a
+      tag, passed by value, it would not. Allocation and GC are most of the JSON parser's time.
+- [ ] **Runs of characters in one step.** `Data.String.span`/`takeWhile` over a `String`, and a
+      parser that takes a run (`takeWhileP`), instead of one `satisfy` per character.
+- [ ] **Decide whether `Text.Parser` and `Text.Pretty` belong in the library.**
+
 Known rough edges, found on the way and not fixed yet:
 
 - [ ] **Errors in type signatures have no location** (a context with the wrong number of types, an
       unknown class), only the file and the definition's name.
+- [ ] **The check for values defined in terms of each other counts every branch** of an `if` or
+      `case` as evaluated, so it could reject a value whose cycle only goes through a branch
+      that is never taken.
 - [ ] **A record update that changes a type parameter some other field fixes** is reported as the
       type mismatch it causes (`no instance for Num String`), not as the field that cannot change.
 

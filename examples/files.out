@@ -1,0 +1,5 @@
+[]
+Right ()
+(18,Just ('f',"irst\nsecond\nthird"),True,Just "second\nthird")
+(False,False,True,"ababab","abc")
+no such file

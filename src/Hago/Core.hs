@@ -175,6 +175,35 @@ data CExpr
   | CDo Type Dict Type [CStmt]      -- ^ do block: the monad, its Monad dictionary, the result type
   deriving (Show, Data)
 
+coreRefs :: CExpr -> [Name]
+coreRefs = \case
+  CVar x _ _ -> [x]
+  CApp f as -> coreRefs f ++ concatMap coreRefs as
+  CLam _ _ b -> coreRefs b
+  CLet bs b _ -> concat [coreRefs x | CBind _ _ _ x <- bs] ++ coreRefs b
+  CMatch ss rows _ -> concatMap coreRefs ss ++ concat [concat [coreRefs x | CBind _ _ _ x <- bs] ++ concat [maybe [] coreRefs g ++ coreRefs e | (g, e) <- gs] | CRow _ bs gs <- rows]
+  CIf a b c _ -> concatMap coreRefs [a, b, c]
+  CDelay _ e -> coreRefs e
+  CForce e -> coreRefs e
+  CDo _ _ _ ss -> concat [case s of CSBind _ _ e -> coreRefs e; CSExpr _ e -> coreRefs e; CSLet bs -> concat [coreRefs x | CBind _ _ _ x <- bs] | s <- ss]
+  _ -> []
+
+-- | The top-level names computing the expression evaluates right away: not
+-- those under a lambda or a suspension. Every branch counts, which can only
+-- make it say more than happens.
+strictRefs :: CExpr -> [Name]
+strictRefs = \case
+  CVar x _ _ -> [x]
+  CApp f as -> strictRefs f ++ concatMap strictRefs as
+  CLam {} -> []
+  CDelay {} -> []
+  CLet bs b _ -> concat [strictRefs x | CBind _ _ _ x <- bs] ++ strictRefs b
+  CMatch ss rows _ -> concatMap strictRefs ss ++ concat [concat [strictRefs x | CBind _ _ _ x <- bs] ++ concat [maybe [] strictRefs g ++ strictRefs e | (g, e) <- gs] | CRow _ bs gs <- rows]
+  CIf a b c _ -> concatMap strictRefs [a, b, c]
+  CForce e -> strictRefs e
+  CDo _ _ _ ss -> concat [case st of CSBind _ _ e -> strictRefs e; CSExpr _ e -> strictRefs e; CSLet bs -> concat [strictRefs x | CBind _ _ _ x <- bs] | st <- ss]
+  _ -> []
+
 -- | A local or top-level binding. With arity n > 0 the body is a 'CLam'
 -- with n parameters, compiled as an uncurried Go function.
 data CBind = CBind Name Type Int CExpr
