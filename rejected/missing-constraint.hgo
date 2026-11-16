@@ -1,0 +1,6 @@
+-- expects: no instance for (Show a): add it to the type signature
+label :: a -> String
+label x = "<" ++ show x ++ ">"
+
+main :: IO ()
+main = putStrLn (label 1)

@@ -39,6 +39,46 @@ se evalúa cuando se liga, como en Go. La pereza existe sólo donde un tipo la p
 Las suspensiones son thunks memoizados (`sync.OnceValue`): se evalúan como mucho una vez y se
 pueden compartir entre goroutines.
 
+## Type classes
+
+```haskell
+class Show a => Shape a where
+  area :: a -> Double
+  name :: a -> String
+  name x = show x                      -- un método por defecto
+
+data Square = Square Double deriving (Show)
+data Pair a = Pair a a deriving (Show)
+
+instance Shape Square where
+  area (Square s) = s * s
+
+instance Shape a => Shape (Pair a) where
+  area (Pair x y) = area x + area y
+
+describe :: Shape a => a -> String
+describe s = name s ++ " has area " ++ show (area s)
+```
+
+- **El Prelude** define `Eq`, `Ord`, `Show`, `Num`, `Integral` y `Fractional`, con instancias
+  para `Int`, `Double`, `Char`, `String`, `Bool`, `()`, listas, tuplas, `Maybe`, `Either` y
+  `Ordering`.
+- **`deriving (Eq, Ord, Show)`** se expande a instancias comunes antes del type checking.
+- **Los literales enteros** están sobrecargados con `fromInteger`, y los tipos ambiguos caen por
+  defecto en `Int` (o en `Double` si hay `Fractional`), como en Haskell. Las definiciones sin
+  firma y sin parámetros siguen la monomorphism restriction.
+
+Las clases se compilan con paso de diccionarios. Cada clase es un struct genérico de Go con
+campos que son funciones no currificadas, y una función con restricciones recibe un puntero a
+diccionario por cada restricción. Cuando la instancia se conoce en tiempo de compilación, la
+llamada va directo a la función de esa instancia, sin diccionario: `n + 1` sobre `Int` queda
+`inst_Num_Int_m_op_plus(n, 1)`, que Go inlinea en un `+` común. Sólo el código que sigue siendo
+polimórfico, como `(Ord a, Num a) => a -> a`, paga las llamadas indirectas.
+
+Las clases son sólo sobre tipos de kind `*`, y los tipos de los métodos sólo pueden mencionar la
+variable de la clase. Go no puede ser genérico sobre constructores de tipos, así que no hay
+`Functor` ni `Monad`.
+
 ## Cómo queda el Go
 
 `map` se compila a una función genérica de Go. Los tipos de datos son una interfaz de Go con un
@@ -89,12 +129,16 @@ Son números de una sola máquina, como referencia y no como benchmark.
 | Programa | Tiempo | Memoria máxima |
 |---|---|---|
 | `nfib 40`, Go escrito a mano | 0,34 s | — |
-| `nfib 40`, Hago | 0,34 s | — |
-| suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | 0,37 s | ~8 MB |
+| `nfib 40 :: Int -> Int`, Hago | 0,34 s | — |
+| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, en `Int` | 1,88 s | — |
+| suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | 0,41 s | ~10 MB |
 
-El código estricto y monomórfico se compila al Go que escribirías a mano, y rinde igual. La
-cadena de listas perezosas corre en memoria constante, pero cada celda reserva un thunk, así que
-es mucho más lenta que un loop de Go.
+- **El código estricto en tipos concretos** se compila al Go que escribirías a mano, y rinde
+  igual.
+- **El código polimórfico con restricciones** es unas 5,5 veces más lento por las llamadas a
+  través de diccionarios. Especializarlo en los tipos con que se usa es el siguiente paso obvio.
+- **La cadena de listas perezosas** corre en memoria constante, pero cada celda reserva un
+  thunk, así que es mucho más lenta que un loop de Go.
 
 ## Uso
 
@@ -107,7 +151,8 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # sólo compilar
 ./check.sh                                                  # todos los ejemplos y los rechazados
 ```
 
-En `examples/` hay listas perezosas, ADTs con pattern matching y guardas, llamadas a Go y loops.
+En `examples/` hay listas perezosas, ADTs con pattern matching y guardas, type classes, llamadas
+a Go y loops.
 Cada ejemplo tiene un `.out` con la salida esperada. En `rejected/` hay programas que el type
 checker tiene que rechazar, cada uno con el error que espera.
 
@@ -118,8 +163,11 @@ inferencia Hindley-Milner que elabora a un core tipado, y generación de Go. Per
 Haskell 98.
 
 **Soportado**
-- `data` con campos perezosos (`~`), firmas de tipos, funciones con varias cláusulas, guardas,
-  `where`, `let`, `case`, `if`, lambdas, `do` para IO, as-patterns.
+- `data` con campos perezosos (`~`) y `deriving`, firmas de tipos con contextos, funciones con
+  varias cláusulas, guardas, `where`, `let`, `case`, `if`, lambdas, `do` para IO, as-patterns,
+  anotaciones `e :: t`.
+- `class` con superclases y métodos por defecto, `instance` con contextos. `Int`, `Double`,
+  `Char`, `String`, `Bool`.
 - Operadores con declaraciones `infixl`/`infixr`/`infix`, secciones, backquotes, tuplas de dos y
   de tres, listas literales, `[a..]` y `[a..b]`.
 - Polimorfismo de let en el nivel superior, con análisis de dependencias de las definiciones sin
@@ -127,12 +175,13 @@ Haskell 98.
 - `foreign import go`.
 
 **Falta**
-- **Type classes.** `==`, `<`, `show` y `print` son primitivas y andan con cualquier tipo que no
-  sea una función (de forma nativa para `Int`, `Char` y `String`, y estructuralmente por
-  reflexión para el resto). `+` y los demás operadores aritméticos sólo toman `Int`. Todavía no
-  hay `Double`.
+- **Clases de constructores** (`Functor`, `Monad`), clases de varios parámetros, y
+  especialización del código con restricciones.
+- **`Read` y `Enum`.** `[a..b]` sólo funciona con `Int`.
+- **`String` es el `string` de Go, no `[Char]`.** Se convierte con `pack` y `unpack`. Los
+  literales con decimales son siempre `Double`, no están sobrecargados con `Fractional`.
 - Módulos e imports, records, la semántica de `newtype`, listas por comprensión, sinónimos con
-  `type`, mónadas que no sean IO.
+  `type`, mónadas que no sean IO, tuplas de más de tres.
 - **Las definiciones locales son monomórficas.** Las funciones literales de Go no pueden ser
   genéricas.
 - **Los valores polimórficos del nivel superior no se comparten.** `xs = []` se vuelve una
@@ -149,10 +198,12 @@ Haskell 98.
 |---|---|
 | `src/Hago/Lexer.hs` | tokens y regla de layout |
 | `src/Hago/Parser.hs` | Parsec sobre tokens, resolución de fixity |
-| `src/Hago/Typecheck.hs` | inferencia y elaboración, donde se inserta `Lazy` |
+| `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show)` |
+| `src/Hago/TcMonad.hs` | unificación y el solver de restricciones (instancias, defaulting) |
+| `src/Hago/Typecheck.hs` | inferencia y elaboración, donde se insertan `Lazy` y los diccionarios |
 | `src/Hago/Core.hs` | el core tipado |
 | `src/Hago/CodeGen.hs` | generación de Go |
-| `runtime/runtime.go` | listas, thunks, `show` y comparación; se copia en cada programa |
+| `runtime/runtime.go` | listas, tuplas, thunks e IO; se copia en cada programa |
 | `prelude/Prelude.hgo` | el prelude, escrito en Hago |
 
 ## Licencia

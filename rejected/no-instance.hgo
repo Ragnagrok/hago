@@ -1,0 +1,5 @@
+-- expects: no instance for Show Color
+data Color = Red | Green
+
+main :: IO ()
+main = print Red

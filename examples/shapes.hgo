@@ -1,6 +1,7 @@
 -- Algebraic data types, pattern matching, guards and where.
 
 data Shape = Circle Int | Rect Int Int | Triangle Int Int Int
+  deriving (Eq, Ord, Show)
 
 data Tree a = Leaf | Node (Tree a) a (Tree a)
 

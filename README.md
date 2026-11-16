@@ -39,6 +39,45 @@ is bound, like in Go. Laziness only exists where a type asks for it.
 Suspensions are memoised thunks (`sync.OnceValue`), so they are evaluated at most once and are
 safe to share between goroutines.
 
+## Type classes
+
+```haskell
+class Show a => Shape a where
+  area :: a -> Double
+  name :: a -> String
+  name x = show x                      -- a default method
+
+data Square = Square Double deriving (Show)
+data Pair a = Pair a a deriving (Show)
+
+instance Shape Square where
+  area (Square s) = s * s
+
+instance Shape a => Shape (Pair a) where
+  area (Pair x y) = area x + area y
+
+describe :: Shape a => a -> String
+describe s = name s ++ " has area " ++ show (area s)
+```
+
+- **The Prelude** defines `Eq`, `Ord`, `Show`, `Num`, `Integral` and `Fractional`, with instances
+  for `Int`, `Double`, `Char`, `String`, `Bool`, `()`, lists, tuples, `Maybe`, `Either` and
+  `Ordering`.
+- **`deriving (Eq, Ord, Show)`** expands into ordinary instances before type checking.
+- **Integer literals** are overloaded through `fromInteger`, and ambiguous types default to `Int`
+  (or `Double` when `Fractional` is involved), as in Haskell. Unsigned bindings without
+  parameters follow the monomorphism restriction.
+
+Classes compile to dictionary passing. Each class becomes a generic Go struct of uncurried
+function fields, and a constrained function takes one dictionary pointer per constraint. When
+the instance is known at compile time, the call goes straight to that instance's function, with
+no dictionary: `n + 1` on `Int` becomes `inst_Num_Int_m_op_plus(n, 1)`, which Go inlines into a
+plain `+`. Only code that stays polymorphic, like `(Ord a, Num a) => a -> a`, pays for indirect
+calls.
+
+Classes range over types of kind `*` only, and method types can only mention the class variable.
+Go cannot be generic over type constructors, so there is no `Functor` or `Monad`.
+
 ## What the Go looks like
 
 `map` compiles to a generic Go function. Data types become a Go interface with one struct per
@@ -89,12 +128,15 @@ These numbers come from one machine, as a reference and not as a benchmark.
 | Program | Time | Peak memory |
 |---|---|---|
 | `nfib 40`, hand-written Go | 0.34 s | — |
-| `nfib 40`, Hago | 0.34 s | — |
-| sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.37 s | ~8 MB |
+| `nfib 40 :: Int -> Int`, Hago | 0.34 s | — |
+| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, at `Int` | 1.88 s | — |
+| sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.41 s | ~10 MB |
 
-Strict, monomorphic code compiles to the Go you would write by hand, and runs like it. The lazy
-list pipeline streams in constant memory, but every cell allocates a thunk, so it is much slower
-than a Go loop.
+- **Strict code at concrete types** compiles to the Go you would write by hand, and runs like it.
+- **Constrained polymorphic code** is about 5.5 times slower because of the calls through
+  dictionaries. Specialising it to the types it is used at is the obvious next step.
+- **The lazy list pipeline** streams in constant memory, but every cell allocates a thunk, so it
+  is much slower than a Go loop.
 
 ## Using it
 
@@ -107,8 +149,8 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # just compile
 ./check.sh                                                  # every example and rejected program
 ```
 
-The `examples/` folder has lazy lists, ADTs with pattern matching and guards, calls to Go, and
-loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
+The `examples/` folder has lazy lists, ADTs with pattern matching and guards, type classes,
+calls to Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
 programs the type checker must refuse, each with the error it expects.
 
 ## What is there and what isn't
@@ -117,19 +159,24 @@ It is a prototype. The pipeline (layout rule, parser, Hindley-Milner inference t
 into a typed core, Go generation) works from end to end, but a lot of Haskell 98 is missing.
 
 **Supported**
-- `data` with lazy fields (`~`), type signatures, multi-clause functions, guards, `where`, `let`,
-  `case`, `if`, lambdas, `do` for IO, as-patterns.
+- `data` with lazy fields (`~`) and `deriving`, type signatures with contexts, multi-clause
+  functions, guards, `where`, `let`, `case`, `if`, lambdas, `do` for IO, as-patterns, `e :: t`
+  annotations.
+- `class` with superclasses and default methods, `instance` with contexts. `Int`, `Double`,
+  `Char`, `String`, `Bool`.
 - Operators with `infixl`/`infixr`/`infix` declarations, sections, backquotes, tuples of two and
   three, list literals, `[a..]` and `[a..b]`.
 - Let-polymorphism at the top level, with dependency analysis of unsigned bindings.
 - `foreign import go`.
 
 **Missing**
-- **Type classes.** `==`, `<`, `show` and `print` are built in and work on any non-function type
-  (natively for `Int`, `Char`, `String`, structurally through reflection for everything else).
-  `+` and the other arithmetic operators only take `Int`. There is no `Double` yet.
+- **Constructor classes** (`Functor`, `Monad`), multi-parameter classes, and specialisation of
+  constrained code.
+- **`Read` and `Enum`.** `[a..b]` only works on `Int`.
+- **`String` is Go's `string`, not `[Char]`.** Convert with `pack` and `unpack`. Double
+  literals are always `Double`, not overloaded through `Fractional`.
 - Modules and imports, records, `newtype` semantics, list comprehensions, `type` synonyms,
-  monads other than IO.
+  monads other than IO, tuples beyond three.
 - **Local bindings are monomorphic.** Go function literals cannot be generic.
 - **Polymorphic top-level values are not shared.** `xs = []` becomes a generic function and is
   re-evaluated at each use.
@@ -145,10 +192,12 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 |---|---|
 | `src/Hago/Lexer.hs` | tokens and the layout rule |
 | `src/Hago/Parser.hs` | Parsec over tokens, fixity resolution |
-| `src/Hago/Typecheck.hs` | inference and elaboration, where `Lazy` is inserted |
+| `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show)` |
+| `src/Hago/TcMonad.hs` | unification and the constraint solver (instances, defaulting) |
+| `src/Hago/Typecheck.hs` | inference and elaboration, where `Lazy` and dictionaries are inserted |
 | `src/Hago/Core.hs` | the typed core |
 | `src/Hago/CodeGen.hs` | Go generation |
-| `runtime/runtime.go` | lists, thunks, `show` and comparison, copied into every program |
+| `runtime/runtime.go` | lists, tuples, thunks and IO, copied into every program |
 | `prelude/Prelude.hgo` | the prelude, written in Hago |
 
 ## License

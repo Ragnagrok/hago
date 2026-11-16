@@ -8,6 +8,7 @@ import Control.Monad.State
 import Data.Char
 import Data.Graph (flattenSCCs, stronglyConnComp)
 import Data.List (intercalate, isPrefixOf, nub)
+import qualified Data.IntMap as IM
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
 import Hago.Core
@@ -21,11 +22,13 @@ data VK
   | VKLocal Int        -- ^ local: arity (0 for plain values)
   | VKForeign Foreign
   | VKPrim Int
+  | VKMethod Int       -- ^ class method: arity of its type
 
 data Ctx = Ctx
   { cxVars :: M.Map Name VK
   , cxSelf :: Maybe (Name, Int)   -- ^ function whose self tail calls become a loop
   , cxTParams :: [Name]
+  , cxDictParams :: [String]      -- ^ dictionary parameters of the enclosing top-level function
   , cxProg :: Program
   }
 
@@ -34,7 +37,7 @@ data GS = GS {gsNext :: Int, gsLoop :: Bool}
 type Gen = State GS
 
 generate :: String -> Program -> String
-generate runtime prog = unlines (header ++ [runtime] ++ dataDecls ++ foreignUses ++ tops ++ initBlock ++ mainFn)
+generate runtime prog = unlines (header ++ [runtime] ++ dataDecls ++ classDecls ++ instDecls ++ foreignUses ++ tops ++ initBlock ++ mainFn)
   where
     foreignPkgs = nub [pkg | f <- M.elems (progForeign prog), let (pkg, _) = splitSymbol (fSymbol f), pkg /= ""]
     header =
@@ -44,7 +47,6 @@ generate runtime prog = unlines (header ++ [runtime] ++ dataDecls ++ foreignUses
       , "rt_bufio \"bufio\""
       , "rt_fmt \"fmt\""
       , "rt_os \"os\""
-      , "rt_reflect \"reflect\""
       , "rt_strconv \"strconv\""
       , "rt_strings \"strings\""
       , "rt_sync \"sync\"" ]
@@ -55,14 +57,20 @@ generate runtime prog = unlines (header ++ [runtime] ++ dataDecls ++ foreignUses
       { cxVars = M.unions
           [ M.fromList [(tbName b, VKTop (tbArity b) (tbParams b)) | b <- progBinds prog]
           , M.map VKForeign (progForeign prog)
-          , M.fromList [(n, VKPrim (arrows t)) | (n, Forall _ t) <- M.toList primSchemes] ]
+          , M.fromList [(n, VKPrim (arrows t)) | (n, Forall _ _ t) <- M.toList primSchemes]
+          , M.fromList [(m, VKMethod (arrows t)) | ci <- M.elems (progClasses prog), (m, t) <- clsMethods ci] ]
       , cxSelf = Nothing
       , cxTParams = []
+      , cxDictParams = []
       , cxProg = prog
       }
     dataDecls = concatMap (genData prog) [(n, d) | (n, d) <- M.toList (progData prog), n `notElem` ["[]", "Bool"]]
-    (tops, inits) = evalState (unzip <$> mapM (genTop ctx0) (progBinds prog)) (GS 0 False)
-    initBlock = ["func init() {"] ++ concat inits ++ ["}"]
+    classDecls = concatMap (genClass ctx0) (M.toList (progClasses prog))
+    ((tops, inits), (instDecls, dictInits)) = flip evalState (GS 0 False) $ do
+      ts <- unzip <$> mapM (genTop ctx0) (progBinds prog)
+      is <- unzip <$> mapM (genInst ctx0) (progInsts prog)
+      pure (ts, (concat (fst is), concat (snd is)))
+    initBlock = ["func init() {"] ++ dictInits ++ concat inits ++ ["}"]
     mainFn = ["func main() {", mangle "main" ++ "()", "}"]
 
 -- Names -------------------------------------------------------------------------
@@ -82,7 +90,7 @@ mangle n
   | any (`isPrefixOf` s) ["rt_", "hg_"] = "u_" ++ s
   | otherwise = s
   where
-    s = concatMap (\c -> if c == '\'' then "_q" else [c]) n
+    s = concatMap (\c -> if c == '\'' then "_q" else if isAlphaNum c || c == '_' then [c] else "_" ++ symWord c) n
     symWord c = fromMaybe "x" (lookup c symNames)
     symNames =
       [ ('+', "plus"), ('-', "minus"), ('*', "star"), ('/', "slash"), ('.', "dot"), ('<', "lt")
@@ -126,6 +134,7 @@ goTy ctx = render . zonk (progSubst (cxProg ctx))
       TVar v -> tyVar v
       TMeta _ -> "struct{}"
       TCon "Int" [] -> "int"
+      TCon "Double" [] -> "float64"
       TCon "Bool" [] -> "bool"
       TCon "Char" [] -> "rune"
       TCon "String" [] -> "string"
@@ -161,44 +170,44 @@ genData prog (n, DataInfo ps ks)
   where
     marker = "is" ++ typeName n
     recv k = conStruct prog k ++ (if null ps then "" else "[" ++ commas (map tyVar ps) ++ "]")
-    ctx = Ctx M.empty Nothing ps prog
+    ctx = Ctx M.empty Nothing ps [] prog
     con k =
       let ci = progCons prog M.! k
           fields = [ "F" ++ show i ++ " " ++ goTy ctx (if lz then tLazy t else t) | (i, (lz, t)) <- zip [0 :: Int ..] (ciFields ci)]
        in [ "type " ++ conStruct prog k ++ tparamList ps ++ " struct{ " ++ intercalate "; " fields ++ " }"
-          , "func (" ++ recv k ++ ") " ++ marker ++ "() {}"
-          , "func (" ++ recv k ++ ") rt_con() (string, int) { return " ++ show (displayCon k) ++ ", " ++ show (ciTag ci) ++ " }" ]
-    displayCon k = if isSymbolic k then "(" ++ k ++ ")" else k
+          , "func (" ++ recv k ++ ") " ++ marker ++ "() {}" ]
 
 -- Top-level bindings ----------------------------------------------------------------
 
 -- | A top-level binding: its declaration, and its initialisation if it is a CAF.
 genTop :: Ctx -> TopBind -> Gen (String, [String])
-genTop ctx0 (TopBind n tps t ar body) = do
-  let ctx = ctx0 {cxTParams = tps}
+genTop ctx0 (TopBind n tps preds t ar body) = do
+  let dps = dictParams ctx0 preds
+      ctx = ctx0 {cxTParams = tps, cxDictParams = map fst dps}
+      dpList = commas [d ++ " " ++ ty | (d, ty) <- dps]
   case (ar, body) of
     (0, _) | null tps -> do
       e <- genExpr ctx body
       pure ("var " ++ mangle n ++ " " ++ goTy ctx t, [mangle n ++ " = " ++ e])
     (0, _) -> do
       ls <- genStmts ctx body
-      pure (unlines (["func " ++ mangle n ++ tparamList tps ++ "() " ++ goTy ctx t ++ " {"] ++ ls ++ ["}"]), [])
+      pure (unlines (["func " ++ mangle n ++ tparamList tps ++ "(" ++ dpList ++ ") " ++ goTy ctx t ++ " {"] ++ ls ++ ["}"]), [])
     (_, CLam ps r inner) -> do
-      fn <- genFunction ctx (Just (n, ar)) ps r inner
+      fn <- genFunction ctx (Just (n, ar)) dps ps r inner
       pure ("func " ++ mangle n ++ tparamList tps ++ fn, [])
     _ -> error ("genTop: " ++ n)
 
 -- | Parameters, result type and body of a function, with self tail calls
 -- turned into a loop.
-genFunction :: Ctx -> Maybe (Name, Int) -> [(Name, Type)] -> Type -> CExpr -> Gen String
-genFunction ctx self ps r inner = do
+genFunction :: Ctx -> Maybe (Name, Int) -> [(String, String)] -> [(Name, Type)] -> Type -> CExpr -> Gen String
+genFunction ctx self extra ps r inner = do
   saved <- gets gsLoop
   modify (\s -> s {gsLoop = False})
   let ctx' = (bindLocals ctx [(p, 0) | (p, _) <- ps]) {cxSelf = self}
   ls <- genStmts ctx' inner
   looped <- gets gsLoop
   modify (\s -> s {gsLoop = saved})
-  let params = commas [mangle p ++ " " ++ goTy ctx pt | (p, pt) <- ps]
+  let params = commas ([d ++ " " ++ ty | (d, ty) <- extra] ++ [mangle p ++ " " ++ goTy ctx pt | (p, pt) <- ps])
       body = if looped then ["for {"] ++ ls ++ ["}"] else ls
   pure (unlines (["(" ++ params ++ ") " ++ goTy ctx r ++ " {"] ++ body ++ ["}"]))
 
@@ -287,6 +296,13 @@ genPats ctx ((s, p) : rest) k = case p of
   CPLit l -> do
     body <- genPats ctx rest k
     pure (["if " ++ s ++ " == " ++ genLit l ++ " {"] ++ body ++ ["}"])
+  CPNum n t dEq dNum -> do
+    lit <- numLit ctx n t dNum
+    let test = case zonk (progSubst (cxProg ctx)) t of
+          TCon c [] | c `elem` ["Int", "Double"] -> s ++ " == " ++ lit
+          _ -> genMethodCall ctx "==" dEq [s, lit]
+    body <- genPats ctx rest k
+    pure (["if " ++ test ++ " {"] ++ body ++ ["}"])
   CPForce q -> do
     n <- freshName "f"
     body <- genPats ctx ((n, q) : rest) k
@@ -327,7 +343,7 @@ genBinds ctx binds = do
          in "var " ++ mangle n ++ " " ++ ty
   assigns <- forM ordered $ \(CBind n _ ar body) -> case body of
     CLam ps r inner | ar > 0 -> do
-      fn <- genFunction (noSelf ctx') (Just (n, ar)) ps r inner
+      fn <- genFunction (noSelf ctx') (Just (n, ar)) [] ps r inner
       pure (mangle n ++ " = func" ++ fn)
     _ -> do
       e <- genExpr (noSelf ctx') body
@@ -352,6 +368,7 @@ coreRefs = \case
 genExpr :: Ctx -> CExpr -> Gen String
 genExpr ctx e = case e of
   CLit l -> pure (genLit l)
+  CNum n t d -> numLit ctx n t d
   CVar x ref t -> genVar ctx x ref t
   CCon k targs t -> genApp ctx e [] (Just (conArity k)) (\args -> pure (conValue ctx k targs args)) t
   CApp f args -> case f of
@@ -381,6 +398,7 @@ genExpr ctx e = case e of
       Just (VKLocal a) -> Just a
       Just (VKForeign f) -> Just (fArity f)
       Just (VKPrim a) -> Just a
+      Just (VKMethod a) -> Just a
       Nothing -> Nothing
     conArity k = length (ciFields (progCons (cxProg ctx) M.! k))
     iife t = do
@@ -420,7 +438,8 @@ curried ctx ((n, p) : rest) r body =
 genVar :: Ctx -> Name -> VRef -> Type -> Gen String
 genVar ctx x ref t = case M.lookup x (cxVars ctx) of
   Just (VKTop 0 []) -> pure (mangle x)
-  Just (VKTop 0 _) -> pure (mangle x ++ insts ++ "()")
+  Just (VKTop 0 _) -> pure (mangle x ++ insts ++ "(" ++ commas (dictArgs ctx ref) ++ ")")
+  Just (VKMethod 0) -> pure (genMethodCall ctx x (methodDict ref) [])
   Just (VKLocal 0) -> pure (mangle x)
   Just (VKForeign f) | fArity f == 0 -> pure (foreignCall ctx f [])
   Just (VKPrim 0) -> call ctx x ref t [] []
@@ -428,41 +447,40 @@ genVar ctx x ref t = case M.lookup x (cxVars ctx) of
   Nothing -> error ("codegen: unknown variable " ++ x)
   where
     insts = case ref of
-      Inst ts -> typeArgs ctx ts
+      Inst ts _ -> typeArgs ctx ts
       SelfGroup -> if null (cxTParams ctx) then "" else "[" ++ commas (map tyVar (cxTParams ctx)) ++ "]"
 
 -- | A saturated call to a known function.
 call :: Ctx -> Name -> VRef -> Type -> [String] -> [CExpr] -> Gen String
 call ctx x ref _ as cargs = case M.lookup x (cxVars ctx) of
-  Just (VKTop _ tps) -> pure (mangle x ++ insts tps ++ "(" ++ commas as ++ ")")
+  Just (VKTop _ tps) -> pure (mangle x ++ insts tps ++ "(" ++ commas (dictArgs ctx ref ++ as) ++ ")")
+  Just (VKMethod _) -> pure (genMethodCall ctx x (methodDict ref) as)
   Just (VKLocal _) -> pure (mangle x ++ "(" ++ commas as ++ ")")
   Just (VKForeign f) -> pure (foreignCall ctx f as)
   Just (VKPrim _) -> genPrim ctx x targs as cargs
   Nothing -> error ("codegen: unknown function " ++ x)
   where
     targs = case ref of
-      Inst ts -> map (zonk (progSubst (cxProg ctx))) ts
+      Inst ts _ -> map (zonk (progSubst (cxProg ctx))) ts
       SelfGroup -> []
     insts tps = case ref of
-      Inst ts -> typeArgs ctx ts
+      Inst ts _ -> typeArgs ctx ts
       SelfGroup -> if null tps then "" else "[" ++ commas (map tyVar (cxTParams ctx)) ++ "]"
 
 genPrim :: Ctx -> Name -> [Type] -> [String] -> [CExpr] -> Gen String
 genPrim ctx x targs as cargs = case (x, as) of
-  (op, [a, b]) | op `elem` ["+", "-", "*"] -> pure ("(" ++ a ++ " " ++ op ++ " " ++ b ++ ")")
-  ("div", [a, b]) -> pure ("rt_div(" ++ a ++ ", " ++ b ++ ")")
-  ("mod", [a, b]) -> pure ("rt_mod(" ++ a ++ ", " ++ b ++ ")")
-  ("negate", [a]) -> pure ("(-" ++ a ++ ")")
-  (op, [a, b]) | op `elem` ["==", "/="] ->
-    pure $ if native ["Int", "Char", "Bool", "String", "()"]
-      then "(" ++ a ++ " " ++ (if op == "==" then "==" else "!=") ++ " " ++ b ++ ")"
-      else (if op == "==" then "" else "!") ++ "rt_eq(" ++ a ++ ", " ++ b ++ ")"
-  (op, [a, b]) | op `elem` ["<", "<=", ">", ">="] ->
-    pure $ if native ["Int", "Char", "String"]
-      then "(" ++ a ++ " " ++ op ++ " " ++ b ++ ")"
-      else "(rt_compare(" ++ a ++ ", " ++ b ++ ") " ++ op ++ " 0)"
-  ("show", [a]) -> pure (showOf a)
-  ("print", [a]) -> pure (action ("rt_fmt.Println(" ++ showOf a ++ ")"))
+  (op, [a, b]) | Just o <- lookup op binops -> pure ("(" ++ a ++ " " ++ o ++ " " ++ b ++ ")")
+  ("primNeg", [a]) -> pure ("(-" ++ a ++ ")")
+  ("primDiv", [a, b]) -> pure ("rt_div(" ++ a ++ ", " ++ b ++ ")")
+  ("primMod", [a, b]) -> pure ("rt_mod(" ++ a ++ ", " ++ b ++ ")")
+  ("primShow", [a]) -> pure $ case targs of
+    [TCon "Int" []] -> "rt_strconv.Itoa(" ++ a ++ ")"
+    [TCon "Double" []] -> "rt_showDouble(" ++ a ++ ")"
+    [TCon "Char" []] -> "rt_strconv.QuoteRune(" ++ a ++ ")"
+    [TCon "String" []] -> "rt_strconv.Quote(" ++ a ++ ")"
+    _ -> "rt_fmt.Sprint(" ++ a ++ ")"
+  ("primIntToDouble", [a]) -> pure ("float64(" ++ a ++ ")")
+  ("primTruncate", [a]) -> pure ("int(" ++ a ++ ")")
   ("putStrLn", [a]) -> pure (action ("rt_fmt.Println(" ++ a ++ ")"))
   ("putStr", [a]) -> pure (action ("rt_fmt.Print(" ++ a ++ ")"))
   ("getLine", []) -> pure "rt_getLine"
@@ -482,13 +500,130 @@ genPrim ctx x targs as cargs = case (x, as) of
   ("chr", [a]) -> pure ("rune(" ++ a ++ ")")
   _ -> error ("codegen: bad primitive call " ++ x)
   where
-    native allowed = case targs of
-      [TCon c []] -> c `elem` allowed
-      _ -> False
-    showOf a = case targs of
-      [TCon "Int" []] -> "rt_strconv.Itoa(" ++ a ++ ")"
-      _ -> "rt_show(" ++ a ++ ")"
-    action s = "func() struct{} { " ++ s ++ "; return struct{}{} }"
+    binops =
+      [ ("primEq", "=="), ("primNeq", "!="), ("primLt", "<"), ("primLe", "<="), ("primGt", ">")
+      , ("primGe", ">="), ("primAdd", "+"), ("primSub", "-"), ("primMul", "*"), ("primFDiv", "/") ]
+    action e = "func() struct{} { " ++ e ++ "; return struct{}{} }"
+
+-- Dictionaries -------------------------------------------------------------------------
+
+resolveDict :: Ctx -> Dict -> Dict
+resolveDict ctx = \case
+  DHole h -> case IM.lookup h (progSolved (cxProg ctx)) of
+    Just d -> resolveDict ctx d
+    Nothing -> error ("codegen: unsolved constraint " ++ show h)
+  d -> d
+
+instById :: Ctx -> Name -> InstInfo
+instById ctx i = case [inst | inst <- progInsts (cxProg ctx), instId inst == i] of
+  (inst : _) -> inst
+  [] -> error ("codegen: unknown instance " ++ i)
+
+genDict :: Ctx -> Dict -> String
+genDict ctx d = case resolveDict ctx d of
+  DParam n -> mangle n
+  DSuper d' s -> genDict ctx d' ++ ".s_" ++ s
+  DInst i ts subs
+    | null (instVars (instById ctx i)) -> i
+    | otherwise -> i ++ typeArgs ctx ts ++ "(" ++ commas (map (genDict ctx) subs) ++ ")"
+  DHole _ -> error "codegen: hole after resolution"
+
+dictArgs :: Ctx -> VRef -> [String]
+dictArgs ctx = \case
+  Inst _ ds -> map (genDict ctx) ds
+  SelfGroup -> cxDictParams ctx
+
+methodDict :: VRef -> Dict
+methodDict = \case
+  Inst _ [d] -> d
+  _ -> error "codegen: a method needs exactly one dictionary"
+
+methodField :: Name -> String
+methodField m = "m_" ++ mangle m
+
+-- | A saturated method call: straight to the instance's function when the
+-- instance is known, through the dictionary otherwise.
+genMethodCall :: Ctx -> Name -> Dict -> [String] -> String
+genMethodCall ctx m d as = case resolveDict ctx d of
+  DInst i ts subs -> i ++ "_" ++ methodField m ++ typeArgs ctx ts ++ "(" ++ commas (map (genDict ctx) subs ++ as) ++ ")"
+  d' -> genDict ctx d' ++ "." ++ methodField m ++ "(" ++ commas as ++ ")"
+
+numLit :: Ctx -> Integer -> Type -> Dict -> Gen String
+numLit ctx n t d = pure $ case zonk (progSubst (cxProg ctx)) t of
+  TCon "Int" [] -> show n
+  TCon "Double" [] -> show n ++ ".0"
+  _ -> genMethodCall ctx "fromInteger" d [show n]
+
+-- | Go parameters for the dictionaries of a binding's constraints.
+dictParams :: Ctx -> [Pred] -> [(String, String)]
+dictParams ctx preds = [(mangle (dictName c v), dictType ctx c (TVar v)) | IsIn c (TVar v) <- preds]
+
+dictType :: Ctx -> Name -> Type -> String
+dictType ctx c t = "*Dict_" ++ c ++ "[" ++ goTy ctx t ++ "]"
+
+-- | Uncurried Go type of a method at a type.
+methodType :: Ctx -> Type -> String
+methodType ctx t = let (ps, r) = splitFun (arrows t) t in "func(" ++ commas (map (goTy ctx) ps) ++ ") " ++ goTy ctx r
+
+genClass :: Ctx -> (Name, ClassInfo) -> [String]
+genClass ctx (c, ci) =
+  ["type Dict_" ++ c ++ tparamList [clsVar ci] ++ " struct {"]
+    ++ ["s_" ++ s ++ " " ++ dictType ctx s v | s <- clsSupers ci]
+    ++ [methodField m ++ " " ++ methodType ctx t | (m, t) <- clsMethods ci]
+    ++ ["}"]
+  where v = TVar (clsVar ci)
+
+-- | An instance: one function per method, and its dictionary (a variable
+-- filled in init, or a constructor function when the instance has type
+-- variables). Returns declarations and init statements.
+genInst :: Ctx -> InstInfo -> Gen ([String], [String])
+genInst ctx0 inst = do
+  let ci = progClasses (cxProg ctx0) M.! instClass inst
+      vs = instVars inst
+      dps = dictParams ctx0 (instCtx inst)
+      ctx = ctx0 {cxTParams = vs, cxDictParams = map fst dps}
+      headT = instHead inst
+      atHead t = substVar (clsVar ci) headT t
+      name = instId inst
+      dictTy = dictType ctx (instClass inst) headT
+  fns <- forM (instMethods inst) $ \(m, mbody) -> do
+    let t = atHead (M.fromList (clsMethods ci) M.! m)
+        n = arrows t
+        (ps, r) = splitFun n t
+        fname = "func " ++ name ++ "_" ++ methodField m ++ tparamList vs
+    case mbody of
+      Just (CLam lps lr inner) | n > 0 -> (fname ++) <$> genFunction ctx Nothing dps lps lr inner
+      Just body -> do
+        ls <- genStmts ctx body
+        pure (unlines ([fname ++ "(" ++ commas [d ++ " " ++ ty | (d, ty) <- dps] ++ ") " ++ goTy ctx r ++ " {"] ++ ls ++ ["}"]))
+      Nothing ->
+        pure (fname ++ "(" ++ commas ([d ++ " " ++ ty | (d, ty) <- dps] ++ ["_ " ++ goTy ctx p | p <- ps]) ++ ") " ++ goTy ctx r
+          ++ " { panic(" ++ show ("no " ++ m ++ " in instance " ++ instClass inst) ++ ") }")
+  let fills target = [ target ++ "." ++ methodField m ++ " = " ++ wrapper m | (m, _) <- instMethods inst ]
+          ++ [ target ++ ".s_" ++ s ++ " = " ++ genDict ctx d | (s, d) <- instSupers inst ]
+      wrapper m =
+        let t = atHead (M.fromList (clsMethods ci) M.! m)
+            n = arrows t
+            (ps, r) = splitFun n t
+            args = ["hg_p" ++ show i | i <- [0 .. n - 1]]
+            callee = name ++ "_" ++ methodField m ++ (if null vs then "" else "[" ++ commas (map tyVar vs) ++ "]")
+         in if null vs && null dps
+              then callee
+              else "func(" ++ commas [a ++ " " ++ goTy ctx p | (a, p) <- zip args ps] ++ ") " ++ goTy ctx r
+                     ++ " { return " ++ callee ++ "(" ++ commas (map fst dps ++ args) ++ ") }"
+  if null vs
+    then pure (fns ++ ["var " ++ name ++ " = &" ++ drop 1 dictTy ++ "{}"], fills name)
+    else pure
+      ( fns ++ [unlines (["func " ++ name ++ tparamList vs ++ "(" ++ commas [d ++ " " ++ ty | (d, ty) <- dps] ++ ") " ++ dictTy ++ " {"
+               , "d := &" ++ drop 1 dictTy ++ "{}"] ++ fills "d" ++ ["return d", "}"])]
+      , [] )
+
+substVar :: Name -> Type -> Type -> Type
+substVar v by = \case
+  TVar w | w == v -> by
+  TCon c ts -> TCon c (map (substVar v by) ts)
+  TFun a b -> TFun (substVar v by a) (substVar v by b)
+  t -> t
 
 foreignCall :: Ctx -> Foreign -> [String] -> String
 foreignCall ctx f as = case r of
@@ -561,6 +696,7 @@ genDo ctx0 r stmts = do
 genLit :: Lit -> String
 genLit = \case
   LInt n -> show n
+  LDouble d -> show d
   LChar c
     | c == '\'' -> "'\\''"
     | c == '\\' -> "'\\\\'"

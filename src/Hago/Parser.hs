@@ -90,6 +90,8 @@ topDecl :: Parser [Decl]
 topDecl = choice
   [ pure <$> dataDecl
   , pure <$> foreignDecl
+  , pure <$> classDecl
+  , pure <$> instanceDecl
   , [] <$ (key "import" >> skipMany1 (satisfyT notSemi))
   , decl
   ]
@@ -104,8 +106,33 @@ dataDecl = do
   params <- many varId
   key "="
   cons <- conDecl `sepBy1` key "|"
-  optional (key "deriving" >> (void conId <|> void (parens (conId `sepBy` special ","))))
-  pure (DData name params cons)
+  derivs <- option [] (key "deriving" >> ((pure <$> conId) <|> parens (conId `sepBy` special ",")))
+  pure (DData name params cons derivs)
+
+-- | An optional context, as in @(Eq a, Show b) =>@.
+context :: Parser Context
+context = option [] (try (preds <* key "=>"))
+  where
+    preds = (pure <$> predicate) <|> parens (predicate `sepBy` special ",")
+    predicate = (,) <$> conId <*> varId
+
+classDecl :: Parser Decl
+classDecl = do
+  key "class"
+  supers <- context
+  cls <- conId
+  v <- varId
+  body <- option [] (key "where" >> localDecls)
+  pure (DClass supers cls v body)
+
+instanceDecl :: Parser Decl
+instanceDecl = do
+  key "instance"
+  ctx <- context
+  cls <- conId
+  t <- aType
+  body <- option [] (key "where" >> localDecls)
+  pure (DInstance ctx cls t body)
 
 conDecl :: Parser ConDecl
 conDecl = try infixCon <|> prefixCon
@@ -137,8 +164,9 @@ decl = fixity <|> try sig <|> (pure <$> binding)
     sig = do
       names <- var `sepBy1` special ","
       key "::"
+      ctx <- context
       t <- pType
-      pure [DSig names t]
+      pure [DSig names ctx t]
     fixity = do
       assoc <- (AssocL <$ key "infixl") <|> (AssocR <$ key "infixr") <|> (AssocN <$ key "infix")
       prec <- option 9 (satisfyT (\t -> case t of TInt n -> Just (fromInteger n); _ -> Nothing))
@@ -250,6 +278,7 @@ aPat = choice
 literal :: Parser Lit
 literal = satisfyT f <?> "literal"
   where f (TInt n) = Just (LInt n)
+        f (TFloat d) = Just (LDouble d)
         f (TChar c) = Just (LChar c)
         f (TStr s) = Just (LStr s)
         f _ = Nothing
@@ -262,7 +291,8 @@ expr = do
   e0 <- expr10
   let first = maybe e0 (const (EApp (EVar "negate") e0)) neg
   rest <- many (try ((,) <$> operator <*> expr10))
-  pure (if null rest then first else EOpSeq first rest)
+  let e = if null rest then first else EOpSeq first rest
+  option e (EAnn e <$> (key "::" *> pType))
 
 expr10 :: Parser Expr
 expr10 = choice
@@ -379,10 +409,13 @@ resolveFixity ds = map (rDecl fixities) ds
 
 allDecls :: [Decl] -> [Decl]
 allDecls ds = ds ++ concat [concatMap whereDecls cs | DBind _ cs <- ds]
+  ++ concat [allDecls b | DClass _ _ _ b <- ds] ++ concat [allDecls b | DInstance _ _ _ b <- ds]
   where whereDecls (Clause _ (Rhs _ w)) = allDecls w
 
 rDecl :: Fixities -> Decl -> Decl
 rDecl fx (DBind n cs) = DBind n [Clause ps (rRhs fx r) | Clause ps r <- cs]
+rDecl fx (DClass sup c v ds) = DClass sup c v (map (rDecl fx) ds)
+rDecl fx (DInstance ctx c t ds) = DInstance ctx c t (map (rDecl fx) ds)
 rDecl _ d = d
 
 rRhs :: Fixities -> Rhs -> Rhs
@@ -399,6 +432,7 @@ rExpr fx = go
       ECase s alts -> ECase (go s) [Alt p (rRhs fx r) | Alt p r <- alts]
       EDo ss -> EDo (map stmtR ss)
       EOpSeq e0 rest -> climb (go e0) [(op, go x) | (op, x) <- rest]
+      EAnn x t -> EAnn (go x) t
       _ -> e
     stmtR (SBind x e) = SBind x (go e)
     stmtR (SLet ds) = SLet (map (rDecl fx) ds)

@@ -1,49 +1,44 @@
 {-# LANGUAGE LambdaCase #-}
 
--- | Hindley-Milner type inference that also elaborates the program into the
--- typed core. Laziness is type-directed: an expression checked against
--- @Lazy t@ is suspended, and a variable of type @Lazy t@ used where a @t@ is
--- expected is forced.
+-- | Hindley-Milner type inference with type classes, which also elaborates
+-- the program into the typed core. Laziness is type-directed: an expression
+-- checked against @Lazy t@ is suspended, and a variable of type @Lazy t@ used
+-- where a @t@ is expected is forced. Constraints become dictionaries.
 module Hago.Typecheck (typecheck, primSchemes, pretty) where
 
 import Control.Monad
-import Control.Monad.Except
 import Control.Monad.State
 import Data.Graph (flattenSCC, flattenSCCs, stronglyConnComp)
 import qualified Data.IntMap as IM
-import Data.List (intercalate, nub)
+import Data.List (nub)
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe)
 import Hago.Core
 import Hago.Syntax
-
-data Env = Env
-  { envVars :: M.Map Name (Scheme, Bool)   -- ^ scheme, and whether it is a recursive group member
-  , envCons :: M.Map Name ConInfo
-  , envTypes :: M.Map Name Int             -- ^ type constructors and their arity
-  }
-
-data St = St {stNext :: Int, stSub :: Subst}
-
-type TC = StateT St (Either String)
+import Hago.TcMonad
 
 -- Primitives -------------------------------------------------------------------
 
+-- | Built-in operations. The polymorphic ones are only used by the prelude's
+-- instances, at types Go can compare and add natively.
 primSchemes :: M.Map Name Scheme
 primSchemes = M.fromList $
-  [(op, mono (tInt ~> tInt ~> tInt)) | op <- ["+", "-", "*", "div", "mod"]]
-    ++ [(op, Forall ["a"] (a ~> a ~> tBool)) | op <- ["==", "/=", "<", "<=", ">", ">="]]
-    ++ [ ("negate", mono (tInt ~> tInt))
-       , ("show", Forall ["a"] (a ~> tString))
-       , ("print", Forall ["a"] (a ~> tIO tUnit))
+  [(op, Forall ["a"] [] (a ~> a ~> tBool)) | op <- ["primEq", "primNeq", "primLt", "primLe", "primGt", "primGe"]]
+    ++ [(op, Forall ["a"] [] (a ~> a ~> a)) | op <- ["primAdd", "primSub", "primMul"]]
+    ++ [ ("primNeg", Forall ["a"] [] (a ~> a))
+       , ("primDiv", mono (tInt ~> tInt ~> tInt))
+       , ("primMod", mono (tInt ~> tInt ~> tInt))
+       , ("primFDiv", mono (tDouble ~> tDouble ~> tDouble))
+       , ("primShow", Forall ["a"] [] (a ~> tString))
+       , ("primIntToDouble", mono (tInt ~> tDouble))
+       , ("primTruncate", mono (tDouble ~> tInt))
        , ("putStrLn", mono (tString ~> tIO tUnit))
        , ("putStr", mono (tString ~> tIO tUnit))
        , ("getLine", mono (tIO tString))
-       , ("return", Forall ["a"] (a ~> tIO a))
-       , (">>=", Forall ["a", "b"] (tIO a ~> (a ~> tIO b) ~> tIO b))
-       , (">>", Forall ["a", "b"] (tIO a ~> tLazy (tIO b) ~> tIO b))
-       , ("error", Forall ["a"] (tString ~> a))
-       , ("++", Forall ["a"] (a ~> tLazy a ~> a))
+       , ("return", Forall ["a"] [] (a ~> tIO a))
+       , (">>=", Forall ["a", "b"] [] (tIO a ~> (a ~> tIO b) ~> tIO b))
+       , (">>", Forall ["a", "b"] [] (tIO a ~> tLazy (tIO b) ~> tIO b))
+       , ("error", Forall ["a"] [] (tString ~> a))
+       , ("++", Forall ["a"] [] (a ~> tLazy a ~> a))
        , ("pack", mono (tList tChar ~> tString))
        , ("unpack", mono (tString ~> tList tChar))
        , ("ord", mono (tChar ~> tInt))
@@ -52,7 +47,7 @@ primSchemes = M.fromList $
   where
     a = TVar "a"
     b = TVar "b"
-    mono = Forall []
+    mono = Forall [] []
 
 infixr 5 ~>
 (~>) :: Type -> Type -> Type
@@ -60,7 +55,7 @@ infixr 5 ~>
 
 builtinTypes :: M.Map Name Int
 builtinTypes = M.fromList
-  [ ("Int", 0), ("Bool", 0), ("Char", 0), ("String", 0), ("()", 0)
+  [ ("Int", 0), ("Double", 0), ("Bool", 0), ("Char", 0), ("String", 0), ("()", 0)
   , ("[]", 1), ("IO", 1), ("Lazy", 1), ("(,)", 2), ("(,,)", 3) ]
 
 builtinCons :: M.Map Name ConInfo
@@ -73,78 +68,6 @@ builtinCons = M.fromList
   , ("(,)", ConInfo "(,)" ["a", "b"] [(False, TVar "a"), (False, TVar "b")] 0)
   , ("(,,)", ConInfo "(,,)" ["a", "b", "c"] [(False, TVar "a"), (False, TVar "b"), (False, TVar "c")] 0)
   ]
-
--- Monad helpers --------------------------------------------------------------
-
-throw :: String -> TC a
-throw = throwError
-
-withCtx :: Name -> TC a -> TC a
-withCtx n act = act `catchError` \e -> throwError ("in " ++ n ++ ": " ++ e)
-
-fresh :: TC Type
-fresh = do
-  n <- gets stNext
-  modify (\s -> s {stNext = n + 1})
-  pure (TMeta n)
-
-zonkT :: Type -> TC Type
-zonkT t = gets (\s -> zonk (stSub s) t)
-
-bindMeta :: Int -> Type -> TC ()
-bindMeta m t = modify (\s -> s {stSub = IM.insert m t (stSub s)})
-
-unify :: Type -> Type -> TC ()
-unify x y = do
-  x' <- zonkT x
-  y' <- zonkT y
-  go x' y'
-  where
-    go (TMeta m) (TMeta n) | m == n = pure ()
-    go (TMeta m) t = bindVar m t
-    go t (TMeta m) = bindVar m t
-    go (TVar a) (TVar b) | a == b = pure ()
-    go (TCon c ts) (TCon d us) | c == d, length ts == length us = zipWithM_ unify ts us
-    go (TFun a b) (TFun c d) = unify a c >> unify b d
-    go _ _ = do
-      x' <- zonkT x
-      y' <- zonkT y
-      throw ("type mismatch: expected " ++ pretty y' ++ ", got " ++ pretty x')
-    bindVar m t
-      | m `elem` metas t = throw ("infinite type: ?" ++ show m ++ " ~ " ++ pretty t)
-      | otherwise = bindMeta m t
-
-metas :: Type -> [Int]
-metas = \case
-  TMeta m -> [m]
-  TCon _ ts -> concatMap metas ts
-  TFun a b -> metas a ++ metas b
-  TVar _ -> []
-
-substT :: M.Map Name Type -> Type -> Type
-substT s = \case
-  TVar v -> fromMaybe (TVar v) (M.lookup v s)
-  TCon c ts -> TCon c (map (substT s) ts)
-  TFun a b -> TFun (substT s a) (substT s b)
-  t -> t
-
-instantiate :: Scheme -> TC (Type, [Type])
-instantiate (Forall vs t) = do
-  ms <- mapM (const fresh) vs
-  pure (substT (M.fromList (zip vs ms)) t, ms)
-
-pretty :: Type -> String
-pretty = go (0 :: Int)
-  where
-    go _ (TVar v) = v
-    go _ (TMeta m) = "?" ++ show m
-    go _ (TCon "[]" [t]) = "[" ++ go 0 t ++ "]"
-    go _ (TCon c ts) | take 2 c == "(," = "(" ++ intercalate ", " (map (go 0) ts) ++ ")"
-    go _ (TCon c []) = c
-    go p (TCon c ts) = paren (p > 1) (unwords (c : map (go 2) ts))
-    go p (TFun a b) = paren (p > 0) (go 1 a ++ " -> " ++ go 0 b)
-    paren True s = "(" ++ s ++ ")"
-    paren False s = s
 
 -- Types written by the programmer -----------------------------------------------
 
@@ -169,6 +92,10 @@ fromSType env vars = go
 rigid :: SType -> M.Map Name Type
 rigid st = M.fromList [(v, TVar v) | v <- stypeVars st]
 
+contextPreds :: Env -> Context -> TC [Pred]
+contextPreds env ctx = forM ctx $ \(c, v) ->
+  if M.member c (envClasses env) then pure (IsIn c (TVar v)) else throw ("unknown class: " ++ c)
+
 -- Constructors ---------------------------------------------------------------------
 
 lookupCon :: Env -> Name -> TC ConInfo
@@ -184,10 +111,11 @@ conSig ci targs = (map field (ciFields ci), TCon (ciType ci) targs)
 -- Expressions ---------------------------------------------------------------------
 
 extend :: Env -> [(Name, Type)] -> Env
-extend env bs = env {envVars = foldr (\(n, t) -> M.insert n (Forall [] t, False)) (envVars env) bs}
+extend env bs = env {envVars = foldr (\(n, t) -> M.insert n (Forall [] [] t, False)) (envVars env) bs}
 
 litType :: Lit -> Type
 litType (LInt _) = tInt
+litType (LDouble _) = tDouble
 litType (LChar _) = tChar
 litType (LStr _) = tString
 
@@ -195,8 +123,8 @@ inferVarRaw :: Env -> Name -> TC (CExpr, Type)
 inferVarRaw env x = case M.lookup x (envVars env) of
   Nothing -> throw ("not in scope: " ++ x)
   Just (sc, self) -> do
-    (t, targs) <- instantiate sc
-    pure (CVar x (if self then SelfGroup else Inst targs) t, t)
+    (t, targs, ds) <- instantiate sc
+    pure (CVar x (if self then SelfGroup else Inst targs ds) t, t)
 
 infer :: Env -> Expr -> TC (CExpr, Type)
 infer env e = case e of
@@ -211,6 +139,10 @@ infer env e = case e of
     let (fs, r) = conSig ci targs
         t = foldr TFun r fs
     pure (CCon k targs t, t)
+  ELit (LInt n) -> do
+    t <- fresh
+    d <- newHole (IsIn "Num" t)
+    pure (CNum n t d, t)
   ELit l -> pure (CLit l, litType l)
   EApp {} -> do
     let (f, args) = spine e
@@ -220,6 +152,11 @@ infer env e = case e of
   EDo ss -> do
     (r, cs) <- doStmts env ss
     pure (CDo r cs, tIO r)
+  EAnn x st -> do
+    vs <- mapM (\v -> (,) v <$> fresh) (stypeVars st)
+    t <- fromSType env (M.fromList vs) st
+    c <- check env x t
+    pure (c, t)
   _ -> do
     t <- fresh
     c <- check env e t
@@ -288,7 +225,7 @@ adapt c actual expected = do
   where
     go i (TFun aq ar) (TFun xp xr) = do
       let n = "_adapt" ++ show i
-          var = CVar n (Inst []) xp
+          var = CVar n (Inst [] []) xp
       arg <- case (aq, xp) of
         (TCon "Lazy" _, TCon "Lazy" _) -> unify aq xp >> pure var
         (_, TCon "Lazy" [inner]) | not (isMeta aq) -> unify aq inner >> pure (CForce var)
@@ -318,7 +255,7 @@ checkLam env ps body ex = do
   cbody <- check (extend env bs) body r
   let core = case toMatch of
         [] -> cbody
-        _ -> CMatch [CVar n (Inst []) t | (n, t, _) <- toMatch] [CRow [p | (_, _, p) <- toMatch] [] [(Nothing, cbody)]] r
+        _ -> CMatch [CVar n (Inst [] []) t | (n, t, _) <- toMatch] [CRow [p | (_, _, p) <- toMatch] [] [(Nothing, cbody)]] r
   pure (CLam params r core)
   where
     go _ [] t = pure ([], [], [], t)
@@ -344,6 +281,10 @@ checkPat env p t = do
     (PAs x q, _) -> do
       (cq, bs) <- checkPat env q t'
       pure (CPAs x t' cq, (x, t') : bs)
+    (PLit (LInt n), _) -> do
+      dEq <- newHole (IsIn "Eq" t')
+      dNum <- newHole (IsIn "Num" t')
+      pure (CPNum n t' dEq dNum, [])
     (PLit l, _) -> unify t' (litType l) >> pure (CPLit l, [])
     (PCon k ps, _) -> do
       ci <- lookupCon env k
@@ -387,10 +328,11 @@ doStmts env = \case
     pure (r, CSLet bs : cs)
 
 -- | Local bindings (let and where): recursive and monomorphic, since Go
--- function literals cannot be generic.
+-- function literals cannot be generic. Their constraints are solved together
+-- with those of the enclosing top-level binding.
 localBinds :: Env -> [Decl] -> TC (Env, [CBind])
 localBinds env ds = do
-  let sigs = M.fromList [(n, t) | DSig ns t <- ds, n <- ns]
+  let sigs = M.fromList [(n, t) | DSig ns _ t <- ds, n <- ns]
       binds = [(n, cs) | DBind n cs <- ds]
   tys <- forM binds $ \(n, _) -> case M.lookup n sigs of
     -- local signatures are checked monomorphically: their variables are
@@ -424,7 +366,7 @@ tcClauses env cs t = do
         res <- zipWithM (checkPat env) pats ps
         (bs, alts) <- checkRhs (extend env (concatMap snd res)) rhs r
         pure (CRow (map fst res) bs alts)
-      let scruts = zipWith (\n p -> CVar n (Inst []) p) names ps
+      let scruts = zipWith (\n p -> CVar n (Inst [] []) p) names ps
       pure (ar, CLam (zip names ps) r (CMatch scruts rows r))
   where
     simple [] [(Nothing, e)] = e
@@ -435,80 +377,194 @@ tcClauses env cs t = do
       (ps, res) <- peel (n - 1 :: Int) r
       pure (p : ps, res)
 
+-- | Brings a body of arity k up to the n arrows of its type, so methods can
+-- be called uncurried whatever way their instance defines them.
+etaTo :: Type -> (Int, CExpr) -> TC CExpr
+etaTo t (k, body) = do
+  t' <- zonkT t
+  let n = arrows t'
+  if k >= n
+    then pure body
+    else do
+      let (ps, r) = splitFun n t'
+          names = ["_eta" ++ show i | i <- [0 .. n - 1]]
+      pure (CLam (zip names ps) r (CApp body [CVar v (Inst [] []) p | (v, p) <- zip names ps]))
+
 -- Module --------------------------------------------------------------------------
 
 typecheck :: [Decl] -> Either String Program
-typecheck ds = evalStateT (tcModule ds) (St 0 IM.empty)
+typecheck ds = evalStateT (tcModule ds) (St 0 IM.empty [] IM.empty)
+
+tyconId :: Name -> String
+tyconId = \case
+  "[]" -> "List"
+  "()" -> "Unit"
+  "(,)" -> "Tup2"
+  "(,,)" -> "Tup3"
+  k -> k
 
 tcModule :: [Decl] -> TC Program
 tcModule ds = do
-  let datas = [(n, ps, cons) | DData n ps cons <- ds]
+  let datas = [(n, ps, cons) | DData n ps cons _ <- ds]
       types = M.union builtinTypes (M.fromList [(n, length ps) | (n, ps, _) <- datas])
-      env00 = Env M.empty builtinCons types
+      envD = Env M.empty builtinCons types M.empty M.empty []
+  -- data types
   userCons <- fmap concat . forM datas $ \(n, ps, cons) ->
     forM (zip [0 ..] cons) $ \(i, ConDecl k fields) -> withCtx n $ do
-      fts <- mapM (\(lz, st) -> (,) lz <$> fromSType env00 (M.fromList [(p, TVar p) | p <- ps]) st) fields
+      fts <- mapM (\(lz, st) -> (,) lz <$> fromSType envD (M.fromList [(p, TVar p) | p <- ps]) st) fields
       pure (k, ConInfo n ps fts i)
   let cons = M.union builtinCons (M.fromList userCons)
       dataInfos = M.fromList $
         [("[]", DataInfo ["a"] ["[]", ":"]), ("Bool", DataInfo [] ["False", "True"])]
           ++ [(n, DataInfo ps [k | ConDecl k _ <- cs]) | (n, ps, cs) <- datas]
-      env0 = env00 {envCons = cons}
+      envC = envD {envCons = cons}
+  -- classes
+  let classDecls = [(sup, c, v, body) | DClass sup c v body <- ds]
+      envK = envC {envClasses = M.fromList [(c, ClassInfo v (map fst sup) [] []) | (sup, c, v, _) <- classDecls]}
+  classes <- fmap M.fromList . forM classDecls $ \(sup, c, v, body) -> withCtx c $ do
+    forM_ sup $ \(s, sv) -> do
+      unless (sv == v) (throw "a superclass must constrain the class variable")
+      unless (M.member s (envClasses envK)) (throw ("unknown class: " ++ s))
+    methods <- fmap concat . forM [(ns, st) | DSig ns _ st <- body] $ \(ns, st) -> do
+      unless (stypeVars st == [v] || null (stypeVars st)) $
+        throw "method types may only mention the class variable (Go fields cannot be generic)"
+      t <- fromSType envK (M.fromList [(v, TVar v)]) st
+      pure [(n, t) | n <- ns]
+    let defaults = [n | DBind n _ <- body]
+    forM_ defaults $ \n -> unless (n `elem` map fst methods) (throw (n ++ " is not a method of " ++ c))
+    pure (c, ClassInfo v (map fst sup) methods defaults)
+  let envCl = envK {envClasses = classes}
+  -- instance heads
+  instDecls <- forM [(ctx, c, st, body) | DInstance ctx c st body <- ds] $ \(ctx, c, st, body) -> withCtx ("instance " ++ c) $ do
+    unless (M.member c classes) (throw ("unknown class: " ++ c))
+    t <- fromSType envCl (rigid st) st
+    (k, vs) <- case t of
+      TCon k args | all isTVar args, length (nub args) == length args -> pure (k, [v | TVar v <- args])
+      _ -> throw "an instance type must be a type constructor applied to distinct variables"
+    preds <- contextPreds envCl ctx
+    pure ((c, k), InstHead ("inst_" ++ c ++ "_" ++ tyconId k) vs preds, t, body)
+  case [key | (key, n) <- M.toList (M.fromListWith (+) [(key, 1 :: Int) | (key, _, _, _) <- instDecls]), n > 1] of
+    ((c, k) : _) -> throw ("duplicate instance " ++ c ++ " " ++ k)
+    [] -> pure ()
+  let env0 = envCl {envInsts = M.fromList [(key, ih) | (key, ih, _, _) <- instDecls]}
+  -- foreign imports, signatures and bindings
   foreigns <- forM [(s, n, st) | DForeign s n st <- ds] $ \(s, n, st) -> withCtx n $ do
     t <- fromSType env0 (rigid st) st
-    pure (n, (Forall (stypeVars st) t, Foreign s t (arrows t)))
-  let sigs = M.fromList [(n, st) | DSig ns st <- ds, n <- ns]
+    pure (n, (Forall (stypeVars st) [] t, Foreign s t (arrows t)))
+  let sigs = M.fromList [(n, (ctx, st)) | DSig ns ctx st <- ds, n <- ns]
       binds = [(n, cs) | DBind n cs <- ds]
       names = map fst binds
-  case [n | (n, k) <- M.toList (M.fromListWith (+) [(n, 1 :: Int) | n <- names]), k > 1] of
+      methodSchemes = [(m, Forall [clsVar ci] [IsIn c (TVar (clsVar ci))] t) | (c, ci) <- M.toList classes, (m, t) <- clsMethods ci]
+  case [n | (n, k) <- M.toList (M.fromListWith (+) [(n, 1 :: Int) | n <- names ++ map fst methodSchemes]), k > 1] of
     (n : _) -> throw ("in " ++ n ++ ": defined more than once")
     [] -> pure ()
-  sigSchemes <- forM (M.toList sigs) $ \(n, st) -> withCtx n $ do
+  sigSchemes <- forM (M.toList sigs) $ \(n, (ctx, st)) -> withCtx n $ do
     t <- fromSType env0 (rigid st) st
-    pure (n, Forall (stypeVars st) t)
+    preds <- contextPreds env0 ctx
+    pure (n, Forall (stypeVars st) preds t)
   let env1 = env0
         { envVars = M.fromList ([(n, (sc, False)) | (n, sc) <- M.toList primSchemes]
             ++ [(n, (sc, False)) | (n, (sc, _)) <- foreigns]
-            ++ [(n, (sc, False)) | (n, sc) <- sigSchemes]) }
+            ++ [(n, (sc, False)) | (n, sc) <- sigSchemes]
+            ++ [(n, (sc, False)) | (n, sc) <- methodSchemes]) }
       unsigned = [b | b@(n, _) <- binds, n `M.notMember` sigs]
       unsignedNames = map fst unsigned
       sccs = stronglyConnComp [(b, n, filter (`elem` unsignedNames) (clausesRefs cs)) | b@(n, cs) <- unsigned]
   (env2, groupBinds) <- foldM tcGroup (env1, []) (zip [1 :: Int ..] sccs)
+  -- bindings with signatures
   signedBinds <- forM [b | b@(n, _) <- binds, n `M.member` sigs] $ \(n, cs) -> withCtx n $ do
-    let st = sigs M.! n
+    let (_, st) = sigs M.! n
+        Forall vs preds _ = M.fromList sigSchemes M.! n
     t <- fromSType env0 (rigid st) st
-    (ar, body) <- tcClauses env2 cs t
-    pure (TopBind n (stypeVars st) t ar body)
+    let envG = withGivens env2 preds
+    (ar, body) <- tcClauses envG cs t
+    _ <- solve envG M.empty
+    pure (TopBind n vs preds t ar body)
+  -- default methods, as ordinary constrained functions
+  defaultBinds <- fmap concat . forM classDecls $ \(_, c, _, body) -> do
+    let ci = classes M.! c
+        v = clsVar ci
+        preds = [IsIn c (TVar v)]
+        envG = withGivens env2 preds
+    forM [(m, cs) | DBind m cs <- body] $ \(m, cs) -> withCtx (c ++ "." ++ m) $ do
+      let t = M.fromList (clsMethods ci) M.! m
+      body' <- tcClauses envG cs t >>= etaTo t
+      _ <- solve envG M.empty
+      pure (TopBind (defaultName c m) [v] preds t (arrows t) body')
+  -- instance bodies
+  insts <- forM instDecls $ \((c, _), ih, headT, body) -> withCtx ("instance " ++ c ++ " " ++ prettyAtom headT) $ do
+    let ci = classes M.! c
+        envG = withGivens env2 (ihCtx ih)
+        defined = M.fromListWith (flip (++)) [(m, cs) | DBind m cs <- body]
+        self = DInst (ihId ih) (map TVar (ihVars ih)) [DParam (dictName pc pv) | IsIn pc (TVar pv) <- ihCtx ih]
+    forM_ (M.keys defined) $ \m -> unless (m `elem` map fst (clsMethods ci)) (throw (m ++ " is not a method of " ++ c))
+    methods <- forM (clsMethods ci) $ \(m, mt) -> withCtx m $ do
+      let t = substT (M.fromList [(clsVar ci, headT)]) mt
+      case M.lookup m defined of
+        Just cs -> do
+          body' <- tcClauses envG cs t >>= etaTo t
+          _ <- solve envG M.empty
+          pure (m, Just body')
+        Nothing
+          | m `elem` clsDefaults ci -> do
+              let n = arrows t
+                  (ps, r) = splitFun n t
+                  argNames = ["_arg" ++ show i | i <- [0 .. n - 1]]
+                  dm = CVar (defaultName c m) (Inst [headT] [self]) t
+              pure (m, Just (if n == 0 then dm else CLam (zip argNames ps) r (CApp dm [CVar a (Inst [] []) p | (a, p) <- zip argNames ps])))
+          | otherwise -> pure (m, Nothing)
+    supers <- forM (clsSupers ci) $ \s -> do
+      d <- newHole (IsIn s headT)
+      _ <- solve envG M.empty
+      pure (s, d)
+    pure (InstInfo (ihId ih) c (ihVars ih) (ihCtx ih) headT methods supers)
   -- main must be an IO action
   case M.lookup "main" (envVars env2) of
     Nothing -> throw "no main defined"
     Just (sc, _) -> withCtx "main" $ do
-      (t, _) <- instantiate sc
+      (t, _, _) <- instantiate sc
       unify t (tIO tUnit)
-  let byName = M.fromList [(tbName b, b) | b <- groupBinds ++ signedBinds]
+      modify (\s -> s {stWanted = []})
+  let allBinds = groupBinds ++ signedBinds ++ defaultBinds
+      byName = M.fromList [(tbName b, b) | b <- allBinds]
       order = flattenSCCs (stronglyConnComp
         [(n, n, filter (`M.member` byName) (clausesRefs cs)) | (n, cs) <- binds])
-  sub <- gets stSub
+      defaults = [tbName b | b <- defaultBinds]
+  st <- get
   pure Program
     { progData = dataInfos
     , progCons = cons
     , progForeign = M.fromList [(n, f) | (n, (_, f)) <- foreigns]
-    , progBinds = map (byName M.!) order
-    , progSubst = sub
+    , progClasses = classes
+    , progInsts = insts
+    , progBinds = map (byName M.!) (order ++ defaults)
+    , progSubst = stSub st
+    , progSolved = stSolved st
     }
   where
+    isTVar (TVar _) = True
+    isTVar _ = False
     tcGroup (env, acc) (gi, scc) = do
       let members = flattenSCC scc
       tys <- mapM (const fresh) members
-      let envG = env {envVars = foldr (\((n, _), t) -> M.insert n (Forall [] t, True)) (envVars env) (zip members tys)}
+      let envG = env {envVars = foldr (\((n, _), t) -> M.insert n (Forall [] [] t, True)) (envVars env) (zip members tys)}
       results <- forM (zip members tys) $ \((n, cs), t) -> withCtx n (tcClauses envG cs t)
+      -- the monomorphism restriction: a group of plain values is not
+      -- generalised over its constraints, which are defaulted instead
+      let restricted = all ((== 0) . fst) results
+      when restricted (void (solve env M.empty))
       zts <- mapM zonkT tys
       let ms = nub (concatMap metas zts)
           vs = ["t" ++ show gi ++ "_" ++ show i | i <- [1 .. length ms]]
+          gen = M.fromList (zip ms vs)
+      preds <- if restricted then pure [] else withCtx (unwords (map fst members)) (solve env gen)
       zipWithM_ (\m v -> bindMeta m (TVar v)) ms vs
       zts' <- mapM zonkT tys
-      let env' = env {envVars = foldr (\((n, _), t) -> M.insert n (Forall vs t, False)) (envVars env) (zip members zts')}
-      pure (env', acc ++ [TopBind n vs t ar body | (((n, _), t), (ar, body)) <- zip (zip members zts') results])
+      let env' = env {envVars = foldr (\((n, _), t) -> M.insert n (Forall vs preds t, False)) (envVars env) (zip members zts')}
+      pure (env', acc ++ [TopBind n vs preds t ar body | (((n, _), t), (ar, body)) <- zip (zip members zts') results])
+
+defaultName :: Name -> Name -> Name
+defaultName c m = "_dm_" ++ c ++ "_" ++ m
 
 -- Approximate references (ignores shadowing), used only for dependency order.
 clausesRefs :: [Clause] -> [Name]
@@ -530,6 +586,7 @@ exprRefs = \case
   ECase s alts -> exprRefs s ++ concat [rhsRefs r | Alt _ r <- alts]
   EDo ss -> concatMap stmtRefs ss
   EOpSeq e0 rest -> exprRefs e0 ++ concat [op : exprRefs x | (op, x) <- rest]
+  EAnn x _ -> exprRefs x
   _ -> []
   where
     stmtRefs (SBind _ e) = exprRefs e

@@ -9,6 +9,7 @@ data Tok
   | TVarSym String
   | TConSym String
   | TInt Integer
+  | TFloat Double
   | TChar Char
   | TStr String
   | TSpecial String   -- ^ ( ) [ ] , ; ` { }
@@ -52,7 +53,11 @@ lexer = go 1 1
            in emit t (length w) rest
       | isDigit ch =
           let (d, rest) = span isDigit s
-           in emit (TInt (read d)) (length d) rest
+           in case rest of
+                '.' : r@(x : _) | isDigit x ->
+                  let (frac, rest') = span isDigit r
+                   in emit (TFloat (read (d ++ "." ++ frac))) (length d + 1 + length frac) rest'
+                _ -> emit (TInt (read d)) (length d) rest
       | ch == '\'' = case lexChar cs of
           Just (v, n, '\'' : rest) -> emit (TChar v) (n + 2) rest
           _ -> Left (pos ++ ": bad character literal")

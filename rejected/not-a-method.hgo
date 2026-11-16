@@ -1,0 +1,9 @@
+-- expects: size is not a method of Eq
+data Box = Box Int
+
+instance Eq Box where
+  Box a == Box b = a == b
+  size _ = 1
+
+main :: IO ()
+main = print (Box 1 == Box 1)

@@ -7,7 +7,7 @@ import System.Environment (getArgs)
 import System.Exit
 import System.FilePath (takeBaseName, (</>))
 import System.IO
-import System.Process (callProcess, rawSystem)
+import System.Process (rawSystem, readProcessWithExitCode)
 
 usage :: String
 usage = unlines
@@ -36,6 +36,12 @@ build file out = do
       writeFile out go
       gofmt <- findExecutable "gofmt"
       case gofmt of
-        Just _ -> callProcess "gofmt" ["-w", out]
+        Just _ -> do
+          (code, _, err) <- readProcessWithExitCode "gofmt" ["-w", out] ""
+          case code of
+            ExitSuccess -> pure ()
+            ExitFailure _ -> do
+              hPutStrLn stderr ("hago produced Go that does not parse (a compiler bug):\n" ++ err)
+              exitFailure
         Nothing -> pure ()
       pure out

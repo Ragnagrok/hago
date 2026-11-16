@@ -3,7 +3,7 @@ module Hago.Syntax where
 
 type Name = String
 
-data Lit = LInt Integer | LChar Char | LStr String
+data Lit = LInt Integer | LDouble Double | LChar Char | LStr String
   deriving (Eq, Show)
 
 -- | Types as the programmer writes them. Lists are @STCon "[]" [t]@, tuples
@@ -33,6 +33,7 @@ data Expr
   | EIf Expr Expr Expr
   | ECase Expr [Alt]
   | EDo [Stmt]
+  | EAnn Expr SType               -- ^ @e :: t@
   | EOpSeq Expr [(Name, Expr)]   -- ^ unresolved operators, removed by 'resolveFixity'
   deriving (Eq, Show)
 
@@ -59,9 +60,14 @@ data ConDecl = ConDecl Name [(Bool, SType)]
 data Assoc = AssocL | AssocR | AssocN
   deriving (Eq, Show)
 
+-- | A class constraint on a type variable, as in @Eq a =>@.
+type Context = [(Name, Name)]
+
 data Decl
-  = DData Name [Name] [ConDecl]
-  | DSig [Name] SType
+  = DData Name [Name] [ConDecl] [Name]   -- ^ with its deriving list
+  | DSig [Name] Context SType
+  | DClass Context Name Name [Decl]       -- ^ superclasses, class, variable, signatures and defaults
+  | DInstance Context Name SType [Decl]   -- ^ context, class, instance type, methods
   | DBind Name [Clause]
   | DFixity Assoc Int [Name]
   | DForeign String Name SType   -- ^ Go symbol, Hago name, type

@@ -6,6 +6,7 @@ module Hago.Driver (compile, compileFile) where
 
 import Data.List (isPrefixOf)
 import Hago.CodeGen (generate)
+import Hago.Derive (expandDeriving)
 import Hago.Embed (embedFile)
 import Hago.Parser (parseModule, resolveFixity)
 import Hago.Typecheck (typecheck)
@@ -21,7 +22,8 @@ compile :: FilePath -> String -> Either String String
 compile file src = do
   prelude <- parseModule "Prelude.hgo" preludeSource
   user <- parseModule file src
-  prog <- either (Left . ((file ++ ": ") ++)) Right (typecheck (resolveFixity (prelude ++ user)))
+  decls <- either (Left . ((file ++ ": ") ++)) Right (expandDeriving (prelude ++ user))
+  prog <- either (Left . ((file ++ ": ") ++)) Right (typecheck (resolveFixity decls))
   pure (generate runtimeSource prog)
 
 compileFile :: FilePath -> IO (Either String String)

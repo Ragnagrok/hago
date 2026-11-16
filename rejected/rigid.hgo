@@ -1,6 +1,6 @@
--- expects: type mismatch: expected a, got Int
+-- expects: type mismatch: expected a, got Bool
 same :: a -> a
-same x = 0
+same x = True
 
 main :: IO ()
 main = print (same 1)

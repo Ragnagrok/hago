@@ -1,7 +1,7 @@
 -- | Typed core: the output of the type checker and the input of code
 -- generation. Every node that Go needs a type for carries one; types may
 -- still mention unification variables, which code generation resolves with
--- the final substitution.
+-- the final substitution. Class constraints are explicit dictionaries.
 module Hago.Core where
 
 import qualified Data.IntMap as IM
@@ -11,17 +11,22 @@ import Hago.Syntax (Lit (..), Name)
 data Type
   = TVar Name          -- ^ rigid (quantified) type variable
   | TMeta Int          -- ^ unification variable
-  | TCon Name [Type]   -- ^ Int, Bool, Char, String, (), [], (,), IO, Lazy, user types
+  | TCon Name [Type]   -- ^ Int, Double, Bool, Char, String, (), [], (,), IO, Lazy, user types
   | TFun Type Type
   deriving (Eq, Show)
 
-data Scheme = Forall [Name] Type
+-- | A class constraint: the class and the type it applies to.
+data Pred = IsIn Name Type
+  deriving (Eq, Show)
+
+data Scheme = Forall [Name] [Pred] Type
   deriving (Show)
 
 type Subst = IM.IntMap Type
 
-tInt, tBool, tChar, tString, tUnit :: Type
+tInt, tDouble, tBool, tChar, tString, tUnit :: Type
 tInt = TCon "Int" []
+tDouble = TCon "Double" []
 tBool = TCon "Bool" []
 tChar = TCon "Char" []
 tString = TCon "String" []
@@ -40,16 +45,25 @@ zonk s t = case t of
   TFun a b -> TFun (zonk s a) (zonk s b)
   _ -> t
 
+-- | Evidence that a constraint holds.
+data Dict
+  = DInst Name [Type] [Dict]   -- ^ an instance, its type arguments and the dictionaries of its context
+  | DParam Name                -- ^ a dictionary parameter in scope
+  | DSuper Dict Name           -- ^ the superclass dictionary of that name inside another one
+  | DHole Int                  -- ^ not solved yet; see 'progSolved'
+  deriving (Show)
+
 -- | How a variable occurrence refers to its binding.
 data VRef
-  = Inst [Type]   -- ^ instantiation of the binding's type parameters
-  | SelfGroup     -- ^ a recursive call inside an unsigned binding group
+  = Inst [Type] [Dict]   -- ^ type arguments and dictionaries for the binding's scheme
+  | SelfGroup            -- ^ a recursive call inside an unsigned binding group
   deriving (Show)
 
 data CExpr
   = CVar Name VRef Type
   | CCon Name [Type] Type           -- ^ constructor, its type arguments, its type
   | CLit Lit
+  | CNum Integer Type Dict          -- ^ an integer literal at a Num type
   | CApp CExpr [CExpr]
   | CLam [(Name, Type)] Type CExpr  -- ^ curried parameters, result type, body
   | CLet [CBind] CExpr Type
@@ -73,6 +87,7 @@ data CPat
   = CPVar Name Type
   | CPWild
   | CPLit Lit
+  | CPNum Integer Type Dict Dict   -- ^ an integer literal at a type with Eq and Num dictionaries
   | CPCon Name [Type] [CPat]
   | CPForce CPat      -- ^ force a lazy field before matching on it
   | CPAs Name Type CPat
@@ -99,9 +114,29 @@ data DataInfo = DataInfo {diParams :: [Name], diCons :: [Name]}
 data Foreign = Foreign {fSymbol :: String, fType :: Type, fArity :: Int}
   deriving (Show)
 
+data ClassInfo = ClassInfo
+  { clsVar :: Name
+  , clsSupers :: [Name]
+  , clsMethods :: [(Name, Type)]   -- ^ in declaration order; types mention only clsVar
+  , clsDefaults :: [Name]          -- ^ methods with a default definition
+  }
+  deriving (Show)
+
+data InstInfo = InstInfo
+  { instId :: Name
+  , instClass :: Name
+  , instVars :: [Name]
+  , instCtx :: [Pred]                     -- ^ constraints on instVars
+  , instHead :: Type
+  , instMethods :: [(Name, Maybe CExpr)]  -- ^ every method of the class, in order; Nothing if missing
+  , instSupers :: [(Name, Dict)]
+  }
+  deriving (Show)
+
 data TopBind = TopBind
   { tbName :: Name
   , tbParams :: [Name]   -- ^ quantified type variables, in order
+  , tbPreds :: [Pred]    -- ^ constraints, one dictionary parameter each
   , tbType :: Type
   , tbArity :: Int
   , tbBody :: CExpr
@@ -112,9 +147,16 @@ data Program = Program
   { progData :: M.Map Name DataInfo
   , progCons :: M.Map Name ConInfo
   , progForeign :: M.Map Name Foreign
+  , progClasses :: M.Map Name ClassInfo
+  , progInsts :: [InstInfo]
   , progBinds :: [TopBind]   -- ^ in dependency order
   , progSubst :: Subst
+  , progSolved :: IM.IntMap Dict
   }
+
+-- | The name of the dictionary parameter for a constraint on a type variable.
+dictName :: Name -> Name -> Name
+dictName cls v = "dict_" ++ cls ++ "_" ++ v
 
 -- | Splits a function type into its first n argument types and the rest.
 splitFun :: Int -> Type -> ([Type], Type)
