@@ -67,6 +67,11 @@ From easiest to hardest, which is the order we take them in.
       even as a plain value), `:load` and `:{ :}`. A transcript without a terminal; `repl/`
       sessions are replayed by `check.sh`. The driver compiles modules given as text.
 
+- [x] **`Integer`, and what the book's first chapters use.** Any size, a `*big.Int` never
+      modified; literals past `Int` are read from their digits; `toInteger` is a method of
+      `Integral`. Also `last` and `init` (with `Maybe`), `words`, `lines`, `notElem`, `scanl`,
+      `scanr`, `scanl1`, `scanr1`, `until`, `lcm`, `logBase`.
+
 Next, found by the JSON program:
 
 - [ ] **Small sum types without allocation.** A non-recursive sum type (`Maybe`, `Either`, a

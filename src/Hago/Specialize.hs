@@ -136,6 +136,10 @@ specialize prog = do
         -- literals at Int and Double are Go literals; elsewhere, a call
         CNum n t d -> case ty rc t of
           t'@(TCon c []) | c `elem` ["Int", "Double"] -> pure (CNum n t' (dict rc d))
+          -- an Integer too big for an Int is read from its digits
+          t'@(TCon "Integer" [])
+            | n > toInteger (maxBound :: Int) || n < toInteger (minBound :: Int) ->
+                pure (CApp (CVar "integerFromString" (Inst [] []) (TFun tString t')) [CLit (LStr (show n))])
           _ -> rw rc (CApp (CVar "fromInteger" (Inst [t] [d]) (TFun tInt t)) [CLit (LInt n)])
         CFrac x t d -> case ty rc t of
           t'@(TCon "Double" []) -> pure (CFrac x t' (dict rc d))

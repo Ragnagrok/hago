@@ -369,7 +369,7 @@ foreign import go "math.MaxInt32"  maxInt32     :: Int
 ```
 
 - `Int`, `Bool`, `Char` y `String` son `int`, `bool`, `rune` y `string` de Go, así que los
-  valores cruzan la frontera sin conversión.
+  valores cruzan la frontera sin conversión. `Integer` es un `*big.Int` que nunca se modifica.
 - Una función de Go que devuelve `(T, error)` se declara como `Either String T`, o
   `IO (Either String T)` si tiene efectos.
 - `IO ()` significa que se la llama por sus efectos y se ignoran sus resultados.
@@ -473,7 +473,7 @@ Haskell 98.
   exponente.
 - `class` con superclases, métodos por defecto y métodos con restricciones, `instance` con
   contextos, clases sobre tipos y sobre constructores de tipos, clases de varios parámetros con
-  una dependencia funcional. `Int`, `Double`, `Char`, `String`, `Bool`.
+  una dependencia funcional. `Int`, `Integer` (de cualquier tamaño, un `*big.Int` de Go), `Double`, `Char`, `String`, `Bool`.
 - Operadores con declaraciones `infixl`/`infixr`/`infix`, secciones, backquotes, tuplas de hasta
   quince elementos (lo que pide Haskell 98; para más, un record), listas literales, y rangos (`[a ..]`, `[a, b ..]`, `[a .. c]`, `[a, b .. c]`) sobre cualquier `Enum`.
 - Polimorfismo de let, con análisis de dependencias de las definiciones sin firma, también para

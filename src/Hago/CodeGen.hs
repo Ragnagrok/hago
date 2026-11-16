@@ -56,7 +56,8 @@ generate runtime prog = unlines (header ++ [runtime] ++ tupleDecls ++ dataDecls 
       , "rt_os \"os\""
       , "rt_strconv \"strconv\""
       , "rt_strings \"strings\""
-      , "rt_sync \"sync\"" ]
+      , "rt_sync \"sync\""
+      , "rt_big \"math/big\"" ]
         ++ [show p | p <- foreignPkgs]
         ++ [")"]
     foreignUses = ["var _ = " ++ snd (splitSymbol (fSymbol f)) | f <- M.elems (progForeign prog), fArity f > 0]
@@ -178,6 +179,7 @@ goTy ctx = render . zonk (progSubst (cxProg ctx))
       TMeta _ -> "struct{}"
       TCon "Int" [] -> "int"
       TCon "Double" [] -> "float64"
+      TCon "Integer" [] -> "*rt_big.Int"
       TCon "Bool" [] -> "bool"
       TCon "Char" [] -> "rune"
       TCon "String" [] -> "string"

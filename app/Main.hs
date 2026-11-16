@@ -3,12 +3,13 @@ module Main (main) where
 
 import Hago.Driver (compileFile)
 import Hago.Repl (repl)
-import System.Directory (createDirectoryIfMissing, findExecutable, getTemporaryDirectory)
+import Control.Exception (finally)
+import System.Directory (createDirectoryIfMissing, findExecutable, getTemporaryDirectory, removeDirectoryRecursive)
 import System.Environment (getArgs)
 import System.Exit
-import System.FilePath (takeBaseName, (</>))
+import System.FilePath (takeBaseName, (<.>), (</>))
 import System.IO
-import System.Process (rawSystem, readProcessWithExitCode)
+import System.Process (getCurrentPid, rawSystem, readProcessWithExitCode)
 
 usage :: String
 usage = unlines
@@ -22,10 +23,11 @@ main = getArgs >>= \args -> case args of
   ["build", file, "-o", out] -> build file out >> pure ()
   ["run", file] -> do
     tmp <- getTemporaryDirectory
-    let dir = tmp </> ("hago-" ++ takeBaseName file)
+    pid <- getCurrentPid
+    let dir = tmp </> ("hago-run-" ++ show pid)
     createDirectoryIfMissing True dir
-    out <- build file (dir </> "main.go")
-    code <- rawSystem "go" ["run", out]
+    code <- (build file (dir </> takeBaseName file <.> "go") >>= \out -> rawSystem "go" ["run", out])
+      `finally` removeDirectoryRecursive dir
     exitWith code
   ["repl"] -> repl Nothing
   ["repl", file] -> repl (Just file)

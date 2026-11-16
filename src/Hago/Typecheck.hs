@@ -67,7 +67,7 @@ infixr 5 ~>
 
 builtinTypes :: M.Map Name Int
 builtinTypes = M.fromList
-  [ ("Int", 0), ("Double", 0), ("Bool", 0), ("Char", 0), ("String", 0), ("()", 0)
+  [ ("Int", 0), ("Integer", 0), ("Double", 0), ("Bool", 0), ("Char", 0), ("String", 0), ("()", 0)
   , ("[]", 1), ("IO", 1), ("Lazy", 1), ("->", 2) ]
     `M.union` M.fromList [(tupleCon n, n) | n <- [2 .. maxTuple]]
 

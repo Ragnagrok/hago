@@ -1,0 +1,24 @@
+-- Integer has no size limit; Int is a 64-bit machine integer.
+
+factorial :: Integer -> Integer
+factorial n = product [1 .. n]
+
+fibs :: [Integer]
+fibs = 0 : 1 : zipWith (+) fibs (drop 1 fibs)
+
+main :: IO ()
+main = do
+  print (factorial 30)
+  print (fibs !! 100)
+  print (2 ^ 64 :: Integer, 2 ^ 64 :: Int)
+  print (123456789012345678901234567890 * 9 :: Integer)
+  -- div rounds down and mod takes the divisor's sign, as for Int
+  print [7 `div` (-2), 7 `mod` (-2), 7 `quot` (-2), 7 `rem` (-2) :: Integer]
+  print (read "-98765432109876543210" :: Maybe Integer)
+  print (gcd (factorial 20) (2 ^ 30), lcm 4 (6 :: Integer))
+  print (toInteger (maxBound :: Int) + 1)
+  -- and some list and text functions
+  print (last [1, 2, 3], init [1, 2, 3], last ([] :: [Int]))
+  print (words "  one two\tthree ", lines "a\nb\n")
+  print (scanl (+) 0 [1, 2, 3], scanr1 max [3, 1, 2], take 4 (scanl1 (*) [1 ..]))
+  print (until (> 1000) (* 3) 1, logBase 2 1024, 'x' `notElem` unpack "abc")

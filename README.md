@@ -353,7 +353,7 @@ foreign import go "math.MaxInt32"  maxInt32     :: Int
 ```
 
 - `Int`, `Bool`, `Char` and `String` are Go's `int`, `bool`, `rune` and `string`, so values cross
-  the boundary unchanged.
+  the boundary unchanged. `Integer` is a `*big.Int` that is never modified.
 - A Go function that returns `(T, error)` is declared as returning `Either String T`, or
   `IO (Either String T)` if it has effects.
 - `IO ()` means the Go function is called for its effects and its results are ignored.
@@ -451,7 +451,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
   pattern bindings (`let (q, r) = ...`), `e :: t` annotations, literals with exponents.
 - `class` with superclasses, default methods and constrained methods, `instance` with contexts,
   classes over types and over type constructors, classes with several parameters and a
-  functional dependency. `Int`, `Double`, `Char`, `String`, `Bool`.
+  functional dependency. `Int`, `Integer` (any size, Go's `*big.Int`), `Double`, `Char`, `String`, `Bool`.
 - Operators with `infixl`/`infixr`/`infix` declarations, sections, backquotes, tuples of up to
   fifteen elements (as Haskell 98 asks; past that, a record), list literals, and ranges (`[a ..]`, `[a, b ..]`, `[a .. c]`, `[a, b .. c]`) over any `Enum`.
 - Let-polymorphism, with dependency analysis of unsigned bindings, for local functions too: a

@@ -6,6 +6,7 @@ package main
 import (
 	rt_bufio "bufio"
 	rt_fmt "fmt"
+	rt_big "math/big"
 	rt_os "os"
 	rt_strconv "strconv"
 	rt_strings "strings"
@@ -56,6 +57,7 @@ func (t *rt_thunk[T]) force() T {
 func rt_lazy[T any](f func() T) func() T { return (&rt_thunk[T]{f: f}).force }
 
 var _ = rt_sync.OnceValue[int]
+var _ = rt_big.NewInt
 func rt_error[T any](msg string) T       { panic(msg) }
 
 // IO is trampolined: running an action yields either its result or the
@@ -109,13 +111,26 @@ func rt_readFile(path string) (string, error) {
 func rt_writeFile(path string, s string) (struct{}, error) {
 	return struct{}{}, rt_os.WriteFile(path, []byte(s), 0o644)
 }
-func rt_getArgs() List[string] {
+func rt_getArgs() List[string] { return rt_stringList(rt_os.Args[1:]) }
+
+func rt_stringList(ss []string) List[string] {
 	var l List[string] = Nil[string]{}
-	for i := len(rt_os.Args) - 1; i >= 1; i-- {
+	for i := len(ss) - 1; i >= 0; i-- {
 		tail := l
-		l = Cons[string]{rt_os.Args[i], func() List[string] { return tail }}
+		l = Cons[string]{ss[i], func() List[string] { return tail }}
 	}
 	return l
+}
+
+// words and lines, as Haskell has them: lines "a\n" is ["a"], and lines ""
+// is [].
+func rt_words(s string) List[string] { return rt_stringList(rt_strings.Fields(s)) }
+
+func rt_lines(s string) List[string] {
+	if s == "" {
+		return Nil[string]{}
+	}
+	return rt_stringList(rt_strings.Split(rt_strings.TrimSuffix(s, "\n"), "\n"))
 }
 
 // Strings, for Data.String. A Go string is sliced without copying.
@@ -193,3 +208,49 @@ func rt_showDouble(x float64) string {
 	}
 	return s
 }
+
+// Integer: a *big.Int that is never changed once made, so values can be shared.
+
+func rt_integerFromInt(n int) *rt_big.Int { return rt_big.NewInt(int64(n)) }
+
+func rt_integerFromString(s string) *rt_big.Int {
+	z, _ := new(rt_big.Int).SetString(s, 10)
+	return z
+}
+
+func rt_integerParse(s string) (*rt_big.Int, error) {
+	z, ok := new(rt_big.Int).SetString(s, 10)
+	if !ok {
+		return nil, rt_fmt.Errorf("not an integer: %q", s)
+	}
+	return z, nil
+}
+
+func rt_integerAdd(a, b *rt_big.Int) *rt_big.Int { return new(rt_big.Int).Add(a, b) }
+func rt_integerSub(a, b *rt_big.Int) *rt_big.Int { return new(rt_big.Int).Sub(a, b) }
+func rt_integerMul(a, b *rt_big.Int) *rt_big.Int { return new(rt_big.Int).Mul(a, b) }
+func rt_integerNeg(a *rt_big.Int) *rt_big.Int    { return new(rt_big.Int).Neg(a) }
+func rt_integerQuot(a, b *rt_big.Int) *rt_big.Int { return new(rt_big.Int).Quo(a, b) }
+func rt_integerRem(a, b *rt_big.Int) *rt_big.Int  { return new(rt_big.Int).Rem(a, b) }
+func rt_integerCompare(a, b *rt_big.Int) int     { return a.Cmp(b) }
+func rt_integerShow(a *rt_big.Int) string        { return a.String() }
+func rt_integerToInt(a *rt_big.Int) int          { return int(a.Int64()) }
+
+func rt_integerToDouble(a *rt_big.Int) float64 {
+	f, _ := new(rt_big.Float).SetInt(a).Float64()
+	return f
+}
+
+// div and mod round towards minus infinity, as Haskell's do; big.Int's
+// DivMod is Euclidean, which differs when the divisor is negative.
+func rt_integerDivMod(a, b *rt_big.Int) (*rt_big.Int, *rt_big.Int) {
+	q, m := new(rt_big.Int).DivMod(a, b, new(rt_big.Int))
+	if b.Sign() < 0 && m.Sign() != 0 {
+		q.Sub(q, rt_big.NewInt(1))
+		m.Add(m, b)
+	}
+	return q, m
+}
+
+func rt_integerDiv(a, b *rt_big.Int) *rt_big.Int { q, _ := rt_integerDivMod(a, b); return q }
+func rt_integerMod(a, b *rt_big.Int) *rt_big.Int { _, m := rt_integerDivMod(a, b); return m }

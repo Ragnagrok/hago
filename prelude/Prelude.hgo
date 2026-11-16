@@ -242,6 +242,8 @@ class Num a where
 class (Num a, Ord a) => Integral a where
   div, mod, quot, rem :: a -> a -> a
   toInt :: a -> Int
+  toInteger :: a -> Integer
+  toInteger x = integerFromInt (toInt x)
 
 class Num a => Fractional a where
   (/) :: a -> a -> a
@@ -270,6 +272,12 @@ subtract x y = y - x
 
 gcd :: Integral a => a -> a -> a
 gcd a b = if b == 0 then abs a else gcd b (a `mod` b)
+
+lcm :: Integral a => a -> a -> a
+lcm x y = if x == 0 || y == 0 then 0 else abs ((x `quot` gcd x y) * y)
+
+logBase :: Floating a => a -> a -> a
+logBase b x = log x / log b
 
 (^) :: (Num a, Integral b) => a -> b -> a
 (^) x n = if n <= 0 then 1 else x * (x ^ (n - 1))
@@ -319,6 +327,53 @@ instance Integral Int where
   quot x y = primQuot x y
   rem x y = primRem x y
   toInt x = x
+
+-- Integer, of any size, is Go's *big.Int.
+foreign import go "rt_integerFromInt" integerFromInt :: Int -> Integer
+foreign import go "rt_integerFromString" integerFromString :: String -> Integer
+foreign import go "rt_integerParse" integerParse :: String -> Either String Integer
+foreign import go "rt_integerAdd" integerAdd :: Integer -> Integer -> Integer
+foreign import go "rt_integerSub" integerSub :: Integer -> Integer -> Integer
+foreign import go "rt_integerMul" integerMul :: Integer -> Integer -> Integer
+foreign import go "rt_integerNeg" integerNeg :: Integer -> Integer
+foreign import go "rt_integerDiv" integerDiv :: Integer -> Integer -> Integer
+foreign import go "rt_integerMod" integerMod :: Integer -> Integer -> Integer
+foreign import go "rt_integerQuot" integerQuot :: Integer -> Integer -> Integer
+foreign import go "rt_integerRem" integerRem :: Integer -> Integer -> Integer
+foreign import go "rt_integerCompare" integerCompare :: Integer -> Integer -> Int
+foreign import go "rt_integerShow" integerShow :: Integer -> String
+foreign import go "rt_integerToInt" integerToInt :: Integer -> Int
+foreign import go "rt_integerToDouble" integerToDouble :: Integer -> Double
+
+instance Eq Integer where
+  x == y = integerCompare x y == 0
+  x /= y = integerCompare x y /= 0
+
+instance Ord Integer where
+  compare x y = compare (integerCompare x y) 0
+  x < y = integerCompare x y < 0
+  x <= y = integerCompare x y <= 0
+  x > y = integerCompare x y > 0
+  x >= y = integerCompare x y >= 0
+
+instance Show Integer where
+  show x = integerShow x
+  showsPrec d x = if d > 6 && x < 0 then "(" ++ integerShow x ++ ")" else integerShow x
+
+instance Num Integer where
+  x + y = integerAdd x y
+  x - y = integerSub x y
+  x * y = integerMul x y
+  negate x = integerNeg x
+  fromInteger n = integerFromInt n
+
+instance Integral Integer where
+  div x y = integerDiv x y
+  mod x y = integerMod x y
+  quot x y = integerQuot x y
+  rem x y = integerRem x y
+  toInt x = integerToInt x
+  toInteger x = x
 
 instance Eq Double where
   x == y = primEq x y
@@ -627,6 +682,9 @@ product xs = foldl (*) 1 xs
 elem :: (Foldable t, Eq a) => a -> t a -> Bool
 elem x xs = any (\y -> y == x) xs
 
+notElem :: (Foldable t, Eq a) => a -> t a -> Bool
+notElem x xs = not (elem x xs)
+
 and :: Foldable t => t Bool -> Bool
 and xs = foldr (&&) True xs
 
@@ -822,6 +880,47 @@ cycle :: [a] -> [a]
 cycle [] = []
 cycle xs = xs ++ cycle xs
 
+last :: [a] -> Maybe a
+last [] = Nothing
+last [x] = Just x
+last (_:xs) = last xs
+
+-- Everything but the last element.
+init :: [a] -> Maybe [a]
+init [] = Nothing
+init xs = Just (dropLast xs)
+  where
+    dropLast (y:ys@(_:_)) = y : dropLast ys
+    dropLast _ = []
+
+scanl :: (b -> a -> b) -> b -> [a] -> [b]
+scanl f z xs = z : case xs of
+  [] -> []
+  y:ys -> scanl f (f z y) ys
+
+scanl1 :: (a -> a -> a) -> [a] -> [a]
+scanl1 _ [] = []
+scanl1 f (x:xs) = scanl f x xs
+
+scanr :: (a -> b -> b) -> b -> [a] -> [b]
+scanr _ z [] = [z]
+scanr f z (x:xs) = case scanr f z xs of
+  qs@(q:_) -> f x q : qs
+  [] -> []
+
+scanr1 :: (a -> a -> a) -> [a] -> [a]
+scanr1 _ [] = []
+scanr1 _ [x] = [x]
+scanr1 f (x:xs) = case scanr1 f xs of
+  qs@(q:_) -> f x q : qs
+  [] -> []
+
+until :: (a -> Bool) -> (a -> a) -> a -> a
+until p f x = if p x then x else until p f (f x)
+
+foreign import go "rt_words" words :: String -> [String]
+foreign import go "rt_lines" lines :: String -> [String]
+
 -- Characters -------------------------------------------------------------------
 
 foreign import go "unicode.IsSpace" isSpace :: Char -> Bool
@@ -929,6 +1028,9 @@ fromRight (Left _) = Nothing
 
 instance Read Int where
   readsPrec = readParens (readSigned (\t -> fromRight (goAtoi t)))
+
+instance Read Integer where
+  readsPrec = readParens (readSigned (\t -> fromRight (integerParse t)))
 
 instance Read Double where
   readsPrec = readParens (readSigned (\t -> fromRight (goParseFloat t 64)))
@@ -1067,6 +1169,24 @@ instance Enum Int where
   enumFromThen n m = intsFrom n (m - n)
   enumFromTo n m = intsTo n 1 m
   enumFromThenTo n m k = intsTo n (m - n) k
+
+instance Enum Integer where
+  fromEnum n = toInt n
+  toEnum n = Just (integerFromInt n)
+  succ n = Just (n + 1)
+  pred n = Just (n - 1)
+  enumFrom n = integersFrom n 1
+  enumFromThen n m = integersFrom n (m - n)
+  enumFromTo n m = integersTo n 1 m
+  enumFromThenTo n m k = integersTo n (m - n) k
+
+integersFrom :: Integer -> Integer -> [Integer]
+integersFrom n step = n : integersFrom (n + step) step
+
+integersTo :: Integer -> Integer -> Integer -> [Integer]
+integersTo n step limit
+  | step >= 0 = if n > limit then [] else n : integersTo (n + step) step limit
+  | otherwise = if n < limit then [] else n : integersTo (n + step) step limit
 
 instance Bounded Int where
   minBound = negate 9223372036854775807 - 1
