@@ -151,11 +151,15 @@ module Data.Stack (Stack, empty, push, pop) where   -- Stack is abstract
 import qualified Data.Stack as S
 import Geometry.Shapes (Shape(..), area)
 import Geometry.Shapes hiding (perimeter)
+
+module Geometry (module Geometry.Shapes, scale) where   -- re-exports Geometry.Shapes
 ```
 
 - **A module `A.B` lives in `A/B.hgo`,** next to the main file, which is `Main`.
 - **Export and import lists, `qualified`, `as` and `hiding`** work as in Haskell. A type
   exported without `(..)` is abstract.
+- **A module can re-export** names it imports, one by one or a whole module with `module M`.
+  Two different things with the same name in one export list are an error.
 - **Your own definitions shadow imported ones,** so a module can define its own `toList`. Two
   imports giving the same name a different meaning are ambiguous only where the name is used.
 - **Instances are global,** as in Haskell.
@@ -356,7 +360,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 - **`String` is Go's `string`, not `[Char]`.** Convert with `pack` and `unpack`.
 - Tuples beyond three, and updates that change a record's type.
 - **Modules compile together with the program,** with no separate compilation or package
-  manager, and a module cannot re-export another (`module M` in an export list).
+  manager.
 - **Long loops in pure monads like `State` use stack,** because their `>>=` is a chain of Go
   calls. Write those loops with `tailRecM`. In IO and transformers over IO they are flat.
 - **No multi-parameter classes,** so no mtl-style `MonadState s m`: transformers come with

@@ -1,0 +1,9 @@
+-- Re-exports: whoever imports Geometry also gets everything Geometry.Shapes
+-- exports, plus scale.
+module Geometry (module Geometry.Shapes, scale) where
+
+import Geometry.Shapes
+
+scale :: Double -> Shape -> Shape
+scale k (Circle r) = Circle (k * r)
+scale k (Rect w h) = Rect (k * w) (k * h)

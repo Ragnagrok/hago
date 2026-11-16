@@ -156,11 +156,15 @@ module Data.Stack (Stack, empty, push, pop) where   -- Stack es abstracto
 import qualified Data.Stack as S
 import Geometry.Shapes (Shape(..), area)
 import Geometry.Shapes hiding (perimeter)
+
+module Geometry (module Geometry.Shapes, scale) where   -- reexporta Geometry.Shapes
 ```
 
 - **Un módulo `A.B` vive en `A/B.hgo`,** junto al archivo principal, que es `Main`.
 - **Las listas de exportación e importación, `qualified`, `as` y `hiding`** funcionan como en
   Haskell. Un tipo exportado sin `(..)` es abstracto.
+- **Un módulo puede reexportar** lo que importa, nombre por nombre o un módulo entero con
+  `module M`. Dos cosas distintas con el mismo nombre en una lista de exportación son un error.
 - **Las definiciones propias tapan a las importadas,** así que un módulo puede definir su propio
   `toList`. Dos importaciones que le dan significados distintos a un mismo nombre son ambiguas
   sólo donde ese nombre se usa.
@@ -371,7 +375,7 @@ Haskell 98.
 - **`String` es el `string` de Go, no `[Char]`.** Se convierte con `pack` y `unpack`.
 - Tuplas de más de tres, y actualizaciones que cambien el tipo de un record.
 - **Los módulos se compilan junto con el programa,** sin compilación separada ni gestor de
-  paquetes, y un módulo no puede reexportar otro (`module M` en una lista de exportación).
+  paquetes.
 - **Los loops largos en mónadas puras como `State` consumen pila,** porque su `>>=` es una
   cadena de llamadas de Go. Esos loops se escriben con `tailRecM`. En IO y en transformadores
   sobre IO no consumen pila.

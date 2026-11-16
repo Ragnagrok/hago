@@ -60,27 +60,50 @@ tableOf m = Table vals types children
       [(ddName d, [k | ConDecl k _ _ <- ddCons d]) | DData d <- ds]
         ++ [(c, [n | DSig ns _ _ <- body, n <- ns]) | DClass _ c _ body <- ds]
 
--- | The part of a table a module lets others see.
-exportsOf :: Module -> Table -> Rn Table
-exportsOf m t = case modExports m of
-  Nothing -> pure t
+-- | The part of a table a module lets others see: its own names, the names
+-- it imports, and whole modules it imports (@module M@). Children maps a
+-- type's internal name to its constructors or methods.
+exportsOf :: M.Map Name [Name] -> [(Import, (M.Map Name Name, M.Map Name Name))] -> Table -> Module -> Rn Table
+exportsOf children brought ownT m = case modExports m of
+  Nothing -> pure ownT
   Just items -> do
     picked <- mapM pick items
-    let vs = concat [v | (v, _) <- picked]
-        ts = concat [ty | (_, ty) <- picked]
-    pure (Table (M.restrictKeys (tVals t) (S.fromList vs)) (M.restrictKeys (tTypes t) (S.fromList ts)) (tChildren t))
+    vals <- merge (concatMap fst picked)
+    types <- merge (concatMap snd picked)
+    pure (Table vals types (M.map (\i -> M.findWithDefault [] i children) types))
   where
+    unq f = M.fromListWith (++) [(k, [v]) | (imp, bs) <- brought, not (impQualified imp), (k, v) <- M.toList (f bs)]
+    -- own names shadow imported ones, as inside the module
+    lookupIn ownMap impMap x = case M.lookup x ownMap of
+      Just i -> pure (Just i)
+      Nothing -> case nub (M.findWithDefault [] x impMap) of
+        [] -> pure Nothing
+        [i] -> pure (Just i)
+        is -> failExport (x ++ " is ambiguous: it could be " ++ intercalate " or " (sort is))
+    val = lookupIn (tVals ownT) (unq fst)
+    typ = lookupIn (tTypes ownT) (unq snd)
+    notDefined x = failExport (x ++ " is not in scope")
+    failExport msg = Left (showLoc (modLoc m) ++ ": in the export list of " ++ modName m ++ ": " ++ msg)
     pick = \case
-      IVar x
-        | M.member x (tVals t) -> pure ([x], [])
-        | otherwise -> Left (modName m ++ ": exports " ++ x ++ ", which it does not define")
-      IType x sub
-        | M.member x (tTypes t) -> pure (subNames x sub, [x])
-        | otherwise -> Left (modName m ++ ": exports " ++ x ++ ", which it does not define")
-    subNames x = \case
-      SubNone -> []
-      SubAll -> M.findWithDefault [] x (tChildren t)
-      SubSome ns -> ns
+      IVar x -> val x >>= maybe (notDefined x) (\i -> pure ([(x, i)], []))
+      IType x sub -> typ x >>= \case
+        Nothing -> notDefined x
+        Just i -> do
+          let kids = case sub of
+                SubNone -> []
+                SubAll -> M.findWithDefault [] i children
+                SubSome ns -> ns
+          vs <- forM kids (\k -> fmap ((,) k) <$> val k)
+          pure ([v | Just v <- vs], [(x, i)])
+      IModule q
+        | q == modName m -> pure (M.toList (tVals ownT), M.toList (tTypes ownT))
+        | otherwise -> case [bs | (imp, bs) <- brought, not (impQualified imp), fromMaybe (impModule imp) (impAs imp) == q] of
+            [] -> failExport ("module " ++ q ++ " is not imported, or only qualified")
+            bss -> pure (concatMap (M.toList . fst) bss, concatMap (M.toList . snd) bss)
+    merge = foldM add M.empty
+    add acc (k, v) = case M.lookup k acc of
+      Just v' | v' /= v -> failExport ("two things named " ++ k ++ " are exported: " ++ v' ++ " and " ++ v)
+      _ -> pure (M.insert k v acc)
 
 -- | What an import brings, after its list or hiding clause.
 imported :: Import -> Table -> (M.Map Name Name, M.Map Name Name)
@@ -92,32 +115,48 @@ imported imp t = (M.filterWithKey keepV (tVals t), M.filterWithKey keepT (tTypes
       IType x SubAll -> M.findWithDefault [] x (tChildren t)
       IType _ (SubSome ns) -> ns
       IType _ SubNone -> []
+      IModule _ -> []
     (onlyV, onlyT) = maybe (S.empty, S.empty) named (impOnly imp)
     (hideV, hideT) = named (impHiding imp)
     keepV k _ = maybe True (const (S.member k onlyV)) (impOnly imp) && not (S.member k hideV)
     keepT k _ = maybe True (const (S.member k onlyT)) (impOnly imp) && not (S.member k hideT)
 
 -- | Renames every module (the Prelude first) into one list of declarations.
+-- Modules come with their dependencies first, so what a module exports,
+-- which can include what it imports, is known before anyone imports it.
 renameModules :: [Module] -> Rn [Decl]
 renameModules mods = do
   let tables = M.fromList [(modName m, tableOf m) | m <- mods]
-  exportTables <- M.fromList <$> forM mods (\m -> (,) (modName m) <$> exportsOf m (tables M.! modName m))
+      children = M.fromList
+        [ (i, M.findWithDefault [] k (tChildren t))
+        | t <- M.elems tables, (k, i) <- M.toList (tTypes t) ]
+  exportTables <- foldM
+    (\acc m -> do
+        brought <- importsOf acc m
+        e <- exportsOf children brought (tables M.! modName m) m
+        pure (M.insert (modName m) e acc))
+    M.empty mods
   let fields = M.fromListWith (++)
         [ (lab, [(q (ddName d), map q ks)])
         | m <- mods, let q = moduleQualify (modName m), DData d <- modDecls m
         , let ks = [k | ConDecl k _ _ <- ddCons d], lab <- nub (concat [ls | ConDecl _ _ ls <- ddCons d]) ]
-  concat <$> forM mods (\m -> renameModule exportTables fields (tables M.! modName m) m)
+  concat <$> forM mods (\m -> do
+    brought <- importsOf exportTables m
+    renameModule exportTables brought fields (tables M.! modName m) m)
+
+-- | Each import of a module, with what it brings.
+importsOf :: M.Map Name Table -> Module -> Rn [(Import, (M.Map Name Name, M.Map Name Name))]
+importsOf exportTables m = do
+  let explicitPrelude = any ((== "Prelude") . impModule) (modImports m)
+      implicit = [Import "Prelude" False Nothing Nothing [] ("", 0, 0) | modName m /= "Prelude", not explicitPrelude]
+  forM (modImports m ++ implicit) $ \imp -> case M.lookup (impModule imp) exportTables of
+    Nothing -> Left (showLoc (impLoc imp) ++ ": unknown module " ++ impModule imp)
+    Just t -> pure (imp, imported imp t)
 
 -- | The fields of a record type can be used wherever one of its constructors
 -- is in scope, qualified or not: a type exported abstractly keeps them hidden.
-renameModule :: M.Map Name Table -> M.Map Name [(Name, [Name])] -> Table -> Module -> Rn [Decl]
-renameModule exportTables fields ownTable m = do
-  let explicitPrelude = any ((== "Prelude") . impModule) (modImports m)
-      implicit = [Import "Prelude" False Nothing Nothing [] ("", 0, 0) | modName m /= "Prelude", not explicitPrelude]
-      imports = modImports m ++ implicit
-  brought <- forM imports $ \imp -> case M.lookup (impModule imp) exportTables of
-    Nothing -> Left (showLoc (impLoc imp) ++ ": unknown module " ++ impModule imp)
-    Just t -> pure (imp, imported imp t)
+renameModule :: M.Map Name Table -> [(Import, (M.Map Name Name, M.Map Name Name))] -> M.Map Name [(Name, [Name])] -> Table -> Module -> Rn [Decl]
+renameModule exportTables brought fields ownTable m = do
   let prelude = M.findWithDefault (Table M.empty M.empty M.empty) "Prelude" exportTables
       unq f = M.fromListWith (++) [(k, [v]) | (imp, bs) <- brought, not (impQualified imp), (k, v) <- M.toList (f bs)]
       qual f = M.fromList $

@@ -1,0 +1,5 @@
+-- expects: rejected/Lib/Clash.hgo:1:1: in the export list of Lib.Clash: two things named value are exported: Lib.Other.value and Lib.Secret.value
+import Lib.Clash
+
+main :: IO ()
+main = print value

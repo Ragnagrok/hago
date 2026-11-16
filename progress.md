@@ -8,7 +8,7 @@ work it describes.
 From easiest to hardest, which is the order we take them in.
 
 - [x] **Errors quote the source.** The line and a mark under the place, after file:line:column.
-- [ ] **Re-exports.** `module M` in an export list.
+- [x] **Re-exports.** `module M` and imported names in an export list.
 - [ ] **Tuples of any size.** Today only pairs and triples, with their instances.
 - [ ] **`Enum`.** `[a..b]`, `[a,b..c]`, `succ`/`pred` for `Char`, `Double` and derived enumerations
       (`deriving Enum` for types whose constructors have no fields). Today ranges only work on `Int`.
@@ -52,7 +52,7 @@ From easiest to hardest, which is the order we take them in.
 
 ## How to check
 
-`./check.sh` builds the compiler, compiles and runs every `examples/*.hgo` comparing its output with
-the `.out` next to it, and checks that every program in `rejected/` fails with the error on its
+`./check.sh` builds the compiler, compiles and runs every example program (each `examples/*.hgo`
+with an `.out` next to it; the rest are modules) comparing its output with that `.out`, and checks that every program in `rejected/` fails with the error on its
 `-- expects:` line.
 CI runs the same script on every push.

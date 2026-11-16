@@ -130,16 +130,21 @@ operator = varSym <|> conSym <|> (special "`" *> (varId <|> conId) <* special "`
 
 pModule :: Parser Module
 pModule = do
+  file <- getState
   header <- optionMaybe $ do
+    l <- here
     key "module"
     name <- conId
-    exports <- optionMaybe (parens (item `sepEndBy` special ","))
+    exports <- optionMaybe (parens (exportItem `sepEndBy` special ","))
     key "where"
-    pure (name, exports)
+    pure (name, exports, l)
   items <- block ((Left <$> importDecl) <|> (Right <$> topDecl))
   eof
-  let (name, exports) = maybe ("Main", Nothing) id header
-  pure (Module name exports [i | Left i <- items] (groupClauses (concat [d | Right d <- items])))
+  let (name, exports, l) = maybe ("Main", Nothing, (file, 1, 1)) id header
+  pure (Module name exports [i | Left i <- items] (groupClauses (concat [d | Right d <- items])) l)
+
+exportItem :: Parser Item
+exportItem = (IModule <$> (key "module" *> conId)) <|> item
 
 -- | An entry of an import or export list.
 item :: Parser Item

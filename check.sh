@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds the compiler, compiles and runs every example comparing its output
-# with the .out file next to it, and checks that every file in rejected/ fails
+# Builds the compiler, compiles and runs every example program comparing its
+# output with the .out file next to it, and checks that every file in rejected/ fails
 # with the error announced on its "-- expects:" line.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -11,8 +11,10 @@ out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 
 failures=0
-for f in examples/*.hgo; do
-  name=$(basename "$f" .hgo)
+# a program has an .out next to it; the other .hgo files are its modules
+for expected_out in examples/*.out; do
+  name=$(basename "$expected_out" .out)
+  f="examples/$name.hgo"
   mkdir -p "$out/$name"
   if ! "$hago" build "$f" -o "$out/$name/main.go"; then
     echo "FAIL $f doesn't compile"; failures=1; continue

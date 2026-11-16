@@ -1,8 +1,8 @@
--- Modules: export lists, abstract types, qualified imports, and a name of
--- our own that shadows the Prelude's.
+-- Modules: export lists, re-exports, abstract types, qualified imports, and
+-- a name of our own that shadows the Prelude's.
 module Main where
 
-import Geometry.Shapes (Shape(..), area, perimeter)
+import Geometry (Shape(..), area, perimeter, scale)
 import qualified Data.Stack as S
 import Data.Stack (Stack)
 
@@ -13,6 +13,7 @@ main :: IO ()
 main = do
   mapM_ (\s -> putStrLn (show s ++ ": " ++ show (area s))) [Circle 1.0, Rect 2.0 3.0]
   print (perimeter (Rect 2.0 3.0))
+  print (area (scale 2.0 (Rect 2.0 3.0)))
   let s = S.push 3 (S.push 2 (S.push 1 S.empty))
   print (toList s)
   print (S.pop s)

@@ -1,0 +1,5 @@
+-- expects: rejected/Lib/Reexport.hgo:1:1: in the export list of Lib.Reexport: module Lib.Other is not imported, or only qualified
+import Lib.Reexport
+
+main :: IO ()
+main = print value

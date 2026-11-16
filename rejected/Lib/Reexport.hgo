@@ -1,0 +1,4 @@
+module Lib.Reexport (module Lib.Other, module Lib.Secret) where
+
+import qualified Lib.Other
+import Lib.Secret

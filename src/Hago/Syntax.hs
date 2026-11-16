@@ -129,8 +129,9 @@ unqual :: Name -> Name
 unqual = snd . splitQual
 
 -- | What an import or export list names: a value, or a type or class with
--- none, all or some of its constructors or methods.
-data Item = IVar Name | IType Name Sub
+-- none, all or some of its constructors or methods. An export list can also
+-- name a whole module, to re-export what it imports from it.
+data Item = IVar Name | IType Name Sub | IModule Name
   deriving (Eq, Show)
 
 data Sub = SubNone | SubAll | SubSome [Name]
@@ -151,5 +152,6 @@ data Module = Module
   , modExports :: Maybe [Item]
   , modImports :: [Import]
   , modDecls :: [Decl]
+  , modLoc :: Loc                          -- ^ where the module header is
   }
   deriving (Show)
