@@ -21,8 +21,10 @@ From easiest to hardest, which is the order we take them in.
       `Bool`, `()`, lists, tuples, `Maybe`, `Either`, `Ordering`, and `deriving Read` (records too).
       On the way: pattern bindings (`let (a, b) = e`), literals with exponents, `span`, `break`,
       `isSpace` and friends.
-- [ ] **Share polymorphic top-level values.** `xs = []` becomes a generic Go function and is
-      re-evaluated on each use; cache one value per instantiation.
+- [x] **Share polymorphic top-level values.** A polymorphic value is a template, one shared Go
+      variable per concrete instantiation (5.2 s → 0.9 s on a 50-use benchmark). Still recomputed
+      when used inside a generic function at its type variable. Fixed on the way: values are
+      initialised in dependency order, functions included.
 - [ ] **Polymorphic local definitions.** `let`/`where` bindings are monomorphic because Go function
       literals cannot be generic; lift polymorphic ones to the top level.
 - [ ] **Less visible `Lazy`.** A type error can still mention `Lazy` (`liftA2 (:)` is one; a lambda

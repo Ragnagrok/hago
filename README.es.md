@@ -111,6 +111,11 @@ Las clases se compilan por **especialización**, como en Rust y MLton:
   podría existir de todos modos.
 - **Las variables de tipo sin restricciones siguen siendo genéricos de Go,** así que `map` sigue
   siendo una sola función.
+- **Un valor polimórfico también es una plantilla,** así que se calcula una vez por tipo.
+  `table :: Num a => [a]` usada en `Int` y en `Double` se vuelve dos variables de Go, cada una
+  calculada una vez, como pasaría con un valor monomórfico. Sólo un uso dentro de una función
+  genérica, en la variable de tipo de esa función, lo recalcula, porque Go no tiene variables
+  genéricas.
 
 ## Una jerarquía sin los errores de Haskell
 
@@ -391,8 +396,8 @@ Haskell 98.
   transformadores se usan con `lift` explícito.
 - **Las definiciones locales son monomórficas.** Las funciones literales de Go no pueden ser
   genéricas.
-- **Los valores polimórficos del nivel superior no se comparten.** `xs = []` se vuelve una
-  función genérica y se reevalúa en cada uso.
+- **Un valor polimórfico usado dentro de una función genérica se recalcula ahí,** en la variable
+  de tipo de esa función. En tipos concretos se calcula una sola vez.
 - **`Lazy` es un tipo de verdad.** La pereza sólo llega hasta donde la llevan los tipos. Por
   ejemplo, `foldr` toma `a -> Lazy b -> b` para poder cortar antes, y `++` y `<>` suspenden su
   segundo argumento. La adaptación automática cubre el caso de pasar funciones estrictas, pero

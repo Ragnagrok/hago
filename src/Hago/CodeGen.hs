@@ -15,6 +15,7 @@ import Data.Graph (flattenSCCs, stronglyConnComp)
 import Data.List (intercalate, isPrefixOf, nub, sort)
 import qualified Data.IntMap as IM
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Data.Maybe (fromMaybe)
 import Hago.Core
 import Hago.Syntax (Lit (..), Name, splitQual, tupleArity, unqual)
@@ -88,10 +89,17 @@ generate runtime prog = unlines (header ++ [runtime] ++ tupleDecls ++ dataDecls 
     classDecls = concatMap (genClass ctx0)
       [c | c@(n, _) <- M.toList (progClasses prog), n `elem` map instClass (progInsts prog)]
     ((tops, inits), (instDecls, dictInits)) = flip evalState (GS 0 False) $ do
-      ts <- unzip <$> mapM (genTop ctx0) (progBinds prog)
+      ts <- unzip <$> mapM (genTop ctx0) initOrder
       is <- unzip <$> mapM (genInst ctx0) (progInsts prog)
       pure (ts, (concat (fst is), concat (snd is)))
     initBlock = ["func init() {"] ++ dictInits ++ concat inits ++ ["}"]
+    -- values are initialised in order, so each comes after everything its
+    -- computation reaches, functions included; copies made by specialisation
+    -- would otherwise come after their users
+    initOrder =
+      let names = S.fromList (map tbName (progBinds prog))
+       in flattenSCCs (stronglyConnComp
+            [(b, tbName b, filter (`S.member` names) (coreRefs (tbBody b))) | b <- progBinds prog])
     -- drop the global reference first, so actions already run can be collected
     mainFn = ["func main() {", "m := " ++ mangle "main", mangle "main" ++ " = nil", "rt_run(m)", "}"]
 

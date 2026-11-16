@@ -81,10 +81,15 @@ specialize prog = do
         , let mpreds = drop 1 ps
         , let t = norm (substTV (M.singleton (clsVar ci) (instHead inst)) (zonk sub mt)) ]
       ents = M.fromList [(eName e, e) | e <- topEnts ++ instEnts]
-      hkParams e =
-        [ v | v <- eTParams e
-        , v `elem` headVars (eType e) || v `elem` dataHkVars (progData prog) (eType e)
-            || or [w == v | (_, IsIn _ (TVar w)) <- eDicts e] ]
+      hkParams e
+        | isValue e = eTParams e
+        | otherwise =
+            [ v | v <- eTParams e
+            , v `elem` headVars (eType e) || v `elem` dataHkVars (progData prog) (eType e)
+                || or [w == v | (_, IsIn _ (TVar w)) <- eDicts e] ]
+      -- a polymorphic value, like xs :: [a] or table :: Num a => [a], is a
+      -- template too: each copy at concrete types is computed once and shared
+      isValue e = eArity e == 0 && arrows (eType e) == 0
       isTemplate e = not (null (hkParams e))
 
       ty rc t = norm (substTV (rcTy rc) (zonk sub t))
@@ -179,9 +184,11 @@ specialize prog = do
           (CSLet bs' :) <$> rwStmts rc' rest
 
       -- a call to a template: find or schedule the copy for these constructors
-      useEnt x ts ds t = do
+      useEnt x ts0 ds t = do
         let ent = ents M.! x
             hk = hkParams ent
+            -- a type nothing fixes is (), as everywhere else
+            ts = if isValue ent then map defaultMetas ts0 else ts0
         if null hk
           then pure (CVar x (Inst ts ds) t)
           else do
@@ -256,10 +263,10 @@ specialize prog = do
       runJob (Job e n tmap dmap extraT extraD) = do
         let hk = hkParams e
             rc = RC tmap dmap e S.empty
+            tparams = filter (`notElem` hk) (eTParams e) ++ extraT
+            dicts = [(dn, IsIn c (ty rc t)) | (dn, IsIn c t) <- eDicts e, not (isStatic c)] ++ extraD
         b <- rw rc (eBody e)
-        emit (TopBind n (filter (`notElem` hk) (eTParams e) ++ extraT)
-                ([(dn, IsIn c (ty rc t)) | (dn, IsIn c t) <- eDicts e, not (isStatic c)] ++ extraD)
-                (ty rc (eType e)) (eArity e) b False)
+        emit (TopBind n tparams dicts (ty rc (eType e)) (eArity e) b (isValue e && null tparams && null dicts))
 
       emit b = modify (\s -> s {ssOut = b : ssOut s})
 
@@ -289,6 +296,12 @@ specialize prog = do
           names = ["_arg" ++ show i | i <- [0 .. n - 1]]
           err = CApp (CVar "error" (Inst [r] []) (TFun tString r)) [CLit (LStr ("no " ++ m ++ " in this instance"))]
        in if n == 0 then err else CLam (zip names ps) r err
+    defaultMetas t = case t of
+      TMeta _ -> tUnit
+      TCon c ts -> TCon c (map defaultMetas ts)
+      TFun a b -> TFun (defaultMetas a) (defaultMetas b)
+      TApp f x -> TApp (defaultMetas f) (defaultMetas x)
+      TVar v -> TVar v
     hasMeta t = case t of
       TMeta _ -> True
       TCon _ ts -> any hasMeta ts

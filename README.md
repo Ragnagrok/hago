@@ -108,6 +108,10 @@ Classes compile by **specialisation**, as in Rust and MLton:
 - **No dictionary exists at run time.** Go generics range over types, not type constructors
   (there is no `F[_]`), so a `Functor f` dictionary could not exist anyway.
 - **Type variables without constraints stay Go generics,** so `map` is still one function.
+- **A polymorphic value is a template too,** so it is computed once per type. `table :: Num a
+  => [a]` used at `Int` and at `Double` becomes two Go variables, each computed once, as a
+  monomorphic value would be. Only a use inside a generic function, at that function's own type
+  variable, still recomputes it, because Go has no generic variables.
 
 ## A hierarchy without Haskell's mistakes
 
@@ -371,8 +375,8 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 - **No multi-parameter classes,** so no mtl-style `MonadState s m`: transformers come with
   explicit `lift`.
 - **Local bindings are monomorphic.** Go function literals cannot be generic.
-- **Polymorphic top-level values are not shared.** `xs = []` becomes a generic function and is
-  re-evaluated at each use.
+- **A polymorphic value used inside a generic function is recomputed there,** at that
+  function's type variable. At concrete types it is computed once.
 - **`Lazy` is a real type.** Laziness only reaches where the types carry it. For example,
   `foldr` takes `a -> Lazy b -> b` so it can stop early, and `++` and `<>` suspend their second
   argument. The automatic adaptation covers passing strict functions, but you can still meet a
