@@ -1,0 +1,7 @@
+-- expects: rejected/derive-functor.hgo:3:1: cannot derive Functor for Pred: a field is a function that takes the parameter
+-- A function that takes an a cannot be mapped over: it is contravariant.
+data Pred a = Pred (a -> Bool)
+  deriving (Functor)
+
+main :: IO ()
+main = print 1

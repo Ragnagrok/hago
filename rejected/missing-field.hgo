@@ -1,0 +1,6 @@
+-- expects: rejected/missing-field.hgo:6:15: in main: missing field age in Person: every field must be given
+data Person = Person { name :: String, age :: Int }
+  deriving (Show)
+
+main :: IO ()
+main = print (Person { name = "Ana" })

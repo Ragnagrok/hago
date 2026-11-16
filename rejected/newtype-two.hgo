@@ -1,0 +1,5 @@
+-- expects: rejected/newtype-two.hgo:2:1: in Point: a newtype has one constructor with one field
+newtype Point = Point Int Int
+
+main :: IO ()
+main = print 1

@@ -1,0 +1,9 @@
+-- expects: rejected/ambiguous-field.hgo:6:19: in label: the field name belongs to City and Person; say which with a type annotation
+data Person = Person { name :: String }
+data City = City { name :: String }
+
+-- Nothing says what x is.
+label x = "<" ++ x.name ++ ">"
+
+main :: IO ()
+main = putStrLn (label (City "Rosario"))

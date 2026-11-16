@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE LambdaCase #-}
 
 -- | Typed core: the output of the type checker and the input of code
@@ -6,6 +7,7 @@
 -- the final substitution. Class constraints are explicit dictionaries.
 module Hago.Core where
 
+import Data.Data (Data)
 import qualified Data.IntMap as IM
 import qualified Data.Map as M
 import Hago.Syntax (Lit (..), Name)
@@ -17,7 +19,7 @@ data Type
                        --   with fewer arguments than its arity it is partially applied (Either e)
   | TFun Type Type
   | TApp Type Type     -- ^ application whose head is not known yet, as in @f a@
-  deriving (Eq, Show)
+  deriving (Eq, Show, Data)
 
 -- | Puts a type in normal form: an application to a known constructor joins
 -- its arguments, and a fully applied (->) is a function type.
@@ -36,10 +38,10 @@ norm = \case
 
 -- | A class constraint: the class and the type it applies to.
 data Pred = IsIn Name Type
-  deriving (Eq, Show)
+  deriving (Eq, Show, Data)
 
 data Scheme = Forall [Name] [Pred] Type
-  deriving (Show)
+  deriving (Show, Data)
 
 type Subst = IM.IntMap Type
 
@@ -141,13 +143,13 @@ data Dict
   | DParam Name                -- ^ a dictionary parameter in scope
   | DSuper Dict Name           -- ^ the superclass dictionary of that name inside another one
   | DHole Int                  -- ^ not solved yet; see 'progSolved'
-  deriving (Show)
+  deriving (Show, Data)
 
 -- | How a variable occurrence refers to its binding.
 data VRef
   = Inst [Type] [Dict]   -- ^ type arguments and dictionaries for the binding's scheme
   | SelfGroup            -- ^ a recursive call inside an unsigned binding group
-  deriving (Show)
+  deriving (Show, Data)
 
 data CExpr
   = CVar Name VRef Type
@@ -163,16 +165,16 @@ data CExpr
   | CDelay Type CExpr               -- ^ suspend a computation of the given type
   | CForce CExpr
   | CDo Type Dict Type [CStmt]      -- ^ do block: the monad, its Monad dictionary, the result type
-  deriving (Show)
+  deriving (Show, Data)
 
 -- | A local or top-level binding. With arity n > 0 the body is a 'CLam'
 -- with n parameters, compiled as an uncurried Go function.
 data CBind = CBind Name Type Int CExpr
-  deriving (Show)
+  deriving (Show, Data)
 
 -- | Patterns (one per scrutinee), local bindings, then guarded bodies.
 data CRow = CRow [CPat] [CBind] [(Maybe CExpr, CExpr)]
-  deriving (Show)
+  deriving (Show, Data)
 
 data CPat
   = CPVar Name Type
@@ -183,13 +185,13 @@ data CPat
   | CPForce CPat      -- ^ force a lazy field before matching on it
   | CPEq CExpr CExpr  -- ^ equal, by this (==), to this value: a literal at a type of your own
   | CPAs Name Type CPat
-  deriving (Show)
+  deriving (Show, Data)
 
 data CStmt
   = CSBind Name Type CExpr   -- ^ @x <- e@, where e :: m t
   | CSExpr Type CExpr        -- ^ @e@, where e :: m t
   | CSLet [CBind]
-  deriving (Show)
+  deriving (Show, Data)
 
 -- | What code generation needs to know about each constructor.
 data ConInfo = ConInfo
@@ -198,15 +200,15 @@ data ConInfo = ConInfo
   , ciFields :: [(Bool, Type)]   -- ^ (lazy?, field type over ciParams)
   , ciTag :: Int
   }
-  deriving (Show)
+  deriving (Show, Data)
 
 -- | A data type: its parameters, how many arguments each takes (0 for a
 -- plain type, 1 for the m of StateT s m a), and its constructors.
-data DataInfo = DataInfo {diParams :: [Name], diKinds :: [Int], diCons :: [Name]}
-  deriving (Show)
+data DataInfo = DataInfo {diParams :: [Name], diKinds :: [Int], diCons :: [Name], diNewtype :: Bool}
+  deriving (Show, Data)
 
 data Foreign = Foreign {fSymbol :: String, fType :: Type, fArity :: Int}
-  deriving (Show)
+  deriving (Show, Data)
 
 data ClassInfo = ClassInfo
   { clsVar :: Name
@@ -215,7 +217,7 @@ data ClassInfo = ClassInfo
   , clsMethods :: [(Name, Scheme)] -- ^ in declaration order: Forall (clsVar : own vars) (class : own constraints)
   , clsDefaults :: [Name]          -- ^ methods with a default definition
   }
-  deriving (Show)
+  deriving (Show, Data)
 
 data InstInfo = InstInfo
   { instId :: Name
@@ -226,7 +228,7 @@ data InstInfo = InstInfo
   , instMethods :: [(Name, Maybe CExpr)]  -- ^ every method of the class, in order; Nothing if missing
   , instSupers :: [(Name, Dict)]
   }
-  deriving (Show)
+  deriving (Show, Data)
 
 data TopBind = TopBind
   { tbName :: Name
@@ -237,7 +239,7 @@ data TopBind = TopBind
   , tbBody :: CExpr
   , tbShared :: Bool             -- ^ a value computed once (a CAF), not a function
   }
-  deriving (Show)
+  deriving (Show, Data)
 
 data Program = Program
   { progData :: M.Map Name DataInfo
@@ -249,6 +251,7 @@ data Program = Program
   , progSubst :: Subst
   , progSolved :: IM.IntMap Dict
   }
+  deriving (Show, Data)
 
 -- | The name of the dictionary parameter for a constraint on a type variable.
 dictName :: Name -> Name -> Name

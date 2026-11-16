@@ -1,0 +1,83 @@
+-- Records, type synonyms, newtypes, list comprehensions and derived Functor.
+
+type Name = String
+type Pair a = (a, a)
+
+data Point = Point { x, y :: Double }
+  deriving (Eq, Show)
+
+data Person = Person { name :: Name, age :: Int, home :: Point }
+  deriving (Show)
+
+-- Two types with a field called name: no clash, each keeps its own.
+data Company = Company { name :: Name, staff :: [Person] }
+
+-- A field in every constructor can be read; one in only some cannot.
+data Shape
+  = Circle { center :: Point, radius :: Double }
+  | Rect { center :: Point, width, height :: Double }
+  deriving (Show)
+
+newtype Age = Age Int
+  deriving (Eq, Ord, Show)
+
+data Tree a = Leaf | Node (Tree a) a (Tree a)
+  deriving (Show, Functor, Foldable, Traversable)
+
+data Stream a = Cons { headS :: a, tailS :: ~(Stream a) }
+
+nats :: Int -> Stream Int
+nats n = Cons { headS = n, tailS = nats (n + 1) }
+
+takeS :: Int -> Stream a -> [a]
+takeS 0 _ = []
+takeS k s = s.headS : takeS (k - 1) s.tailS
+
+birthday :: Person -> Person
+birthday p = p { age = p.age + 1 }
+
+moveRight :: Double -> Person -> Person
+moveRight d p = p { home.x = p.home.x + d }
+
+area :: Shape -> Double
+area (Circle { radius }) = 3.0 * radius * radius
+area (Rect { width = w, height = h }) = w * h
+
+swap :: Pair a -> Pair a
+swap (a, b) = (b, a)
+
+insert :: Ord a => a -> Tree a -> Tree a
+insert v Leaf = Node Leaf v Leaf
+insert v t@(Node l w r)
+  | v < w = Node (insert v l) w r
+  | v > w = Node l w (insert v r)
+  | otherwise = t
+
+halve :: Int -> Maybe Int
+halve n = if n `mod` 2 == 0 then Just (n `div` 2) else Nothing
+
+main :: IO ()
+main = do
+  let ana = Person { name = "Ana", age = 30, home = Point { x = 1.0, y = 2.0 } }
+      acme = Company { name = "Acme", staff = [ana, birthday ana] }
+  print ana
+  print (birthday ana).age
+  print (moveRight 2.5 ana).home
+  putStrLn (ana.name ++ " works at " ++ acme.name)
+  print (map (.age) acme.staff)
+  print (map (.home.y) acme.staff)
+  let shapes = [Circle { center = Point 0.0 0.0, radius = 1.0 }, Rect (Point 1.0 1.0) 2.0 3.0]
+  print (map area shapes)
+  print (map (.center.x) shapes)
+  print (map (\s -> s { center = Point 9.0 9.0 }) shapes)
+  print (Age 3 < Age 4, Age 5)
+  print (swap (1, 2))
+  print [(a, b) | a <- [1 .. 4], b <- ['x', 'y'], odd a]
+  print [n * n | Just n <- [Just 3, Nothing, Just 5]]
+  print (take 5 [n | n <- [1 ..], let sq = n * n, sq `mod` 3 == 1])
+  print (takeS 5 (nats 10))
+  let t = foldr insert Leaf [5, 2, 8, 1, 9 :: Int]
+  print (fmap (* 10) t)
+  print (sum t, length t, toList t)
+  print (traverse halve (fmap (* 2) t))
+  print (traverse halve t)

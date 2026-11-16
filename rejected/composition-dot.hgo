@@ -1,0 +1,6 @@
+-- expects: (for composition, write f . g with spaces)
+twice :: (Int -> Int) -> Int -> Int
+twice f = f.f
+
+main :: IO ()
+main = print (twice (+ 1) 0)

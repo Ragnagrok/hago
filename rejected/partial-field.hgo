@@ -1,0 +1,11 @@
+-- expects: rejected/partial-field.hgo:8:13: in radius: not every Shape has the field r: Square does not, so match on the constructor instead
+data Shape
+  = Circle { r :: Double }
+  | Square { side :: Double }
+
+-- In Haskell this compiles and fails at run time on a Square.
+radius :: Shape -> Double
+radius s = s.r
+
+main :: IO ()
+main = print (radius (Square 2.0))

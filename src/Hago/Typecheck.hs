@@ -12,7 +12,7 @@ import Control.Monad
 import Control.Monad.State
 import Data.Graph (flattenSCC, flattenSCCs, stronglyConnComp)
 import qualified Data.IntMap as IM
-import Data.List (nub)
+import Data.List (intercalate, nub, sortOn, (\\))
 import qualified Data.Map as M
 import Hago.Core
 import Hago.Syntax
@@ -123,6 +123,131 @@ conSig ci targs = (map field (ciFields ci), TCon (ciType ci) targs)
     s = M.fromList (zip (ciParams ci) targs)
     field (lz, t) = (if lz then tLazy else id) (substT s t)
 
+-- Records ---------------------------------------------------------------------------
+--
+-- Fields are not functions: they live in their type, so two types can have a
+-- field of the same name and neither takes a name from the program. Reading
+-- a field (p.name) or updating it is only allowed when every constructor of
+-- the type has it, so neither can fail at run time; building a record
+-- requires every field.
+
+-- | The field names of a constructor, in order; empty if declared without them.
+conLabels :: Env -> Name -> ConInfo -> [Name]
+conLabels env k ci = case M.lookup (ciType ci) (envRecords env) of
+  Nothing -> []
+  Just r ->
+    let ls = sortOn fst [(i, l) | (l, (_, _, at)) <- M.toList (recFields r), (k', i) <- at, k' == k]
+     in if length ls == length (ciFields ci) then map snd ls else []
+
+-- | The record type of an expression of type t that has these fields. The
+-- candidates are the record types with those fields visible here; when t is
+-- not known yet and only one candidate exists, it is that one.
+recordOf :: Env -> [Name] -> [Name] -> Type -> TC (Name, [Type], Record)
+recordOf env labels cands t =
+  zonkT t >>= \case
+    t'@(TCon c args) | Just r <- M.lookup c (envRecords env), length args == length (recParams r) ->
+      case filter (`M.notMember` recFields r) labels of
+        (l : _) -> throw ("the type " ++ pretty t' ++ " has no field " ++ l)
+        []
+          | c `elem` cands -> pure (c, args, r)
+          | otherwise -> throw ("the fields of " ++ unqual c ++ " are not visible here: its module does not export its constructors")
+    t'@(TMeta _) -> guess t'
+    t'@(TApp _ _) -> guess t'
+    t'@(TFun _ _) -> throw ("the type " ++ pretty t' ++ " has no field " ++ fields
+                              ++ " (for composition, write f . g with spaces)")
+    t' -> throw ("the type " ++ pretty t' ++ " has no field " ++ fields)
+  where
+    fields = intercalate ", " labels
+    guess t' = case cands of
+      [c] -> do
+        let r = envRecords env M.! c
+        args <- mapM (const fresh) (recParams r)
+        unify t' (TCon c args)
+        pure (c, args, r)
+      [] -> throw ("no record type here has the field" ++ (if length labels > 1 then "s " else " ") ++ fields)
+      cs -> throw ("the field " ++ fields ++ " belongs to " ++ intercalate " and " (map unqual cs)
+                     ++ "; say which with a type annotation")
+
+-- | A field that every constructor of the record has: its laziness, type
+-- for these type arguments, and where it is in each constructor.
+totalField :: Name -> [Type] -> Record -> Name -> TC (Bool, Type, [(Name, Int)])
+totalField c args r l = do
+  let (lz, ft, at) = recFields r M.! l
+  case recCons r \\ map fst at of
+    [] -> pure (lz, substT (M.fromList (zip (recParams r) args)) ft, at)
+    (k : _) -> throw ("not every " ++ unqual c ++ " has the field " ++ l ++ ": " ++ unqual k
+                        ++ " does not, so match on the constructor instead")
+
+noRepeats :: String -> [Name] -> TC ()
+noRepeats what ls = case [l | (i, l) <- zip [0 :: Int ..] ls, l `elem` take i ls] of
+  (l : _) -> throw ("the field " ++ l ++ " is " ++ what ++ " twice")
+  [] -> pure ()
+
+-- | An expression whose value is needed now: a suspended one is forced.
+inferStrict :: Env -> Expr -> TC (CExpr, Type)
+inferStrict env x = do
+  (c, t) <- infer env x
+  zonkT t >>= \case
+    TCon "Lazy" [i] -> pure (CForce c, i)
+    t' -> pure (c, t')
+
+inferField :: Env -> Expr -> Name -> [Name] -> TC (CExpr, Type)
+inferField env x l cands = do
+  (cx, tx) <- inferStrict env x
+  (c, args, r) <- recordOf env [l] cands tx
+  (lz, t, at) <- totalField c args r l
+  v <- uniq "field"
+  let stored = if lz then tLazy t else t
+  rows <- forM at $ \(k, i) -> do
+    ci <- lookupCon env k
+    let pats = [if j == i then CPVar v stored else CPWild | j <- [0 .. length (ciFields ci) - 1]]
+    pure (CRow [CPCon k args pats] [] [(Nothing, CVar v (Inst [] []) stored)])
+  let m = CMatch [cx] rows stored
+  pure (if lz then (CForce m, t) else (m, t))
+
+-- | @C { x = e, ... }@ is @C e ...@ with the fields in declaration order.
+inferRecordCon :: Env -> Name -> [(Name, Expr)] -> TC (CExpr, Type)
+inferRecordCon env k fs = do
+  ci <- lookupCon env k
+  let labels = conLabels env k ci
+  noRepeats "given" (map fst fs)
+  case [l | (l, _) <- fs, l `notElem` labels] of
+    (l : _) -> throw ("the constructor " ++ unqual k ++ " has no field " ++ l)
+    [] -> pure ()
+  when (null labels && not (null (ciFields ci))) $
+    throw ("the constructor " ++ unqual k ++ " has no field names; give its fields in order")
+  case [l | l <- labels, l `notElem` map fst fs] of
+    [] -> pure ()
+    missing -> throw ("missing field" ++ (if length missing > 1 then "s " else " ") ++ intercalate ", " missing
+                        ++ " in " ++ unqual k ++ ": every field must be given")
+  infer env (foldl EApp (ECon k) [v | l <- labels, Just v <- [lookup l fs]])
+
+-- | @r { x = v }@: one row per constructor, each rebuilding it with the new
+-- values, which are computed once, before.
+inferRecordUpd :: Env -> Expr -> [(Name, Expr)] -> [Name] -> TC (CExpr, Type)
+inferRecordUpd env x fs cands = do
+  noRepeats "changed" (map fst fs)
+  (cx, tx) <- inferStrict env x
+  (c, args, r) <- recordOf env (map fst fs) cands tx
+  let ty = TCon c args
+  news <- forM fs $ \(l, v) -> do
+    (lz, t, at) <- totalField c args r l
+    let stored = if lz then tLazy t else t
+    cv <- check env v stored
+    n <- uniq "new"
+    pure (n, stored, cv, at)
+  rows <- forM (recCons r) $ \k -> do
+    ci <- lookupCon env k
+    let (fts, _) = conSig ci args
+        replaced = M.fromList [(i, CVar n (Inst [] []) t) | (n, t, _, at) <- news, (k', i) <- at, k' == k]
+    olds <- forM (zip [0 :: Int ..] fts) $ \(i, ft) ->
+      if M.member i replaced then pure (CPWild, Nothing) else do
+        o <- uniq "old"
+        pure (CPVar o ft, Just (CVar o (Inst [] []) ft))
+    let argsE = [maybe (replaced M.! i) id old | (i, (_, old)) <- zip [0 ..] olds]
+    pure (CRow [CPCon k args (map fst olds)] [] [(Nothing, CApp (CCon k args (foldr TFun ty fts)) argsE)])
+  pure (CLet [CBind n t 0 cv | (n, t, cv, _) <- news] (CMatch [cx] rows ty) ty, ty)
+
 -- Expressions ---------------------------------------------------------------------
 
 extend :: Env -> [(Name, Type)] -> Env
@@ -179,6 +304,9 @@ infer env e = case e of
     t <- fromSType env (M.fromList vs) st
     c <- check env x t
     pure (c, t)
+  EField x l cands -> inferField env x l cands
+  ERecCon k fs -> inferRecordCon env k fs
+  ERecUpd x fs cands -> inferRecordUpd env x fs cands
   _ -> do
     t <- fresh
     c <- check env e t
@@ -186,12 +314,22 @@ infer env e = case e of
   where
     spine (EApp f a) = let (h, as) = spine f in (h, as ++ [a])
     spine x = (x, [])
-    applyArgs t [] = pure ([], t)
-    applyArgs t (a : as) = do
+    -- A lambda argument is checked after the arguments that follow it, so
+    -- in map (.name) people the type of people says which name is meant.
+    applyArgs t args = do
+      (slots, tr) <- walk t args
+      cargs <- mapM (either (uncurry (check env)) pure) slots
+      pure (cargs, tr)
+    walk t [] = pure ([], t)
+    walk t (a : as) = do
       (p, r) <- splitArrow t
-      ca <- check env a p
-      (cas, tr) <- applyArgs r as
-      pure (ca : cas, tr)
+      slot <- if isLam a && not (all isLam as) then pure (Left (a, p)) else Right <$> check env a p
+      (rest, tr) <- walk r as
+      pure (slot : rest, tr)
+    isLam = \case
+      ELoc _ x -> isLam x
+      ELam _ _ -> True
+      _ -> False
 
 splitArrow :: Type -> TC (Type, Type)
 splitArrow t =
@@ -319,6 +457,16 @@ checkPat env p t = do
       unify t' r
       subs <- zipWithM (checkPat env) ps fs
       pure (CPCon k targs (map fst subs), concatMap snd subs)
+    -- C { x = p }: the other fields are not looked at; C {} is any C
+    (PRec k fps, _) -> do
+      ci <- lookupCon env k
+      let labels = conLabels env k ci
+      noRepeats "matched" (map fst fps)
+      case [l | (l, _) <- fps, l `notElem` labels] of
+        (l : _) -> throw ("the constructor " ++ unqual k ++ " has no field " ++ l)
+        [] -> pure ()
+      let ps = if null fps then map (const PWild) (ciFields ci) else [maybe PWild id (lookup l fps) | l <- labels]
+      checkPat env (PCon k ps) t'
 
 checkRhs :: Env -> Rhs -> Type -> TC ([CBind], [(Maybe CExpr, CExpr)])
 checkRhs env (Rhs alts wheres) t = do
@@ -433,21 +581,36 @@ tyconId = \case
 
 tcModule :: [Decl] -> TC Program
 tcModule ds = do
-  let datas = [(n, ps, cons) | DData n ps cons _ <- ds]
-      types = M.union builtinTypes (M.fromList [(n, length ps) | (n, ps, _) <- datas])
-      envD = Env M.empty builtinCons types M.empty M.empty []
+  let datas = [d | DData d <- ds]
+      types = M.union builtinTypes (M.fromList [(ddName d, length (ddParams d)) | d <- datas])
+      envD = Env M.empty builtinCons types M.empty M.empty [] M.empty
   -- data types
-  userCons <- fmap concat . forM datas $ \(n, ps, cons) ->
-    forM (zip [0 ..] cons) $ \(i, ConDecl k fields) -> withCtx n $ do
+  checked <- forM datas $ \d -> atLoc (Just (ddLoc d)) $ withCtx (ddName d) $ do
+    let n = ddName d
+        ps = ddParams d
+    when (ddNewtype d) $ case ddCons d of
+      [ConDecl _ [(False, _)] _] -> pure ()
+      [ConDecl _ [(True, _)] _] -> throw "the field of a newtype cannot be lazy"
+      _ -> throw "a newtype has one constructor with one field"
+    cs <- forM (zip [0 ..] (ddCons d)) $ \(i, ConDecl k fields labels) -> do
+      noRepeats ("declared in " ++ unqual k) labels
       fts <- mapM (\(lz, st) -> (,) lz <$> fromSType envD (M.fromList [(p, TVar p) | p <- ps]) st) fields
-      pure (k, ConInfo n ps fts i)
-  let cons = M.union builtinCons (M.fromList userCons)
+      pure (k, ConInfo n ps fts i, labels)
+    -- a field in several constructors must be the same in all of them
+    let uses = M.fromListWith (flip (++)) [(l, [(k, j, f)]) | (k, ci, ls) <- cs, (j, l, f) <- zip3 [0 ..] ls (ciFields ci)]
+    fields <- forM (M.toList uses) $ \(l, us) -> case nub [f | (_, _, f) <- us] of
+      [(lz, t)] -> pure (l, (lz, t, [(k, j) | (k, j, _) <- us]))
+      _ -> throw ("the field " ++ l ++ " has different types in different constructors")
+    let record = [(n, Record ps [k | (k, _, _) <- cs] (M.fromList fields)) | not (null fields)]
+    pure ([(k, ci) | (k, ci, _) <- cs], record)
+  let userCons = concatMap fst checked
+      cons = M.union builtinCons (M.fromList userCons)
       dataInfos = M.fromList $
-        [("[]", DataInfo ["a"] [0] ["[]", ":"]), ("Bool", DataInfo [] [] ["False", "True"])]
-          ++ [ (n, DataInfo ps [M.findWithDefault 0 p ar | p <- ps] [k | ConDecl k _ <- cs])
-             | (n, ps, cs) <- datas
-             , let ar = M.unionsWith max [stypeArities st | ConDecl _ fs <- cs, (_, st) <- fs] ]
-      envC = envD {envCons = cons}
+        [("[]", DataInfo ["a"] [0] ["[]", ":"] False), ("Bool", DataInfo [] [] ["False", "True"] False)]
+          ++ [ (ddName d, DataInfo (ddParams d) [M.findWithDefault 0 p ar | p <- ddParams d] [k | ConDecl k _ _ <- ddCons d] (ddNewtype d))
+             | d <- datas
+             , let ar = M.unionsWith max [stypeArities st | ConDecl _ fs _ <- ddCons d, (_, st) <- fs] ]
+      envC = envD {envCons = cons, envRecords = M.fromList (concatMap snd checked)}
   -- classes
   let classDecls = [(sup, c, v, body) | DClass sup c v body <- ds]
       kindOf v body = maximum (0 : [M.findWithDefault 0 v (stypeArities st) | DSig _ _ st <- body])
@@ -639,6 +802,9 @@ exprRefs = \case
   EDo ss -> concatMap stmtRefs ss
   EOpSeq e0 rest -> exprRefs e0 ++ concat [op : exprRefs x | (op, x) <- rest]
   EAnn x _ -> exprRefs x
+  EField x _ _ -> exprRefs x
+  ERecCon _ fs -> concatMap (exprRefs . snd) fs
+  ERecUpd x fs _ -> exprRefs x ++ concatMap (exprRefs . snd) fs
   ELoc _ x -> exprRefs x
   _ -> []
   where

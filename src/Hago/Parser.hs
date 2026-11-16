@@ -5,7 +5,7 @@
 module Hago.Parser (parseModule, resolveFixity) where
 
 import Control.Monad
-import Data.List (groupBy)
+import Data.List (groupBy, nub)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
 import Hago.Lexer
@@ -43,6 +43,7 @@ describe = \case
   TFloat d -> "number " ++ show d
   TChar c -> "character " ++ show c
   TStr s -> "string " ++ show s
+  TProj s -> "field access ." ++ s
   TSpecial "{" -> "the start of a block"
   TSpecial "}" -> "the end of a block"
   TSpecial ";" -> "a new line"
@@ -92,6 +93,11 @@ conId = satisfyT f <?> "constructor"
 varSym :: Parser Name
 varSym = satisfyT f <?> "operator"
   where f (TVarSym s) = Just s
+        f _ = Nothing
+
+proj :: Parser Name
+proj = satisfyT f <?> "field access"
+  where f (TProj s) = Just s
         f _ = Nothing
 
 conSym :: Parser Name
@@ -159,6 +165,7 @@ importDecl = do
 topDecl :: Parser [Decl]
 topDecl = choice
   [ pure <$> dataDecl
+  , pure <$> typeDecl
   , pure <$> foreignDecl
   , pure <$> classDecl
   , pure <$> instanceDecl
@@ -167,13 +174,22 @@ topDecl = choice
 
 dataDecl :: Parser Decl
 dataDecl = do
-  key "data" <|> key "newtype"
+  l <- here
+  nt <- (False <$ key "data") <|> (True <$ key "newtype")
   name <- conId
   params <- many varId
   key "="
   cons <- conDecl `sepBy1` key "|"
   derivs <- option [] (key "deriving" >> ((pure <$> conId) <|> parens (conId `sepBy` special ",")))
-  pure (DData name params cons derivs)
+  pure (DData (DataDecl name params cons derivs nt l))
+
+typeDecl :: Parser Decl
+typeDecl = do
+  key "type"
+  name <- conId
+  params <- many varId
+  key "="
+  DType name params <$> pType
 
 -- | An optional context, as in @(Eq a, Show b) =>@.
 context :: Parser Context
@@ -202,16 +218,28 @@ instanceDecl = do
   pure (DInstance (Just l) ctx cls t body)
 
 conDecl :: Parser ConDecl
-conDecl = try infixCon <|> prefixCon
+conDecl = try infixCon <|> try recordCon <|> prefixCon
   where
-    prefixCon = ConDecl <$> (conId <|> try (parens conSym)) <*> many field
+    prefixCon = ConDecl <$> (conId <|> try (parens conSym)) <*> many field <*> pure []
     infixCon = do
       l <- field
       op <- conSym
       r <- field
-      pure (ConDecl op [l, r])
+      pure (ConDecl op [l, r] [])
     field = ((,) True <$> (key "~" *> aType))
         <|> ((,) False <$> (optional (tokEq (TVarSym "!")) *> aType))
+    -- C { x, y :: Int, next :: ~(Stream a) }
+    recordCon = do
+      k <- conId
+      special "{"
+      groups <- fieldGroup `sepBy` special ","
+      special "}"
+      pure (ConDecl k [f | (ns, f) <- groups, _ <- ns] (concatMap fst groups))
+    fieldGroup = do
+      ns <- varId `sepBy1` special ","
+      key "::"
+      f <- ((,) True <$> (key "~" *> pType)) <|> ((,) False <$> (optional (tokEq (TVarSym "!")) *> pType))
+      pure (ns, f)
 
 foreignDecl :: Parser Decl
 foreignDecl = do
@@ -337,7 +365,7 @@ aPat = locP $ choice
   [ try (PAs <$> varId <* key "@") <*> aPat
   , PVar <$> var
   , PWild <$ key "_"
-  , (`PCon` []) <$> conId
+  , conId >>= \k -> option (PCon k []) (PRec k <$> recordPat)
   , PLit <$> literal
   , listPat <$> brackets (pat `sepBy` special ",")
   , special "(" *> tuplePat
@@ -350,6 +378,10 @@ aPat = locP $ choice
         [p] -> p
         _ -> PCon (tupleCon (length ps)) ps
     listPat = foldr (\p acc -> PCon ":" [p, acc]) (PCon "[]" [])
+    -- { x = p, y }: y alone binds a variable named like the field
+    recordPat = between (special "{") (special "}") $ flip sepBy (special ",") $ do
+      l <- varId
+      option (l, PVar l) ((,) l <$> (key "=" *> pat))
 
 literal :: Parser Lit
 literal = satisfyT f <?> "literal"
@@ -433,14 +465,63 @@ patBinds = \case
 fexpr :: Parser Expr
 fexpr = foldl1 EApp <$> many1 aExpr
 
+-- | An atom followed by field accesses (@p.pos.x@) and record braces
+-- (@C { x = 1 }@ builds, @p { x = 1 }@ updates), which bind tighter than
+-- application.
 aExpr :: Parser Expr
-aExpr = locE $ choice
-  [ EVar <$> varId
-  , ECon <$> conId
-  , ELit <$> literal
-  , special "[" *> listExpr
-  , special "(" *> parenExpr
-  ]
+aExpr = do
+  l <- here
+  a <- locE $ choice
+    [ EVar <$> varId
+    , ECon <$> conId
+    , ELit <$> literal
+    , special "[" *> listExpr
+    , special "(" *> parenExpr
+    ]
+  postfix l a
+  where
+    postfix l a =
+      (here >>= \lf -> proj >>= \f -> postfix l (ELoc lf (EField a f [])))
+        <|> (recordBraces >>= recordExpr a >>= postfix l . ELoc l)
+        <|> pure a
+
+-- | @{ x = e, y, pos.x = e }@: a field without a value is the variable of
+-- that name; a path updates a field of a field.
+recordBraces :: Parser [([Name], Expr)]
+recordBraces = between (special "{") (special "}") $ flip sepBy (special ",") $ do
+  l <- here
+  x <- varId
+  path <- (x :) <$> many proj
+  v <- optionMaybe (key "=" *> expr)
+  case v of
+    Just e -> pure (path, e)
+    Nothing
+      | null (drop 1 path) -> pure (path, ELoc l (EVar x))
+      | otherwise -> fail "a field path needs a value"
+
+recordExpr :: Expr -> [([Name], Expr)] -> Parser Expr
+recordExpr a fs = case unLoc a of
+  ECon k
+    | all ((== 1) . length . fst) fs -> pure (ERecCon k [(l, v) | ([l], v) <- fs])
+    | otherwise -> fail "field paths are for updates; build the inner record instead"
+  _
+    | null fs -> fail "an update must change at least one field"
+    | otherwise -> update (0 :: Int) a fs
+  where
+    unLoc (ELoc _ e) = unLoc e
+    unLoc e = e
+    -- p { pos.x = 1, name = n } is let u = p in u { pos = u.pos { x = 1 }, name = n }
+    update depth e paths
+      | all ((== 1) . length . fst) paths = pure (ERecUpd e [(l, v) | ([l], v) <- paths] [])
+      | otherwise = do
+          let u = "_upd" ++ show depth
+          fields <- forM (nub [l | (l : _, _) <- paths]) $ \l ->
+            case [(rest, v) | (l' : rest, v) <- paths, l' == l] of
+              [([], v)] -> pure (l, v)
+              subs
+                | any (null . fst) subs -> fail ("field " ++ l ++ " is changed twice")
+                | otherwise -> (,) l <$> update (depth + 1) (EField (EVar u) l []) subs
+          pure (ELet [DBind u [Clause [] (Rhs [(Nothing, e)] [])]] (ERecUpd (EVar u) fields []))
 
 listExpr :: Parser Expr
 listExpr = (ECon "[]" <$ special "]") <|> do
@@ -450,16 +531,49 @@ listExpr = (ECon "[]" <$ special "]") <|> do
          hi <- optionMaybe expr
          special "]"
          pure $ maybe (EApp (EVar "Prelude.enumFrom") e) (EApp (EApp (EVar "Prelude.enumFromTo") e)) hi
+    , do key "|"
+         qs <- qualifier `sepBy1` special ","
+         special "]"
+         pure (comprehension e qs)
     , do es <- many (special "," *> expr)
          special "]"
          pure (foldr (\x acc -> EApp (EApp (ECon ":") x) acc) (ECon "[]") (e : es))
     ]
+
+data Qualifier = QGen Pat Expr | QLet [Decl] | QGuard Expr
+
+qualifier :: Parser Qualifier
+qualifier = gen <|> letQ <|> (QGuard <$> expr)
+  where
+    gen = do
+      p <- try (pat <* key "<-")
+      QGen p <$> expr
+    letQ = try $ do
+      key "let"
+      ds <- localDecls
+      notFollowedBy (key "in")
+      pure (QLet ds)
+
+-- | The translation of the Haskell report: generators are concatMap, guards
+-- are if, and an element that does not match a generator's pattern is skipped.
+comprehension :: Expr -> [Qualifier] -> Expr
+comprehension e = \case
+  [] -> EApp (EApp (ECon ":") e) (ECon "[]")
+  QGuard b : qs -> EIf b (comprehension e qs) (ECon "[]")
+  QLet ds : qs -> ELet ds (comprehension e qs)
+  QGen p l : qs ->
+    let body = comprehension e qs
+        fn = case unLocP p of
+          PVar _ -> ELam [p] body
+          _ -> ELam [PVar "_lc"] (ECase (EVar "_lc") [Alt p (Rhs [(Nothing, body)] []), Alt PWild (Rhs [(Nothing, ECon "[]")] [])])
+     in EApp (EApp (EVar "Prelude.concatMap") fn) l
 
 -- | After an opening parenthesis: unit, an operator as a value, a section, a
 -- parenthesised expression or a tuple.
 parenExpr :: Parser Expr
 parenExpr = choice
   [ ECon "()" <$ special ")"
+  , selector
   , try (opValue <* special ")")
   , try rightSection
   , do
@@ -476,6 +590,11 @@ parenExpr = choice
   ]
   where
     opValue = opExpr <$> (varSym <|> conSym)
+    -- (.name) and (.pos.x): the function that reads that field
+    selector = do
+      fs <- many1 proj
+      special ")"
+      pure (ELam [PVar "_sel"] (foldl (\x f -> EField x f []) (EVar "_sel") fs))
     rightSection = do
       op <- operator
       when (op == "-") (fail "negation")
@@ -521,6 +640,9 @@ rExpr fx = go
       EDo ss -> EDo (map stmtR ss)
       EOpSeq e0 rest -> climb (go e0) [(op, go x) | (op, x) <- rest]
       EAnn x t -> EAnn (go x) t
+      EField x f c -> EField (go x) f c
+      ERecCon k fs -> ERecCon k [(l, go v) | (l, v) <- fs]
+      ERecUpd x fs c -> ERecUpd (go x) [(l, go v) | (l, v) <- fs] c
       ELoc l x -> ELoc l (go x)
       _ -> e
     stmtR (SBind x e) = SBind x (go e)

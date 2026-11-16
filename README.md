@@ -164,6 +164,84 @@ A renaming pass resolves every name to an internal one qualified by its module
 (`Geometry.Shapes.area`). After it, the compiler works on one flat program, and the Go output
 is still a single file.
 
+## Records, without Haskell's mistakes
+
+```haskell
+data Point = Point { x, y :: Double }
+data Person = Person { name :: String, age :: Int, home :: Point }
+data Company = Company { name :: String, staff :: [Person] }   -- name again: fine
+
+ana = Person { name = "Ana", age = 30, home = Point { x = 1.0, y = 2.0 } }
+
+ana.name                      -- "Ana"
+map (.age) acme.staff         -- a field as a function
+ana { age = 31 }              -- an update
+ana { home.x = 3.5 }          -- an update of a field of a field
+area (Circle { radius }) = 3.0 * radius * radius   -- match some fields
+```
+
+Haskell's records have well-known problems. Hago avoids each of them:
+
+- **Fields are not functions.** In Haskell a field declares a top-level function, so two types
+  in the same module cannot both have a `name`, and no one else can use that name. In Hago a
+  field belongs to its type. You read it with `p.name`, and the type of `p` says which `name` it
+  is. When you need a function, `(.name)` is one.
+- **Reading a field cannot fail.** Haskell accepts `radius s` for a `Square` and fails at run
+  time. Hago accepts `s.radius`, and an update of `radius`, only if every constructor of the type
+  has that field. Otherwise it asks you to match on the constructor.
+- **Building a record requires every field.** Haskell only warns about a missing field and
+  leaves an error in its place. Hago refuses to compile it.
+- **Fields respect abstraction.** They are visible wherever the type's constructors are, so a
+  type exported without `(..)` keeps its fields hidden too.
+- **Nested updates are short.** `p { home.x = 3.5 }` instead of
+  `p { home = (home p) { x = 3.5 } }`.
+
+Field puns work in patterns and when building (`Person { name, age }`), and `C {}` matches any
+`C`. As in GHC's `OverloadedRecordDot`, a dot with no space on either side is a field access, so
+`f.g` is no longer a composition; write `f . g`.
+
+If the type of `p` is not known yet and two types have the field, the compiler asks for an
+annotation instead of guessing. To make that rare, arguments that are lambdas are checked after
+the others: in `map (.name) people`, the type of `people` is known before `(.name)` is checked.
+
+An update cannot change the type of the record yet (from `Box Int` to `Box String`).
+
+## Newtypes are free
+
+In a strict language, `newtype` means the same as `data` with one constructor and one field.
+What the keyword adds is a promise that the wrapper costs nothing, and Hago keeps it. After
+specialisation, when every instance has already been chosen by type, each newtype is replaced by
+the type it wraps. Wrapping, unwrapping and the Go type disappear. `newtype Meters = Meters
+Double` is a `float64` in the Go output, and it keeps its own instances.
+
+With `data`, a loop that adds `Meters` allocates a box at each step. Fifty million additions
+take 0.36 s and 10 MB with `data`, and 0.02 s and 3.7 MB with `newtype`. A `StateT` declared
+with `newtype` compiles to plain closures.
+
+A newtype stays a Go type only if it contains itself (`newtype Fix f = Fix (f (Fix f))`), or if
+it is passed without all its arguments to a data type that takes a type constructor.
+
+## Synonyms, comprehensions, deriving
+
+```haskell
+type Pair a = (a, a)
+
+[(a, b) | a <- [1 .. 4], b <- ['x', 'y'], odd a]
+[n * n | Just n <- maybes]                  -- elements that don't match are skipped
+take 5 [n | n <- [1 ..], let sq = n * n, sq `mod` 3 == 1]
+
+data Tree a = Leaf | Node (Tree a) a (Tree a)
+  deriving (Show, Functor, Foldable, Traversable)
+```
+
+- **`type` synonyms** take parameters and can be exported. They must be given all their
+  arguments, and a synonym that refers to itself is an error.
+- **List comprehensions** have generators, guards and `let`, and they are lazy, like the lists
+  they build.
+- **`deriving`** covers `Eq`, `Ord`, `Show`, `Functor`, `Foldable` and `Traversable`. The last
+  three map over the last type parameter. `Show` prints records with their fields, as Haskell
+  does.
+
 ## What the Go looks like
 
 `map` compiles to a generic Go function. Data types become a Go interface with one struct per
@@ -219,7 +297,9 @@ These numbers come from one machine, as a reference and not as a benchmark.
 | sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.45 s | ~10 MB |
 | `mapM_` over a million elements in IO | 0.19 s | ~8 MB |
 | a recursive IO loop of five million iterations | 0.31 s | ~8 MB |
-| `mapM_` over a million elements in `StateT Int IO` | 0.26 s | ~8 MB |
+| `mapM_` over a million elements in `StateT Int IO` | 0.25 s | ~8 MB |
+| fifty million additions of a `newtype Meters = Meters Double` | 0.02 s | ~4 MB |
+| the same with `data Meters = Meters Double` | 0.36 s | ~10 MB |
 
 - **Strict code at concrete types** compiles to the Go you would write by hand, and runs like it.
 - **Constrained and constructor-polymorphic code** (`Num a =>`, `Monad m =>`) costs nothing
@@ -240,7 +320,7 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # just compile
 
 The `examples/` folder has lazy lists, ADTs with pattern matching and guards, type classes,
 monads (State, Maybe, Either, lists, reader, writer, Traversable), monad transformers, modules,
-calls to Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
+records, newtypes, list comprehensions, calls to Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
 programs the type checker must refuse, each with the error it expects.
 
 ## What is there and what isn't
@@ -249,7 +329,8 @@ It is a prototype. The pipeline (layout rule, parser, Hindley-Milner inference t
 into a typed core, Go generation) works from end to end, but a lot of Haskell 98 is missing.
 
 **Supported**
-- `data` with lazy fields (`~`) and `deriving`, type signatures with contexts, multi-clause
+- `data` with lazy fields (`~`) and `deriving`, records, `newtype`, `type` synonyms, list
+  comprehensions, type signatures with contexts, multi-clause
   functions, guards, `where`, `let`, `case`, `if`, lambdas, `do` in any monad, as-patterns,
   `e :: t` annotations.
 - `class` with superclasses, default methods and constrained methods, `instance` with contexts,
@@ -260,12 +341,11 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 - `foreign import go`.
 
 **Missing**
-- Multi-parameter classes, `deriving Functor`.
 - **Polymorphic recursion through a constraint** (a function that calls itself at a bigger
   type) cannot be specialised, and is rejected.
 - **`Read` and `Enum`.** `[a..b]` only works on `Int`.
 - **`String` is Go's `string`, not `[Char]`.** Convert with `pack` and `unpack`.
-- Records, `newtype` semantics, list comprehensions, `type` synonyms, tuples beyond three.
+- Tuples beyond three, and updates that change a record's type.
 - **Modules compile together with the program,** with no separate compilation or package
   manager, and a module cannot re-export another (`module M` in an export list).
 - **Long loops in pure monads like `State` use stack,** because their `>>=` is a chain of Go
@@ -289,11 +369,13 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `src/Hago/Lexer.hs` | tokens and the layout rule |
 | `src/Hago/Parser.hs` | Parsec over tokens, fixity resolution |
 | `src/Hago/Rename.hs` | modules: imports, exports and scopes, into one flat program |
-| `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show)` |
+| `src/Hago/Expand.hs` | `type` synonyms, expanded away |
+| `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show, Functor, Foldable, Traversable)` |
 | `src/Hago/TcMonad.hs` | unification and the constraint solver (instances, defaulting) |
 | `src/Hago/Typecheck.hs` | inference and elaboration, where `Lazy` and dictionaries are inserted |
 | `src/Hago/Core.hs` | the typed core |
 | `src/Hago/Specialize.hs` | copies of code over type constructors; instance methods become functions |
+| `src/Hago/Newtype.hs` | newtypes replaced by the type they wrap |
 | `src/Hago/CodeGen.hs` | Go generation |
 | `runtime/runtime.go` | lists, tuples, thunks and trampolined IO, copied into every program |
 | `prelude/Prelude.hgo` | the prelude, written in Hago |

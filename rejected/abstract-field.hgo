@@ -1,0 +1,6 @@
+-- expects: rejected/abstract-field.hgo:6:30: in main: the fields of Stack are not visible here: its module does not export its constructors
+import Data.Stack (Stack, push)
+import qualified Data.Stack as S
+
+main :: IO ()
+main = print (push 1 S.empty).items

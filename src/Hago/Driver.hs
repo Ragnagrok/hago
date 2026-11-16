@@ -1,7 +1,8 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | From a source file to Go source: loading modules, deriving, renaming,
--- type checking, specialisation, code generation.
+-- | From a source file to Go source: loading modules, renaming, type
+-- synonyms, deriving, type checking, specialisation, newtype erasure, code
+-- generation.
 module Hago.Driver (compileFile) where
 
 import Control.Monad (foldM)
@@ -10,6 +11,8 @@ import qualified Data.Map as M
 import Hago.CodeGen (generate)
 import Hago.Derive (expandDeriving)
 import Hago.Embed (embedFile)
+import Hago.Expand (expandSynonyms)
+import Hago.Newtype (eraseNewtypes)
 import Hago.Parser (parseModule, resolveFixity)
 import Hago.Rename (renameModules)
 import Hago.Specialize (specialize)
@@ -31,11 +34,12 @@ compileFile file = do
   pure $ do
     mods <- loaded
     prelude <- parseModule "Prelude.hgo" preludeSource
-    derived <- mapM (\m -> (\ds -> m {modDecls = ds}) <$> expandDeriving (modDecls m)) (prelude {modName = "Prelude"} : mods)
-    decls <- renameModules derived
+    renamed <- renameModules (prelude {modName = "Prelude"} : mods)
+    expanded <- expandSynonyms renamed
+    decls <- expandDeriving expanded
     checked <- typecheck file (resolveFixity decls)
     prog <- either (Left . ((file ++ ": ") ++)) Right (specialize checked)
-    pure (generate runtimeSource prog)
+    pure (generate runtimeSource (eraseNewtypes prog))
 
 -- | The main module and everything it imports, dependencies first. A module
 -- A.B lives in A/B.hgo, next to the main file.

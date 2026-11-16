@@ -1,0 +1,19 @@
+Person {name = "Ana", age = 30, home = Point {x = 1.0, y = 2.0}}
+31
+Point {x = 3.5, y = 2.0}
+Ana works at Acme
+[30,31]
+[2.0,2.0]
+[3.0,6.0]
+[0.0,1.0]
+[Circle {center = Point {x = 9.0, y = 9.0}, radius = 1.0},Rect {center = Point {x = 9.0, y = 9.0}, width = 2.0, height = 3.0}]
+(True,Age 5)
+(2,1)
+[(1,'x'),(1,'y'),(3,'x'),(3,'y')]
+[9,25]
+[1,2,4,5,7]
+[10,11,12,13,14]
+Node (Node Leaf 10 (Node (Node Leaf 20 (Node Leaf 50 Leaf)) 80 Leaf)) 90 Leaf
+(25,5,[1,2,5,8,9])
+Just (Node (Node Leaf 1 (Node (Node Leaf 2 (Node Leaf 5 Leaf)) 8 Leaf)) 9 Leaf)
+Nothing

@@ -11,7 +11,7 @@ instance MonadIO IO where
   liftIO m = m
 
 -- State over any monad.
-data StateT s m a = StateT (s -> m (a, s))
+newtype StateT s m a = StateT (s -> m (a, s))
 
 runStateT :: StateT s m a -> s -> m (a, s)
 runStateT (StateT f) s = f s
@@ -42,7 +42,7 @@ modifyS :: Monad m => (s -> s) -> StateT s m ()
 modifyS f = StateT (\s -> pure ((), f s))
 
 -- Errors over any monad.
-data ExceptT e m a = ExceptT (m (Either e a))
+newtype ExceptT e m a = ExceptT (m (Either e a))
 
 runExceptT :: ExceptT e m a -> m (Either e a)
 runExceptT (ExceptT m) = m

@@ -1,7 +1,10 @@
+{-# LANGUAGE DeriveDataTypeable #-}
+
 -- | Surface syntax: what the parser produces, before type checking.
 module Hago.Syntax where
 
 import Data.Char (isAlphaNum, isUpper)
+import Data.Data (Data)
 import Data.List (intercalate)
 
 type Name = String
@@ -13,7 +16,7 @@ showLoc :: Loc -> String
 showLoc (f, l, c) = f ++ ":" ++ show l ++ ":" ++ show c
 
 data Lit = LInt Integer | LDouble Double | LChar Char | LStr String
-  deriving (Eq, Show)
+  deriving (Eq, Show, Data)
 
 -- | Types as the programmer writes them. Lists are @STCon "[]" [t]@, tuples
 -- @STCon "(,)" [a, b]@, unit @STCon "()" []@ and suspended values
@@ -23,7 +26,7 @@ data SType
   | STCon Name [SType]
   | STFun SType SType
   | STApp SType [SType]   -- ^ a type variable applied to arguments, as in @m a@
-  deriving (Eq, Show)
+  deriving (Eq, Show, Data)
 
 data Pat
   = PVar Name
@@ -31,8 +34,9 @@ data Pat
   | PLit Lit
   | PCon Name [Pat]
   | PAs Name Pat
+  | PRec Name [(Name, Pat)]   -- ^ @C { x = p, y }@: the fields not named are ignored
   | PLoc Loc Pat
-  deriving (Eq, Show)
+  deriving (Eq, Show, Data)
 
 -- | A pattern without its location.
 unLocP :: Pat -> Pat
@@ -50,46 +54,61 @@ data Expr
   | ECase Expr [Alt]
   | EDo [Stmt]
   | EAnn Expr SType               -- ^ @e :: t@
+  | EField Expr Name [Name]       -- ^ @e.x@, and the record types whose fields are visible here
+  | ERecCon Name [(Name, Expr)]   -- ^ @C { x = e, y }@: every field must be given
+  | ERecUpd Expr [(Name, Expr)] [Name]   -- ^ @e { x = v }@, and the visible record types with those fields
   | ELoc Loc Expr
   | EOpSeq Expr [(Name, Expr)]   -- ^ unresolved operators, removed by 'resolveFixity'
-  deriving (Eq, Show)
+  deriving (Eq, Show, Data)
 
 data Alt = Alt Pat Rhs
-  deriving (Eq, Show)
+  deriving (Eq, Show, Data)
 
 -- | Guarded or plain right-hand side, with its @where@ declarations.
 data Rhs = Rhs [(Maybe Expr, Expr)] [Decl]
-  deriving (Eq, Show)
+  deriving (Eq, Show, Data)
 
 data Stmt
   = SBind Name Expr
   | SBindPat Pat Expr   -- ^ removed by the parser: @p <- e@ becomes a bind and a case
   | SLet [Decl]
   | SExpr Expr
-  deriving (Eq, Show)
+  deriving (Eq, Show, Data)
 
 data Clause = Clause [Pat] Rhs
-  deriving (Eq, Show)
+  deriving (Eq, Show, Data)
 
--- | A constructor and its fields; 'True' marks a lazy (@~@) field.
-data ConDecl = ConDecl Name [(Bool, SType)]
-  deriving (Eq, Show)
+-- | A constructor, its fields ('True' marks a lazy (@~@) field), and their
+-- names if it is declared with record syntax.
+data ConDecl = ConDecl Name [(Bool, SType)] [Name]
+  deriving (Eq, Show, Data)
 
 data Assoc = AssocL | AssocR | AssocN
-  deriving (Eq, Show)
+  deriving (Eq, Show, Data)
+
+data DataDecl = DataDecl
+  { ddName :: Name
+  , ddParams :: [Name]
+  , ddCons :: [ConDecl]
+  , ddDeriving :: [Name]
+  , ddNewtype :: Bool
+  , ddLoc :: Loc
+  }
+  deriving (Eq, Show, Data)
 
 -- | A class constraint on a type variable, as in @Eq a =>@.
 type Context = [(Name, Name)]
 
 data Decl
-  = DData Name [Name] [ConDecl] [Name]   -- ^ with its deriving list
+  = DData DataDecl
+  | DType Name [Name] SType                -- ^ a type synonym
   | DSig [Name] Context SType
   | DClass Context Name Name [Decl]       -- ^ superclasses, class, variable, signatures and defaults
   | DInstance (Maybe Loc) Context Name SType [Decl]   -- ^ where, context, class, instance type, methods
   | DBind Name [Clause]
   | DFixity Assoc Int [Name]
   | DForeign String Name SType   -- ^ Go symbol, Hago name, type
-  deriving (Eq, Show)
+  deriving (Eq, Show, Data)
 
 isConName :: Name -> Bool
 isConName n = case unqual n of

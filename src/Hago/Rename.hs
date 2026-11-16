@@ -31,6 +31,7 @@ data Scope = Scope
   , scTypes :: M.Map Name [Name]
   , scQVals :: M.Map (Name, Name) Name     -- ^ (module or alias, name)
   , scQTypes :: M.Map (Name, Name) Name
+  , scFields :: M.Map Name [Name]          -- ^ a field name to the record types that have it, if their constructors are visible
   , scLocals :: S.Set Name
   , scLoc :: Maybe Loc
   , scModule :: Name
@@ -50,13 +51,13 @@ tableOf m = Table vals types children
     q = moduleQualify (modName m)
     ds = modDecls m
     vals = M.fromList [(n, q n) | n <- valueNames]
-    types = M.fromList [(n, q n) | n <- [t | DData t _ _ _ <- ds] ++ [c | DClass _ c _ _ <- ds]]
+    types = M.fromList [(n, q n) | n <- [ddName d | DData d <- ds] ++ [t | DType t _ _ <- ds] ++ [c | DClass _ c _ _ <- ds]]
     valueNames = nub $
       [n | DBind n _ <- ds] ++ [n | DSig ns _ _ <- ds, n <- ns] ++ [n | DForeign _ n _ <- ds]
-        ++ [k | DData _ _ cs _ <- ds, ConDecl k _ <- cs] ++ methods
+        ++ [k | DData d <- ds, ConDecl k _ _ <- ddCons d] ++ methods
     methods = [n | DClass _ _ _ body <- ds, DSig ns _ _ <- body, n <- ns]
     children = M.fromList $
-      [(t, [k | ConDecl k _ <- cs]) | DData t _ cs _ <- ds]
+      [(ddName d, [k | ConDecl k _ _ <- ddCons d]) | DData d <- ds]
         ++ [(c, [n | DSig ns _ _ <- body, n <- ns]) | DClass _ c _ body <- ds]
 
 -- | The part of a table a module lets others see.
@@ -101,10 +102,16 @@ renameModules :: [Module] -> Rn [Decl]
 renameModules mods = do
   let tables = M.fromList [(modName m, tableOf m) | m <- mods]
   exportTables <- M.fromList <$> forM mods (\m -> (,) (modName m) <$> exportsOf m (tables M.! modName m))
-  concat <$> forM mods (\m -> renameModule exportTables (tables M.! modName m) m)
+  let fields = M.fromListWith (++)
+        [ (lab, [(q (ddName d), map q ks)])
+        | m <- mods, let q = moduleQualify (modName m), DData d <- modDecls m
+        , let ks = [k | ConDecl k _ _ <- ddCons d], lab <- nub (concat [ls | ConDecl _ _ ls <- ddCons d]) ]
+  concat <$> forM mods (\m -> renameModule exportTables fields (tables M.! modName m) m)
 
-renameModule :: M.Map Name Table -> Table -> Module -> Rn [Decl]
-renameModule exportTables ownTable m = do
+-- | The fields of a record type can be used wherever one of its constructors
+-- is in scope, qualified or not: a type exported abstractly keeps them hidden.
+renameModule :: M.Map Name Table -> M.Map Name [(Name, [Name])] -> Table -> Module -> Rn [Decl]
+renameModule exportTables fields ownTable m = do
   let explicitPrelude = any ((== "Prelude") . impModule) (modImports m)
       implicit = [Import "Prelude" False Nothing Nothing [] ("", 0, 0) | modName m /= "Prelude", not explicitPrelude]
       imports = modImports m ++ implicit
@@ -124,10 +131,12 @@ renameModule exportTables ownTable m = do
         , scTypes = unq snd
         , scQVals = qual fst
         , scQTypes = qual snd
+        , scFields = M.map (\ts -> [t | (t, ks) <- ts, any (`S.member` visible) ks]) fields
         , scLocals = S.empty
         , scLoc = Nothing
         , scModule = modName m
         }
+      visible = S.fromList (M.elems (tVals ownTable) ++ concat (M.elems (unq fst)) ++ M.elems (qual fst))
   mapM (topDecl scope) (modDecls m)
 
 -- Resolution ----------------------------------------------------------------------
@@ -178,9 +187,13 @@ methodOf cls m = maybe m (\q -> q ++ "." ++ m) (fst (splitQual cls))
 
 topDecl :: Scope -> Decl -> Rn Decl
 topDecl sc = \case
-  DData n ps cons ds -> do
-    cons' <- forM cons $ \(ConDecl k fs) -> ConDecl (own sc k) <$> mapM (\(lz, t) -> (,) lz <$> rnType sc t) fs
-    pure (DData (own sc n) ps cons' ds)
+  DData d -> do
+    let sc' = sc {scLoc = Just (ddLoc d)}
+    cons' <- forM (ddCons d) $ \(ConDecl k fs ls) ->
+      ConDecl (own sc k) <$> mapM (\(lz, t) -> (,) lz <$> rnType sc' t) fs <*> pure ls
+    derivs <- mapM (resolveType sc') (ddDeriving d)
+    pure (DData d {ddName = own sc (ddName d), ddCons = cons', ddDeriving = derivs})
+  DType n ps t -> DType (own sc n) ps <$> rnType sc t
   DSig ns ctx t -> DSig (map (own sc) ns) <$> rnContext sc ctx <*> rnType sc t
   DBind n cs -> DBind (own sc n) <$> mapM (rnClause sc) cs
   DClass sup c v body -> do
@@ -222,6 +235,7 @@ patVars = \case
   PVar x -> [x]
   PAs x p -> x : patVars p
   PCon _ ps -> concatMap patVars ps
+  PRec _ fs -> concatMap (patVars . snd) fs
   PLoc _ p -> patVars p
   _ -> []
 
@@ -229,6 +243,7 @@ rnPat :: Scope -> Pat -> Rn Pat
 rnPat sc = \case
   PCon k ps -> PCon <$> resolveVal sc k <*> mapM (rnPat sc) ps
   PAs x p -> PAs x <$> rnPat sc p
+  PRec k fs -> PRec <$> resolveVal sc k <*> mapM (\(l, p) -> (,) l <$> rnPat sc p) fs
   PLoc l p -> PLoc l <$> rnPat sc {scLoc = Just l} p
   p -> pure p
 
@@ -266,6 +281,11 @@ rnExpr sc = \case
   EDo ss -> EDo <$> rnStmts sc ss
   EOpSeq e0 rest -> EOpSeq <$> rnExpr sc e0 <*> forM rest (\(op, x) -> (,) <$> resolveVal sc op <*> rnExpr sc x)
   EAnn x t -> EAnn <$> rnExpr sc x <*> rnType sc t
+  EField x f _ -> EField <$> rnExpr sc x <*> pure f <*> pure (M.findWithDefault [] f (scFields sc))
+  ERecCon k fs -> ERecCon <$> resolveVal sc k <*> mapM (\(l, v) -> (,) l <$> rnExpr sc v) fs
+  ERecUpd x fs _ -> do
+    let cands = foldr1 (\a b -> filter (`elem` b) a) [M.findWithDefault [] l (scFields sc) | (l, _) <- fs]
+    ERecUpd <$> rnExpr sc x <*> mapM (\(l, v) -> (,) l <$> rnExpr sc v) fs <*> pure cands
   ELoc l x -> ELoc l <$> rnExpr sc {scLoc = Just l} x
 
 rnStmts :: Scope -> [Stmt] -> Rn [Stmt]

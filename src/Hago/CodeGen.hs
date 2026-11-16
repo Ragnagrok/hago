@@ -258,7 +258,7 @@ genHkData prog (c, canon) =
           , "func (" ++ recv k ++ ") " ++ marker ++ "() {}" ]
 
 genData :: Program -> (Name, DataInfo) -> [String]
-genData prog (n, DataInfo ps _ ks)
+genData prog (n, DataInfo ps _ ks _)
   | n `elem` ["()", "(,)", "(,,)"] = []
   | otherwise =
       ["type " ++ typeName n ++ tparamList ps ++ " interface{ " ++ marker ++ "() }"]

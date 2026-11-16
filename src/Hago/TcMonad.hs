@@ -22,7 +22,12 @@ data Env = Env
   , envClasses :: M.Map Name ClassInfo
   , envInsts :: M.Map (Name, Name) InstHead -- ^ by class and type constructor
   , envGivens :: [(Pred, Dict)]            -- ^ constraints available as dictionary parameters
+  , envRecords :: M.Map Name Record        -- ^ the fields of each record type
   }
+
+-- | A record type: its constructors, and each field's laziness, type (over
+-- the type's parameters) and position in the constructors that have it.
+data Record = Record {recParams :: [Name], recCons :: [Name], recFields :: M.Map Name (Bool, Type, [(Name, Int)])}
 
 data St = St
   { stNext :: Int
@@ -69,6 +74,10 @@ next = do
 
 fresh :: TC Type
 fresh = TMeta <$> next
+
+-- | A local name no program can write.
+uniq :: String -> TC Name
+uniq prefix = (("_" ++ prefix) ++) . show <$> next
 
 zonkT :: Type -> TC Type
 zonkT t = gets (\s -> zonk (stSub s) t)

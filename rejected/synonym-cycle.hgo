@@ -1,0 +1,5 @@
+-- expects: type synonyms cannot refer to themselves: Tree
+type Tree = [Tree]
+
+main :: IO ()
+main = print 1

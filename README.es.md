@@ -170,6 +170,87 @@ Un paso de renombrado resuelve cada nombre a uno interno, calificado por su mód
 (`Geometry.Shapes.area`). Después de ese paso el compilador trabaja sobre un programa plano, y la
 salida en Go sigue siendo un solo archivo.
 
+## Records, sin los errores de Haskell
+
+```haskell
+data Point = Point { x, y :: Double }
+data Person = Person { name :: String, age :: Int, home :: Point }
+data Company = Company { name :: String, staff :: [Person] }   -- otra vez name: no hay problema
+
+ana = Person { name = "Ana", age = 30, home = Point { x = 1.0, y = 2.0 } }
+
+ana.name                      -- "Ana"
+map (.age) acme.staff         -- un campo como función
+ana { age = 31 }              -- una actualización
+ana { home.x = 3.5 }          -- la actualización de un campo de un campo
+area (Circle { radius }) = 3.0 * radius * radius   -- matchear algunos campos
+```
+
+Los records de Haskell tienen problemas conocidos. Hago evita cada uno:
+
+- **Los campos no son funciones.** En Haskell un campo declara una función de nivel superior,
+  así que dos tipos del mismo módulo no pueden tener los dos un `name`, y nadie más puede usar
+  ese nombre. En Hago un campo pertenece a su tipo. Se lee con `p.name`, y el tipo de `p` dice
+  de qué `name` se trata. Cuando hace falta una función, `(.name)` es una.
+- **Leer un campo no puede fallar.** Haskell acepta `radius s` para un `Square` y falla en
+  tiempo de ejecución. Hago acepta `s.radius`, y la actualización de `radius`, sólo si todos los
+  constructores del tipo tienen ese campo. Si no, pide matchear sobre el constructor.
+- **Construir un record exige todos los campos.** Haskell sólo avisa que falta un campo y deja un
+  error en su lugar. Hago no lo compila.
+- **Los campos respetan la abstracción.** Se ven donde se ven los constructores del tipo, así que
+  un tipo exportado sin `(..)` también esconde sus campos.
+- **Las actualizaciones anidadas son cortas.** `p { home.x = 3.5 }` en lugar de
+  `p { home = (home p) { x = 3.5 } }`.
+
+Los *puns* funcionan en patrones y al construir (`Person { name, age }`), y `C {}` matchea
+cualquier `C`. Como con `OverloadedRecordDot` de GHC, un punto sin espacio de ningún lado es un
+acceso a un campo, así que `f.g` ya no es una composición; se escribe `f . g`.
+
+Si todavía no se conoce el tipo de `p` y hay dos tipos con ese campo, el compilador pide una
+anotación en lugar de adivinar. Para que eso pase poco, los argumentos que son lambdas se
+chequean después que los demás: en `map (.name) people`, el tipo de `people` se conoce antes de
+chequear `(.name)`.
+
+Por ahora una actualización no puede cambiar el tipo del record (de `Box Int` a `Box String`).
+
+## Los newtypes son gratis
+
+En un lenguaje estricto, `newtype` significa lo mismo que `data` con un constructor y un campo.
+Lo que agrega la palabra clave es la promesa de que el envoltorio no cuesta nada, y Hago la
+cumple. Después de la especialización, cuando cada instancia ya se eligió por tipo, cada newtype
+se reemplaza por el tipo que envuelve. Desaparecen el envolver, el desenvolver y el tipo de Go.
+`newtype Meters = Meters Double` es un `float64` en el Go generado, y conserva sus propias
+instancias.
+
+Con `data`, un loop que suma `Meters` reserva una caja en cada paso. Cincuenta millones de sumas
+tardan 0,36 s y usan 10 MB con `data`, y 0,02 s y 3,7 MB con `newtype`. Un `StateT` declarado con
+`newtype` se compila a clausuras comunes.
+
+Un newtype sigue siendo un tipo de Go sólo si se contiene a sí mismo
+(`newtype Fix f = Fix (f (Fix f))`), o si se le pasa sin todos sus argumentos a un tipo de datos
+que toma un constructor de tipos.
+
+## Sinónimos, comprensiones, deriving
+
+```haskell
+type Pair a = (a, a)
+
+[(a, b) | a <- [1 .. 4], b <- ['x', 'y'], odd a]
+[n * n | Just n <- maybes]                  -- los elementos que no matchean se saltean
+take 5 [n | n <- [1 ..], let sq = n * n, sq `mod` 3 == 1]
+
+data Tree a = Leaf | Node (Tree a) a (Tree a)
+  deriving (Show, Functor, Foldable, Traversable)
+```
+
+- **Los sinónimos con `type`** toman parámetros y se pueden exportar. Hay que darles todos sus
+  argumentos, y un sinónimo que se refiere a sí mismo es un error.
+- **Las listas por comprensión** tienen generadores, guardas y `let`, y son perezosas, como las
+  listas que construyen.
+- **`deriving`** cubre `Eq`, `Ord`, `Show`, `Functor`, `Foldable` y `Traversable`. Los tres
+  últimos mapean sobre el último parámetro de tipo. `Show` muestra los records con sus campos,
+  como Haskell.
+
 ## Cómo queda el Go
 
 `map` se compila a una función genérica de Go. Los tipos de datos son una interfaz de Go con un
@@ -225,7 +306,9 @@ Son números de una sola máquina, como referencia y no como benchmark.
 | suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | 0,45 s | ~10 MB |
 | `mapM_` sobre un millón de elementos en IO | 0,19 s | ~8 MB |
 | un loop recursivo en IO de cinco millones de iteraciones | 0,31 s | ~8 MB |
-| `mapM_` sobre un millón de elementos en `StateT Int IO` | 0,26 s | ~8 MB |
+| `mapM_` sobre un millón de elementos en `StateT Int IO` | 0,25 s | ~8 MB |
+| cincuenta millones de sumas de un `newtype Meters = Meters Double` | 0,02 s | ~4 MB |
+| lo mismo con `data Meters = Meters Double` | 0,36 s | ~10 MB |
 
 - **El código estricto en tipos concretos** se compila al Go que escribirías a mano, y rinde
   igual.
@@ -248,7 +331,7 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # sólo compilar
 
 En `examples/` hay listas perezosas, ADTs con pattern matching y guardas, type classes, mónadas
 (State, Maybe, Either, listas, reader, writer, Traversable), transformadores de mónadas, módulos,
-llamadas a Go y loops.
+records, newtypes, listas por comprensión, llamadas a Go y loops.
 Cada ejemplo tiene un `.out` con la salida esperada. En `rejected/` hay programas que el type
 checker tiene que rechazar, cada uno con el error que espera.
 
@@ -259,7 +342,8 @@ inferencia Hindley-Milner que elabora a un core tipado, y generación de Go. Per
 Haskell 98.
 
 **Soportado**
-- `data` con campos perezosos (`~`) y `deriving`, firmas de tipos con contextos, funciones con
+- `data` con campos perezosos (`~`) y `deriving`, records, `newtype`, sinónimos con `type`,
+  listas por comprensión, firmas de tipos con contextos, funciones con
   varias cláusulas, guardas, `where`, `let`, `case`, `if`, lambdas, `do` en cualquier mónada,
   as-patterns, anotaciones `e :: t`.
 - `class` con superclases, métodos por defecto y métodos con restricciones, `instance` con
@@ -272,13 +356,11 @@ Haskell 98.
 - `foreign import go`.
 
 **Falta**
-- Clases de varios parámetros, `deriving Functor`.
 - **La recursión polimórfica a través de una restricción** (una función que se llama a sí misma
   en un tipo más grande) no se puede especializar, y se rechaza.
 - **`Read` y `Enum`.** `[a..b]` sólo funciona con `Int`.
 - **`String` es el `string` de Go, no `[Char]`.** Se convierte con `pack` y `unpack`.
-- Records, la semántica de `newtype`, listas por comprensión, sinónimos con `type`, tuplas de más
-  de tres.
+- Tuplas de más de tres, y actualizaciones que cambien el tipo de un record.
 - **Los módulos se compilan junto con el programa,** sin compilación separada ni gestor de
   paquetes, y un módulo no puede reexportar otro (`module M` en una lista de exportación).
 - **Los loops largos en mónadas puras como `State` consumen pila,** porque su `>>=` es una
@@ -305,11 +387,13 @@ Haskell 98.
 | `src/Hago/Lexer.hs` | tokens y regla de layout |
 | `src/Hago/Parser.hs` | Parsec sobre tokens, resolución de fixity |
 | `src/Hago/Rename.hs` | módulos: importaciones, exportaciones y alcances, a un programa plano |
-| `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show)` |
+| `src/Hago/Expand.hs` | sinónimos con `type`, que se expanden y desaparecen |
+| `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show, Functor, Foldable, Traversable)` |
 | `src/Hago/TcMonad.hs` | unificación y el solver de restricciones (instancias, defaulting) |
 | `src/Hago/Typecheck.hs` | inferencia y elaboración, donde se insertan `Lazy` y los diccionarios |
 | `src/Hago/Core.hs` | el core tipado |
 | `src/Hago/Specialize.hs` | copias del código sobre constructores de tipos; los métodos de instancia pasan a ser funciones |
+| `src/Hago/Newtype.hs` | los newtypes, reemplazados por el tipo que envuelven |
 | `src/Hago/CodeGen.hs` | generación de Go |
 | `runtime/runtime.go` | listas, tuplas, thunks e IO con trampolín; se copia en cada programa |
 | `prelude/Prelude.hgo` | el prelude, escrito en Hago |

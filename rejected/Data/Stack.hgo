@@ -1,7 +1,7 @@
 -- An abstract type: Stack is exported, its constructor is not.
 module Data.Stack (Stack, empty, push, pop, toList) where
 
-data Stack a = Stack [a]
+data Stack a = Stack { items :: [a] }
 
 -- These shadow the Prelude's empty and toList inside this module.
 empty :: Stack a

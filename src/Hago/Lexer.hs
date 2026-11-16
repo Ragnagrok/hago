@@ -1,3 +1,5 @@
+{-# LANGUAGE LambdaCase #-}
+
 -- | Tokens and the layout rule (Haskell 2010 report, section 10.3).
 module Hago.Lexer (Tok (..), Token (..), lexer, layout) where
 
@@ -12,6 +14,7 @@ data Tok
   | TFloat Double
   | TChar Char
   | TStr String
+  | TProj String      -- ^ @.x@ written tight against what precedes it: a field
   | TSpecial String   -- ^ ( ) [ ] , ; ` { }
   | TKey String       -- ^ keywords and reserved operators
   | TOpenN String Int -- ^ layout marker {n}, with the keyword that opened it
@@ -34,7 +37,7 @@ symChar :: Char -> Bool
 symChar c = c `elem` "!#$%&*+./<=>?@\\^|-~:"
 
 lexer :: String -> Either String [Token]
-lexer = go 1 1
+lexer src = fieldDots <$> go 1 1 src
   where
     go :: Int -> Int -> String -> Either String [Token]
     go _ _ [] = Right []
@@ -102,6 +105,31 @@ lexer = go 1 1
     blockComment _ _ _ [] = Right []
     isIdChar x = isAlphaNum x || x == '_' || x == '\''
 
+-- | A dot is a field access when it touches both the name after it and what
+-- comes before: @p.name@, @(f x).name@, @p.pos.x@ and the section @(.name)@.
+-- With a space on either side it is composition, as always: @f . g@.
+fieldDots :: [Token] -> [Token]
+fieldDots = go Nothing
+  where
+    go prev (d : n : rest)
+      | TVarSym "." <- tokVal d
+      , TVarId x <- tokVal n
+      , '.' `notElem` x
+      , tokLine n == tokLine d
+      , tokCol n == tokCol d + 1
+      , Just p <- prev
+      , touches p d =
+          let t = d {tokVal = TProj x} in t : go (Just t) rest
+    go _ (t : rest) = t : go (Just t) rest
+    go _ [] = []
+    touches p d = tokLine p == tokLine d && fmap (tokCol p +) (width (tokVal p)) == Just (tokCol d)
+    width = \case
+      TVarId s -> Just (length s)
+      TConId s -> Just (length s)
+      TProj s -> Just (length s + 1)
+      TSpecial s | s `elem` [")", "]", "}", "("] -> Just 1
+      _ -> Nothing
+
 -- | One (possibly escaped) character: value, characters consumed, rest.
 lexChar :: String -> Maybe (Char, Int, String)
 lexChar ('\\' : e : rest) = case e of
@@ -162,8 +190,11 @@ resolve (t : ts) ctx depth = case (tokVal t, ctx) of
   (TOpenN k n, [])
     | n > 0 -> sym "{" : resolve ts [(n, depth, k)] depth
   (TOpenN _ n, _) -> sym "{" : sym "}" : resolve (t {tokVal = TLineN n} : ts) ctx depth
-  (TSpecial "}", (0, _, _) : ms) -> t : resolve ts ms depth
-  (TSpecial "{", _) -> t : resolve ts ((0, depth, "") : ctx) depth
+  -- explicit braces (blocks and records) count as brackets, so a comma
+  -- inside a record closes an implicit block opened in a field's value
+  (TSpecial "}", (0, _, _) : ms) -> t : resolve ts ms (depth - 1)
+  (TSpecial "}", (m, _, _) : ms) | m /= 0 -> sym "}" : resolve (t : ts) ms depth
+  (TSpecial "{", _) -> t : resolve ts ((0, depth + 1, "") : ctx) (depth + 1)
   (TKey "in", (m, _, "let") : ms) | m /= 0 -> sym "}" : resolve (t : ts) ms depth
   (TKey "where", (m, _, "do") : ms) | m /= 0 -> sym "}" : resolve (t : ts) ms depth
   (TSpecial c, (m, d, _) : ms)
