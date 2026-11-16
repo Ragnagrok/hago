@@ -76,6 +76,11 @@ data Expr
   | EOpSeq Expr [(Name, Expr)]   -- ^ unresolved operators, removed by 'resolveFixity'
   deriving (Eq, Show, Data)
 
+-- | An expression without its location.
+unLoc :: Expr -> Expr
+unLoc (ELoc _ e) = unLoc e
+unLoc e = e
+
 data Alt = Alt Pat Rhs
   deriving (Eq, Show, Data)
 

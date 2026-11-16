@@ -29,8 +29,10 @@ From easiest to hardest, which is the order we take them in.
       variables keep their real types, `Lazy` included), then lifted to the top with the local
       variables they use as parameters; constraints on their own variables become theirs. Values,
       and functions constrained on the outer function's types, stay monomorphic.
-- [ ] **Less visible `Lazy`.** A type error can still mention `Lazy` (`liftA2 (:)` is one; a lambda
-      fixes it).
+- [x] **Less visible `Lazy`.** A type variable never stands for `Lazy t`: a function with `Lazy`
+      parameters passed where a plain one is expected takes plain arguments (`liftA2 (:)`,
+      `map (False &&)`), and `f $ x` is `f x`. Fixed on the way: `foldr (+) 0 xs` and
+      `foldr id` were rejected with an infinite type.
 - [ ] **Multi-parameter classes with functional dependencies.** `class Monad m => MonadState s m | m -> s`,
       so `get`, `put`, `throwError` and `ask` work through any transformer stack without `lift`
       (mtl style). Specialisation already removes dictionaries, so this costs nothing at run time.

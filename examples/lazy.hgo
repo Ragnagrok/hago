@@ -27,3 +27,10 @@ main = do
   print (False && error "never evaluated")
   print (unless' True (error "never evaluated"))
   print (take 7 (cycle [1, 2, 3]))
+  -- f $ x is f x, so x is still not evaluated
+  print (unless' True $ error "never evaluated")
+  -- where a plain function is expected, a Lazy parameter is just a parameter
+  print (liftA2 (:) (Just 1) (Just [2, 3]))
+  print (foldr (+) 0 [1, 2, 3])
+  print (foldr id 0 [(+ 1), (* 2)])
+  print (map (False &&) [True, False])

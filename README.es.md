@@ -34,7 +34,10 @@ se evalúa cuando se liga, como en Go. La pereza existe sólo donde un tipo la p
 - **Inserción guiada por tipos.** Nunca se escribe el retraso ni el forzado a mano. Si una
   expresión se chequea contra `Lazy t`, el compilador la suspende. Si una variable de tipo
   `Lazy t` se usa donde se espera un `t`, el compilador la fuerza. Una función estricta pasada
-  donde se espera una con parámetros `Lazy` (`foldr insert Leaf xs`) se adapta sola.
+  donde se espera una con parámetros `Lazy` (`foldr insert Leaf xs`) se adapta sola. Y al revés:
+  una variable de tipo nunca vale `Lazy t`, así que una función con parámetros `Lazy` pasada
+  donde se espera una función común (`liftA2 (:)`, `map (False &&)`) recibe ahí argumentos
+  comunes. `f $ x` es `f x`, así que `x` sigue siendo perezoso si `f` lo pide.
 
 Las suspensiones son thunks memoizados (`sync.OnceValue`): se evalúan como mucho una vez y se
 pueden compartir entre goroutines.
@@ -404,9 +407,9 @@ Haskell 98.
   de tipo de esa función. En tipos concretos se calcula una sola vez.
 - **`Lazy` es un tipo de verdad.** La pereza sólo llega hasta donde la llevan los tipos. Por
   ejemplo, `foldr` toma `a -> Lazy b -> b` para poder cortar antes, y `++` y `<>` suspenden su
-  segundo argumento. La adaptación automática cubre el caso de pasar funciones estrictas, pero
-  igual puede aparecer un error de tipos que mencione `Lazy` (`liftA2 (:)` es uno; una lambda lo
-  resuelve).
+  segundo argumento. Como una variable de tipo nunca vale `Lazy t`, una función polimórfica
+  pasada a `foldr` es estricta en el acumulador: `foldr const 0 [1 ..]` no termina, y
+  `foldr (\x _ -> x) 0 [1 ..]` da `1`, porque una lambda toma el tipo contra el que se chequea.
 
 ## Organización del código
 

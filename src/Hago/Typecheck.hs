@@ -316,9 +316,13 @@ infer env e = case e of
   ELit l -> pure (CLit l, litType l)
   EApp {} -> do
     let (f, args) = spine e
-    (cf, tf) <- infer env f
-    (cargs, tr) <- applyArgs tf args
-    pure (CApp cf cargs, tr)
+    case (unLoc f, args) of
+      -- f $ x is f x: a Lazy parameter of f stays lazy
+      (EVar "$", g : x : rest) | not (S.member "$" (envLocal env)) -> infer env (foldl EApp (EApp g x) rest)
+      _ -> do
+        (cf, tf) <- infer env f
+        (cargs, tr) <- applyArgs tf args
+        pure (CApp cf cargs, tr)
   EDo ss -> do
     m <- fresh
     d <- newHole (IsIn "Monad" m)
@@ -398,7 +402,10 @@ check env e expected = do
 -- | Unifies the inferred type with the expected one. When both are function
 -- types that differ only in which parameters are Lazy, wraps the function
 -- instead, forcing or suspending those arguments: this is what lets a strict
--- function such as @insert@ be passed to @foldr@.
+-- function such as @insert@ be passed to @foldr@. A parameter whose type is
+-- still unknown, on either side, is taken strict, so a type variable never
+-- stands for @Lazy t@ just because a function was passed: in @liftA2 (:)@ the
+-- list is a plain list, and in @foldr (+) 0@ the sum is a number.
 adapt :: CExpr -> Type -> Type -> TC CExpr
 adapt c actual expected = do
   a <- zonkT actual
@@ -409,25 +416,52 @@ adapt c actual expected = do
       (params, args, r) <- go (0 :: Int) a x
       pure (CLam params r (CApp c args))
   where
-    go i (TFun aq ar) (TFun xp xr) = do
-      let n = "_adapt" ++ show i
-          var = CVar n (Inst [] []) xp
-      arg <- case (aq, xp) of
-        (TCon "Lazy" _, TCon "Lazy" _) -> unify aq xp >> pure var
-        (_, TCon "Lazy" [inner]) | not (isMeta aq) -> unify aq inner >> pure (CForce var)
-        (TCon "Lazy" [inner], _) | not (isMeta xp) -> unify inner xp >> pure (CDelay xp var)
-        _ -> unify aq xp >> pure var
-      if lazyMismatch ar xr
-        then do
-          (ps, as, r) <- go (i + 1) ar xr
-          pure ((n, xp) : ps, arg : as, r)
-        else unify ar xr >> pure ([(n, xp)], [arg], xr)
-    go _ _ _ = error "adapt: not a function"
+    go i a0 x0 = do
+      a <- zonkT a0
+      x <- zonkT x0
+      case (a, x) of
+        (TFun aq ar, TFun xp xr) -> do
+          let n = "_adapt" ++ show i
+              var = CVar n (Inst [] []) xp
+          arg <- case (aq, xp) of
+            (TCon "Lazy" _, TCon "Lazy" _) -> unify aq xp >> pure var
+            (_, TCon "Lazy" [inner]) -> unify aq inner >> pure (CForce var)
+            (TCon "Lazy" [inner], _) -> unify inner xp >> pure (CDelay xp var)
+            _ -> unify aq xp >> pure var
+          ar' <- zonkT ar
+          xr' <- zonkT xr
+          if resultMismatch ar' xr'
+            then do
+              (ps, as, r) <- go (i + 1) ar' xr'
+              pure ((n, xp) : ps, arg : as, r)
+            else unify ar' xr' >> pure ([(n, xp)], [arg], xr')
+        (TFun _ _, TMeta _) -> do
+          p <- fresh
+          r <- fresh
+          unify x (TFun p r)
+          go i a (TFun p r)
+        (TMeta _, TFun _ _) -> do
+          p <- fresh
+          r <- fresh
+          unify a (TFun p r)
+          go i (TFun p r) x
+        _ -> error "adapt: not a function"
 
+-- | Whether a function must be wrapped to be used at the expected type.
 lazyMismatch :: Type -> Type -> Bool
-lazyMismatch (TFun a r1) (TFun x r2) =
-  (isLazy a /= isLazy x && not (isMeta a) && not (isMeta x)) || lazyMismatch r1 r2
+lazyMismatch (TFun a r1) (TFun x r2) = isLazy a /= isLazy x || resultMismatch r1 r2
 lazyMismatch _ _ = False
+
+-- | The same, for what is left after some parameters, where an unknown type
+-- will be a function with strict parameters.
+resultMismatch :: Type -> Type -> Bool
+resultMismatch f@(TFun _ _) (TMeta _) = lazyParams f
+resultMismatch (TMeta _) f@(TFun _ _) = lazyParams f
+resultMismatch a x = lazyMismatch a x
+
+lazyParams :: Type -> Bool
+lazyParams (TFun p r) = isLazy p || lazyParams r
+lazyParams _ = False
 
 isLazy, isMeta :: Type -> Bool
 isLazy (TCon "Lazy" _) = True

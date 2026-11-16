@@ -34,7 +34,10 @@ is bound, like in Go. Laziness only exists where a type asks for it.
 - **Type-directed insertion.** You never write delay or force yourself. If an expression is
   checked against `Lazy t`, the compiler suspends it. If a variable of type `Lazy t` is used
   where a `t` is expected, the compiler forces it. A strict function passed where one with
-  `Lazy` parameters is expected (`foldr insert Leaf xs`) is wrapped automatically.
+  `Lazy` parameters is expected (`foldr insert Leaf xs`) is wrapped automatically. The other
+  way round too: a type variable never stands for `Lazy t`, so a function with `Lazy`
+  parameters passed where a plain function is expected (`liftA2 (:)`, `map (False &&)`) takes
+  plain arguments there. `f $ x` is `f x`, so `x` stays lazy when `f` asks for it.
 
 Suspensions are memoised thunks (`sync.OnceValue`), so they are evaluated at most once and are
 safe to share between goroutines.
@@ -384,8 +387,9 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
   function's type variable. At concrete types it is computed once.
 - **`Lazy` is a real type.** Laziness only reaches where the types carry it. For example,
   `foldr` takes `a -> Lazy b -> b` so it can stop early, and `++` and `<>` suspend their second
-  argument. The automatic adaptation covers passing strict functions, but you can still meet a
-  type error that mentions `Lazy` (`liftA2 (:)` is one; a lambda fixes it).
+  argument. Since a type variable never stands for `Lazy t`, a polymorphic function passed to
+  `foldr` is strict in the accumulator: `foldr const 0 [1 ..]` never ends, and
+  `foldr (\x _ -> x) 0 [1 ..]` is `1`, because a lambda takes the type it is checked against.
 
 ## Layout of the code
 

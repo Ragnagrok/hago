@@ -539,8 +539,6 @@ recordExpr a fs = case unLoc a of
     | null fs -> fail "an update must change at least one field"
     | otherwise -> update (0 :: Int) a fs
   where
-    unLoc (ELoc _ e) = unLoc e
-    unLoc e = e
     -- p { pos.x = 1, name = n } is let u = p in u { pos = u.pos { x = 1 }, name = n }
     update depth e paths
       | all ((== 1) . length . fst) paths = pure (ERecUpd e [(l, v) | ([l], v) <- paths] [])

@@ -7,3 +7,8 @@ True
 False
 0
 [1,2,3,1,2,3,1]
+0
+Just [1,2,3]
+6
+1
+[False,False]
