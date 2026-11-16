@@ -785,7 +785,7 @@ instance Monoid Checked where
 -- the module's file.
 typecheckModule :: FilePath -> Name -> Checked -> [Decl] -> Either String Checked
 typecheckModule file m before ds =
-  first (formatErr file) (evalStateT (tcModule m before ds) (St 0 IM.empty [] IM.empty Nothing [] m))
+  first (formatErr file) (evalStateT (tcModule (file == "<interactive>") m before ds) (St 0 IM.empty [] IM.empty Nothing [] m))
 
 -- | The whole program, from what every module gives.
 programOf :: Checked -> Program
@@ -824,8 +824,11 @@ tyconId = \case
   k | Just n <- tupleArity k -> "Tup" ++ show n
   k -> k
 
-tcModule :: Name -> Checked -> [Decl] -> TC Checked
-tcModule modName' before ds = do
+-- | At hago repl's prompt (the first argument) the expression typed, it, is
+-- generalised even when it is a plain value, so that :type shows its
+-- constraints; printing it defaults them.
+tcModule :: Bool -> Name -> Checked -> [Decl] -> TC Checked
+tcModule interactive modName' before ds = do
   let datas = [d | DData d <- ds]
       ownTypes = M.fromList [(ddName d, length (ddParams d)) | d <- datas]
       types = M.unions [builtinTypes, ckTypes before, ownTypes]
@@ -1082,7 +1085,7 @@ tcModule modName' before ds = do
       results <- forM (zip members tys) $ \((n, cs), t) -> withCtx n (tcClauses envG cs t)
       -- the monomorphism restriction: a group of plain values is not
       -- generalised over its constraints, which are defaulted instead
-      let restricted = all ((== 0) . fst) results
+      let restricted = all ((== 0) . fst) results && not (interactive && map (unqual . fst) members == ["it"])
       when restricted (void (solve env M.empty))
       zts <- mapM zonkT tys
       let ms = nub (concatMap metas zts)

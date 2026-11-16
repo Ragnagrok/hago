@@ -20,8 +20,8 @@ library
   import:          comun
   hs-source-dirs:  src
   exposed-modules: Hago.Syntax, Hago.Lexer, Hago.Parser, Hago.Core, Hago.TcMonad, Hago.Typecheck, Hago.Derive, Hago.Expand, Hago.Specialize, Hago.Newtype, Hago.Rename,
-                   Hago.CodeGen, Hago.Embed, Hago.Cache, Hago.Driver
-  build-depends:   binary, containers, directory, filepath, mtl, parsec, template-haskell
+                   Hago.CodeGen, Hago.Embed, Hago.Cache, Hago.Driver, Hago.Repl
+  build-depends:   binary, containers, directory, filepath, mtl, parsec, process, template-haskell
 
 executable hago
   import:          comun

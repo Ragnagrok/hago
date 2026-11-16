@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds the compiler, compiles and runs every example program comparing its
-# output with the .out file next to it, and checks that every file in rejected/ fails
+# output with the .out file next to it, replays every session in repl/, and
+# checks that every file in rejected/ fails
 # with the error announced on its "-- expects:" line. Modules are compiled with an
 # empty cache, and every example again with the cache full, which must give the
 # same Go.
@@ -37,6 +38,16 @@ for expected_out in examples/*.out; do
   fi
 done
 echo "ok   every example gives the same Go with the cache full"
+
+# a session at the prompt: the lines after "hago> " and "hago| " are typed,
+# and the transcript must come out the same
+for t in repl/*.txt; do
+  if actual=$(sed -n 's/^hago[>|] //p' "$t" | "$hago" repl 2>&1) && [ "$actual" == "$(cat "$t")" ]; then
+    echo "ok   $t"
+  else
+    echo "FAIL $t gave:"; diff <(echo "$actual") "$t" || true; failures=1
+  fi
+done
 
 for f in rejected/*.hgo; do
   expected=$(sed -n 's/^-- expects: //p' "$f")

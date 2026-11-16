@@ -396,8 +396,31 @@ You need GHC (9.12 is tested) with cabal, and Go 1.21 or later.
 cabal build
 cabal run -v0 hago -- run examples/lazy.hgo                 # compile and run
 cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # just compile
+cabal run -v0 hago -- repl                                  # evaluate expressions as you type them
 ./check.sh                                                  # every example and rejected program
 ```
+
+### The REPL
+
+```
+hago> :t pure 3
+pure 3 :: (Applicative f, Num a) => f a
+hago> let double x = x + x
+hago> double 2.5
+5.0
+hago> :load repl/Shapes.hgo
+loaded repl/Shapes.hgo
+hago> area (Rect 2.0 5.0)
+10.0
+```
+
+`hago repl` keeps what you define (functions, `data`, classes, instances, imports) in a module
+and type checks it as you go. An expression is compiled with that module into a small program
+that prints it, or runs it if it is an action, and Go runs it: about a third of a second each.
+`:type` shows the type with its constraints, `:load` brings in a file's definitions (and its
+`main`), which a definition at the prompt replaces, and `:{ ... :}` spans several lines. There is
+no line editing; `rlwrap hago repl` adds it. Without a terminal on its input it echoes each line
+after the prompt, so its output is a transcript: `check.sh` replays the sessions in `repl/`.
 
 The `examples/` folder has lazy lists, ADTs with pattern matching and guards, type classes,
 monads (State, Maybe, Either, lists, reader, writer, Traversable), monad transformers, modules,

@@ -3,7 +3,7 @@
 -- | From a source file to Go source: loading modules, renaming, type
 -- synonyms, deriving, type checking, specialisation, newtype erasure, code
 -- generation.
-module Hago.Driver (compileFile) where
+module Hago.Driver (Virtual, compileFile, checkProgram, generateProgram, quoteSource, quoteIn) where
 
 import Control.Monad (foldM)
 import Data.Char (isAlphaNum, isDigit)
@@ -91,24 +91,37 @@ compileModule before (path, m) = do
 -- which is parsed only when it has to be checked, its parse.
 data Unit = Unit FilePath Name String (Maybe Module)
 
+-- | Modules given as text instead of files, by name: the path their errors
+-- name, and their source. A program's main module can be one of them.
+type Virtual = M.Map Name (FilePath, String)
+
 compileFile :: FilePath -> IO (Either String String)
 compileFile file = do
-  loaded <- loadAll file
+  checked <- checkProgram M.empty file
+  either (fmap Left . quoteSource) (pure . Right) (checked >>= generateProgram file)
+
+-- | Every module of the program, type checked, dependencies first, with the
+-- Prelude. Errors are not quoted yet.
+checkProgram :: Virtual -> FilePath -> IO (Either String [(Name, Checked)])
+checkProgram virtual file = do
+  loaded <- loadAll virtual file
   stamp <- compilerStamp
   cache <- cacheDirectory
   let preludeUnit = Unit "Prelude.hgo" "Prelude" (preludeSource ++ tupleInstances) Nothing
   result <- case loaded of
     Left e -> pure (Left e)
     Right mods -> compileUnits stamp cache (preludeUnit : [Unit path (modName m) src (Just m) | (path, src, m) <- mods])
-  either (fmap Left . quoteSource) (pure . Right) $ do
-    ifaces <- result
-    let checked = map (ifChecked . snd) ifaces
-    -- two modules that do not import each other can still give the same instance
-    case [(c, k) | ((c, k), n) <- M.toList (M.fromListWith (+) [(key, 1 :: Int) | ck <- checked, key <- M.keys (ckInsts ck)]), n > 1] of
-      (c, k) : _ -> Left (file ++ ": two modules define the instance " ++ c ++ " " ++ k)
-      [] -> pure ()
-    prog <- either (Left . ((file ++ ": ") ++)) Right (specialize (programOf (mconcat checked)))
-    pure (generate runtimeSource (eraseNewtypes prog))
+  pure (map (fmap ifChecked) <$> result)
+
+generateProgram :: FilePath -> [(Name, Checked)] -> Either String String
+generateProgram file modules = do
+  let checked = map snd modules
+  -- two modules that do not import each other can still give the same instance
+  case [(c, k) | ((c, k), n) <- M.toList (M.fromListWith (+) [(key, 1 :: Int) | ck <- checked, key <- M.keys (ckInsts ck)]), n > 1] of
+    (c, k) : _ -> Left (file ++ ": two modules define the instance " ++ c ++ " " ++ k)
+    [] -> pure ()
+  prog <- either (Left . ((file ++ ": ") ++)) Right (specialize (programOf (mconcat checked)))
+  pure (generate runtimeSource (eraseNewtypes prog))
 
 -- | Compiles each module, dependencies first, reusing what the cache keeps
 -- for a module whose source and imports have not changed. Each module is
@@ -122,7 +135,7 @@ compileUnits stamp cache = go M.empty M.empty []
           below = S.unions (S.fromList direct : [M.findWithDefault S.empty i deps | i <- direct])
           key = moduleKey stamp src [M.findWithDefault "" i keys | i <- direct]
           before = mconcat [iface | (n, iface) <- reverse done, S.member n below]
-      kept <- maybe (pure Nothing) (\dir -> readIface dir name key) cache
+      kept <- if "<" `isPrefixOf` path then pure Nothing else maybe (pure Nothing) (\dir -> readIface dir name key) cache
       r <- case kept of
         Just iface -> pure (Right iface)
         Nothing -> case maybe (parseModule path src) Right parsed of
@@ -130,7 +143,8 @@ compileUnits stamp cache = go M.empty M.empty []
           Right m -> case compileModule before (path, m {modName = name}) of
             Left e -> pure (Left e)
             Right iface -> do
-              mapM_ (\dir -> writeIface dir name key iface) cache
+              -- the prompt's module changes with every line
+              mapM_ (\dir -> writeIface dir name key iface) (if "<" `isPrefixOf` path then Nothing else cache)
               pure (Right iface)
       case r of
         Left e -> pure (Left e)
@@ -146,10 +160,16 @@ compileUnits stamp cache = go M.empty M.empty []
 quoteSource :: String -> IO String
 quoteSource err = case location err of
   Nothing -> pure err
-  Just (path, l, c) -> do
+  Just (path, _, _) -> do
     exists <- doesFileExist path
     src <- if exists then readFile path else pure ""
-    pure $ case drop (l - 1) (lines src) of
+    pure (quoteIn src err)
+
+-- | quoteSource, given the source of the file the error is in.
+quoteIn :: String -> String -> String
+quoteIn src err = case location err of
+  Nothing -> err
+  Just (_, l, c) -> case drop (l - 1) (lines src) of
       line : _ | l >= 1, c >= 1, c <= length line + 1 ->
         let n = show l
             pad = replicate (length n) ' '
@@ -172,15 +192,17 @@ quoteSource err = case location err of
       _ -> 1
     isWordChar ch = isAlphaNum ch || ch == '_' || ch == '\''
     isSymbolChar ch = ch `elem` ("!#$%&*+./<=>?@\\^|-~:" :: String)
-    location s = case break (== ':') s of
+
+location :: String -> Maybe (FilePath, Int, Int)
+location s = case break (== ':') s of
       (path, ':' : more) | not (null path), (l, ':' : more') <- span isDigit more, (c, ':' : _) <- span isDigit more', not (null l), not (null c) ->
         Just (path, read l, read c)
       _ -> Nothing
 
 -- | The main module and everything it imports, dependencies first. A module
 -- A.B lives in A/B.hgo, next to the main file, or in the standard library.
-loadAll :: FilePath -> IO (Either String [(FilePath, String, Module)])
-loadAll mainFile = do
+loadAll :: Virtual -> FilePath -> IO (Either String [(FilePath, String, Module)])
+loadAll virtual mainFile = do
   r <- load [] (Right (M.empty, [])) ("Main", mainFile, Nothing)
   pure (fmap (reverse . snd) r)
   where
@@ -192,20 +214,21 @@ loadAll mainFile = do
         | name `elem` stack -> pure (Left ("import cycle: " ++ intercalate " -> " (reverse (name : stack))))
         | otherwise -> do
             exists <- doesFileExist path
-            found <- case (exists, M.lookup name libraryModules) of
-              (True, _) -> Just . (,) path <$> readFile path
-              (False, Just src) -> pure (Just ("lib" </> moduleFile name, src))
-              (False, Nothing) -> pure Nothing
+            found <- case (M.lookup name virtual, exists, M.lookup name libraryModules) of
+              (Just v, _, _) -> pure (Just v)
+              (_, True, _) -> Just . (,) path <$> readFile path
+              (_, False, Just src) -> pure (Just ("lib" </> moduleFile name, src))
+              _ -> pure Nothing
             case found of
               Nothing -> pure (Left (maybe "" ((++ ": ") . showLoc) from ++ "cannot find module " ++ name ++ " (looked for " ++ path ++ ")"))
               Just (path', src) ->
                 case parseModule path' src of
                   Left e -> pure (Left e)
                   Right m
-                    | modName m /= name ->
+                    | modName m /= name, not (M.member name virtual) ->
                         pure (Left (path' ++ ": declares module " ++ modName m ++ ", but should be " ++ name))
                     | otherwise -> do
                         let deps = [(impModule i, root </> moduleFile (impModule i), Just (impLoc i)) | i <- modImports m, impModule i /= "Prelude"]
                         r <- foldM (load (name : stack)) (Right (seen, done)) deps
-                        pure (fmap (\(seen', done') -> (M.insert name () seen', (path', src, m) : done')) r)
+                        pure (fmap (\(seen', done') -> (M.insert name () seen', (path', src, m {modName = name}) : done')) r)
     moduleFile n = map (\c -> if c == '.' then '/' else c) n <.> "hgo"

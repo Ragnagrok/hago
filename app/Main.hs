@@ -2,6 +2,7 @@
 module Main (main) where
 
 import Hago.Driver (compileFile)
+import Hago.Repl (repl)
 import System.Directory (createDirectoryIfMissing, findExecutable, getTemporaryDirectory)
 import System.Environment (getArgs)
 import System.Exit
@@ -12,7 +13,8 @@ import System.Process (rawSystem, readProcessWithExitCode)
 usage :: String
 usage = unlines
   [ "usage: hago build FILE.hgo [-o OUT.go]   compile to Go"
-  , "       hago run FILE.hgo                 compile and run with `go run`" ]
+  , "       hago run FILE.hgo                 compile and run with `go run`"
+  , "       hago repl [FILE.hgo]              evaluate expressions as they are typed" ]
 
 main :: IO ()
 main = getArgs >>= \args -> case args of
@@ -25,6 +27,8 @@ main = getArgs >>= \args -> case args of
     out <- build file (dir </> "main.go")
     code <- rawSystem "go" ["run", out]
     exitWith code
+  ["repl"] -> repl Nothing
+  ["repl", file] -> repl (Just file)
   _ -> hPutStr stderr usage >> exitFailure
 
 build :: FilePath -> FilePath -> IO FilePath

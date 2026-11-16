@@ -61,6 +61,12 @@ From easiest to hardest, which is the order we take them in.
       `String` without unpacking it (`Data.String`). 3.7 MB of JSON: 10.3 s and 1.1 GB at first,
       3.5 s and 140 MB now; `jq .` takes 0.13 s.
 
+- [x] **A REPL.** `hago repl`, for the book (`Ragnagrok/hago-book`), whose sessions it checks:
+      definitions accumulate in a module checked as it grows, an expression becomes a program
+      that prints or runs it, `:type` shows constraints (the expression typed is generalised
+      even as a plain value), `:load` and `:{ :}`. A transcript without a terminal; `repl/`
+      sessions are replayed by `check.sh`. The driver compiles modules given as text.
+
 Next, found by the JSON program:
 
 - [ ] **Small sum types without allocation.** A non-recursive sum type (`Maybe`, `Either`, a
@@ -107,7 +113,8 @@ Known rough edges, found on the way and not fixed yet:
 ## How to check
 
 `./check.sh` builds the compiler, compiles and runs every example program (each `examples/*.hgo`
-with an `.out` next to it; the rest are modules) comparing its output with that `.out`, and checks that every program in `rejected/` fails with the error on its
+with an `.out` next to it; the rest are modules) comparing its output with that `.out`, replays
+the REPL sessions in `repl/`, and checks that every program in `rejected/` fails with the error on its
 `-- expects:` line. It compiles with an empty cache, then compiles every example again with the
 cache full and checks the Go is the same.
 CI runs the same script on every push.

@@ -414,8 +414,32 @@ Hace falta GHC (probado con 9.12) con cabal, y Go 1.21 o posterior.
 cabal build
 cabal run -v0 hago -- run examples/lazy.hgo                 # compilar y correr
 cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # sólo compilar
+cabal run -v0 hago -- repl                                  # evaluar expresiones a medida que se escriben
 ./check.sh                                                  # todos los ejemplos y los rechazados
 ```
+
+### El REPL
+
+```
+hago> :t pure 3
+pure 3 :: (Applicative f, Num a) => f a
+hago> let double x = x + x
+hago> double 2.5
+5.0
+hago> :load repl/Shapes.hgo
+loaded repl/Shapes.hgo
+hago> area (Rect 2.0 5.0)
+10.0
+```
+
+`hago repl` guarda lo que se define (funciones, `data`, clases, instancias, imports) en un
+módulo y lo chequea a medida que crece. Una expresión se compila con ese módulo en un programa
+chico que la imprime, o que la ejecuta si es una acción, y Go lo corre: cerca de un tercio de
+segundo cada vez. `:type` muestra el tipo con sus restricciones, `:load` trae las definiciones
+de un archivo (y su `main`), que una definición en el prompt reemplaza, y `:{ ... :}` abarca
+varias líneas. No hay edición de línea; `rlwrap hago repl` la agrega. Sin una terminal en la
+entrada, repite cada línea después del prompt, así que la salida es una transcripción:
+`check.sh` reproduce las sesiones de `repl/`.
 
 En `examples/` hay listas perezosas, ADTs con pattern matching y guardas, type classes, mónadas
 (State, Maybe, Either, listas, reader, writer, Traversable), transformadores de mónadas, módulos,
