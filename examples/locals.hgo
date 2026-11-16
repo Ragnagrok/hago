@@ -1,0 +1,26 @@
+-- Local functions are as polymorphic as top-level ones: they can be used at
+-- several types, use variables from around them, and have constraints.
+pairs :: Int -> ([(Int, Int)], [(String, String)])
+pairs n = (twice n, twice "x")
+  where
+    twice x = [(x, x)]
+
+-- fill uses n from outside, and is used at two types
+pad :: Int -> (([Char], String), ([Char], [Int]))
+pad n = (fill "ab", fill [1, 2])
+  where
+    fill xs = (replicate n ' ', xs)
+
+describe :: Show a => a -> String
+describe v = wrap (show v) ++ wrap (length [v])
+  where
+    wrap :: Show b => b -> String
+    wrap x = "<" ++ show x ++ ">"
+
+main :: IO ()
+main = do
+  print (pairs 3)
+  print (pad 2)
+  let swap (a, b) = (b, a)
+  print (swap (1, 'x'), swap ("s", True))
+  putStrLn (describe [1, 2])

@@ -379,8 +379,10 @@ Haskell 98.
   `String`, `Bool`.
 - Operadores con declaraciones `infixl`/`infixr`/`infix`, secciones, backquotes, tuplas de hasta
   quince elementos (lo que pide Haskell 98; para más, un record), listas literales, y rangos (`[a ..]`, `[a, b ..]`, `[a .. c]`, `[a, b .. c]`) sobre cualquier `Enum`.
-- Polimorfismo de let en el nivel superior, con análisis de dependencias de las definiciones sin
-  firma.
+- Polimorfismo de let, con análisis de dependencias de las definiciones sin firma, también para
+  las funciones locales: un helper local puede usarse en varios tipos y tener restricciones. Las
+  funciones literales de Go no pueden ser genéricas, así que una función así pasa al nivel
+  superior y recibe como parámetros extra las variables locales que usa.
 - `foreign import go`.
 
 **Falta**
@@ -394,8 +396,10 @@ Haskell 98.
   sobre IO no consumen pila.
 - **No hay clases de varios parámetros,** así que no hay `MonadState s m` al estilo mtl: los
   transformadores se usan con `lift` explícito.
-- **Las definiciones locales son monomórficas.** Las funciones literales de Go no pueden ser
-  genéricas.
+- **Algunas definiciones locales siguen siendo monomórficas:** los valores (como con la
+  restricción de monomorfismo de Haskell, así se calculan una sola vez) y las funciones con
+  restricciones sobre los tipos de la función que las contiene, cuyos diccionarios son de esa
+  función.
 - **Un valor polimórfico usado dentro de una función genérica se recalcula ahí,** en la variable
   de tipo de esa función. En tipos concretos se calcula una sola vez.
 - **`Lazy` es un tipo de verdad.** La pereza sólo llega hasta donde la llevan los tipos. Por

@@ -1,5 +1,9 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 
 -- | Typed core: the output of the type checker and the input of code
 -- generation. Every node that Go needs a type for carries one; types may
@@ -7,7 +11,9 @@
 -- the final substitution. Class constraints are explicit dictionaries.
 module Hago.Core where
 
-import Data.Data (Data)
+import Data.Data (Data, gmapQ, gmapT)
+import Data.Type.Equality ((:~:) (..))
+import Data.Typeable (Typeable, eqT)
 import qualified Data.IntMap as IM
 import qualified Data.Map as M
 import Hago.Syntax (Lit (..), Name)
@@ -266,3 +272,32 @@ splitFun _ t = ([], t)
 arrows :: Type -> Int
 arrows (TFun _ b) = 1 + arrows b
 arrows _ = 0
+
+-- Generic traversals ---------------------------------------------------------------
+
+-- | Every t inside a value, outermost first, looking inside each one too.
+everything :: forall t a. (Data a, Typeable t) => a -> [t]
+everything = go
+  where
+    go :: forall b. Data b => b -> [t]
+    go x = case eqT @b @t of
+      Just Refl -> x : concat (gmapQ go x)
+      Nothing -> concat (gmapQ go x)
+
+-- | Applies f to every t, innermost first.
+everywhere :: forall t a. (Data a, Typeable t) => (t -> t) -> a -> a
+everywhere f = go
+  where
+    go :: forall b. Data b => b -> b
+    go x = case eqT @b @t of
+      Just Refl -> f (gmapT go x)
+      Nothing -> gmapT go x
+
+-- | Every name bound inside: parameters, pattern variables, local bindings.
+coreBinders :: Data a => a -> [Name]
+coreBinders x =
+  [n | CLam ps _ _ <- everything x, (n, _) <- ps]
+    ++ [n | CBind n _ _ _ <- everything x]
+    ++ [n | CPVar n _ <- everything x]
+    ++ [n | CPAs n _ _ <- everything x]
+    ++ [n | CSBind n _ _ <- everything x]

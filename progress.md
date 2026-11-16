@@ -25,8 +25,10 @@ From easiest to hardest, which is the order we take them in.
       variable per concrete instantiation (5.2 s → 0.9 s on a 50-use benchmark). Still recomputed
       when used inside a generic function at its type variable. Fixed on the way: values are
       initialised in dependency order, functions included.
-- [ ] **Polymorphic local definitions.** `let`/`where` bindings are monomorphic because Go function
-      literals cannot be generic; lift polymorphic ones to the top level.
+- [x] **Polymorphic local functions.** Generalised in the type checker, in context (so captured
+      variables keep their real types, `Lazy` included), then lifted to the top with the local
+      variables they use as parameters; constraints on their own variables become theirs. Values,
+      and functions constrained on the outer function's types, stay monomorphic.
 - [ ] **Less visible `Lazy`.** A type error can still mention `Lazy` (`liftA2 (:)` is one; a lambda
       fixes it).
 - [ ] **Multi-parameter classes with functional dependencies.** `class Monad m => MonadState s m | m -> s`,

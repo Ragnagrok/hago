@@ -361,7 +361,10 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
   classes over types and over type constructors. `Int`, `Double`, `Char`, `String`, `Bool`.
 - Operators with `infixl`/`infixr`/`infix` declarations, sections, backquotes, tuples of up to
   fifteen elements (as Haskell 98 asks; past that, a record), list literals, and ranges (`[a ..]`, `[a, b ..]`, `[a .. c]`, `[a, b .. c]`) over any `Enum`.
-- Let-polymorphism at the top level, with dependency analysis of unsigned bindings.
+- Let-polymorphism, with dependency analysis of unsigned bindings, for local functions too: a
+  local helper can be used at several types and have constraints. Go function literals cannot
+  be generic, so such a function moves to the top level, taking the local variables it uses as
+  extra parameters.
 - `foreign import go`.
 
 **Missing**
@@ -374,7 +377,9 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
   calls. Write those loops with `tailRecM`. In IO and transformers over IO they are flat.
 - **No multi-parameter classes,** so no mtl-style `MonadState s m`: transformers come with
   explicit `lift`.
-- **Local bindings are monomorphic.** Go function literals cannot be generic.
+- **Some local definitions stay monomorphic:** values (as with Haskell's monomorphism
+  restriction, so they are computed once), and functions with constraints on the types of the
+  function around them, whose dictionaries belong to that function.
 - **A polymorphic value used inside a generic function is recomputed there,** at that
   function's type variable. At concrete types it is computed once.
 - **`Lazy` is a real type.** Laziness only reaches where the types carry it. For example,

@@ -13,6 +13,7 @@ import Control.Monad.State
 import Data.Graph (flattenSCC, flattenSCCs, stronglyConnComp)
 import qualified Data.IntMap as IM
 import Data.List (intercalate, nub, sortOn, (\\))
+import qualified Data.List as L
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Hago.Core
@@ -265,7 +266,11 @@ inferRecordUpd env x fs cands = do
 -- Expressions ---------------------------------------------------------------------
 
 extend :: Env -> [(Name, Type)] -> Env
-extend env bs = env {envVars = foldr (\(n, t) -> M.insert n (Forall [] [] t, False)) (envVars env) bs}
+extend env bs = env
+  { envVars = foldr (\(n, t) -> M.insert n (Forall [] [] t, False)) (envVars env) bs
+  , envLocal = foldr (S.insert . fst) (envLocal env) bs
+  , envMono = map snd bs ++ envMono env
+  , envCalls = foldr (M.delete . fst) (envCalls env) bs }
 
 litType :: Lit -> Type
 litType (LInt _) = tInt
@@ -278,7 +283,13 @@ inferVarRaw env x = case M.lookup x (envVars env) of
   Nothing -> throw ("not in scope: " ++ x)
   Just (sc, self) -> do
     (t, targs, ds) <- instantiate sc
-    pure (CVar x (if self then SelfGroup else Inst targs ds) t, t)
+    case M.lookup x (envCalls env) of
+      -- a local function moved to the top, called with the variables it uses
+      Just (lifted, passed) ->
+        let ft = foldr (TFun . snd) t passed
+            f = CVar lifted (Inst targs ds) ft
+         in pure (if null passed then f else CApp f [CVar a (Inst [] []) at | (a, at) <- passed], t)
+      Nothing -> pure (CVar x (if self then SelfGroup else Inst targs ds) t, t)
 
 infer :: Env -> Expr -> TC (CExpr, Type)
 infer env e = case e of
@@ -518,22 +529,91 @@ doStmts env m = \case
 -- | Local bindings (let and where): recursive and monomorphic, since Go
 -- function literals cannot be generic. Their constraints are solved together
 -- with those of the enclosing top-level binding.
+-- | let and where, a group of mutually recursive definitions at a time.
+--
+-- A group of functions whose types have variables nothing else fixes is
+-- generalised and moved to the top (Go function literals cannot be
+-- generic): the local variables it uses become its first parameters, and
+-- each use passes them. Constraints on its own type variables become its
+-- constraints. It stays local and monomorphic when it is a value, when it
+-- has constraints on the types of the function around it (their
+-- dictionaries belong to that function), or when it binds its own name
+-- again inside.
 localBinds :: Env -> [Decl] -> TC (Env, [CBind])
-localBinds env ds = do
+localBinds env0 ds = do
   let sigs = M.fromList [(n, t) | DSig ns _ t <- ds, n <- ns]
       binds = [(n, cs) | DBind n cs <- ds]
-  tys <- forM binds $ \(n, _) -> case M.lookup n sigs of
-    -- local signatures are checked monomorphically: their variables are
-    -- unification variables, not rigid ones
-    Just st -> do
-      vs <- mapM (\v -> (,) v <$> fresh) (stypeVars st)
-      fromSType env (M.fromList vs) st
-    Nothing -> fresh
-  let env' = extend env (zip (map fst binds) tys)
-  cbs <- forM (zip binds tys) $ \((n, cs), t) -> withCtx n $ do
-    (ar, body) <- tcClauses env' cs t
-    pure (CBind n t ar body)
-  pure (env', cbs)
+      names = map fst binds
+      sccs = stronglyConnComp [(b, n, filter (`elem` names) (clausesRefs cs)) | b@(n, cs) <- binds]
+  foldM (group sigs) (env0, []) sccs
+  where
+    group sigs (env, acc) scc = do
+      let members = flattenSCC scc
+          ns = map fst members
+      tys <- forM members $ \(n, _) -> case M.lookup n sigs of
+        -- local signatures are checked monomorphically: their variables are
+        -- unification variables, not rigid ones
+        Just st -> do
+          vs <- mapM (\v -> (,) v <$> fresh) (stypeVars st)
+          fromSType env (M.fromList vs) st
+        Nothing -> fresh
+      let envG = extend env (zip ns tys)
+      before <- gets (S.fromList . map (\(h, _, _) -> h) . stWanted)
+      results <- forM (zip members tys) $ \((n, cs), t) -> withCtx n (tcClauses envG cs t)
+      (wantedNew, wantedOld) <- gets (L.partition (\(h, _, _) -> not (S.member h before)) . stWanted)
+      let wanted = [p | (_, p, _) <- wantedNew]
+      zts <- mapM zonkT tys
+      envTs <- mapM zonkT (envMono env)
+      newPreds <- mapM (\(IsIn c t) -> IsIn c <$> zonkT t) wanted
+      let bodies = map snd results
+          envMetas = S.fromList (concatMap metas envTs)
+          gen = nub [m | t <- zts, m <- metas t, not (S.member m envMetas)]
+          ownOnly (IsIn _ t) = all (`elem` gen) (metas t) && null (tyVarsOf t)
+          liftable = not (null gen) && all ((> 0) . fst) results && all ownOnly newPreds
+            && not (any (`elem` ns) (coreBinders bodies))
+          local = (envG, acc ++ [CBind n t ar body | ((n, t), (ar, body)) <- zip (zip ns tys) results])
+      if not liftable then pure local else do
+        -- the local variables the group uses, in a fixed order
+        let used = nub [x | CVar x _ _ <- everything bodies, S.member x (envLocal env), x `notElem` ns]
+        passed <- forM used $ \x -> case M.lookup x (envVars env) of
+          Just (Forall [] [] t, _) -> (,) x <$> zonkT t
+          _ -> throw ("internal: " ++ x ++ " is not a local variable")
+        vs <- mapM (const (uniq "l")) gen
+        -- the group's own constraints, solved apart from those of the
+        -- function around it
+        modify (\st -> st {stWanted = wantedNew})
+        preds <- withCtx (unwords ns) (solve env (M.fromList (zip gen vs)))
+        modify (\st -> st {stWanted = wantedOld ++ stWanted st})
+        zipWithM_ (\m v -> bindMeta m (TVar v)) gen vs
+        let dicts = [DParam (dictName c v) | IsIn c (TVar v) <- preds]
+        zts' <- mapM zonkT tys
+        lifted <- mapM (\n -> ((n ++ "'") ++) . drop 1 <$> uniq "") ns
+        -- inside, the group calls itself with its own type variables and the
+        -- variables as they are, now parameters
+        let selfCall n t = case lookup n (zip ns (zip lifted zts')) of
+              Just (ln, _) ->
+                let f = CVar ln (Inst (map TVar vs) dicts) (foldr (TFun . snd) t passed)
+                 in if null passed then f else CApp f [CVar x (Inst [] []) xt | (x, xt) <- passed]
+              Nothing -> CVar n (Inst [] []) t
+            rewrite = everywhere $ \case
+              CVar n (Inst [] []) t | n `elem` ns -> selfCall n t
+              e -> e
+        forM_ (zip3 lifted zts' results) $ \(ln, t, (ar, body)) -> do
+          let ft = foldr (TFun . snd) t passed
+              body' = case rewrite body of
+                CLam ps r inner -> CLam (passed ++ ps) r inner
+                other -> other
+          modify (\st -> st {stLifted = (TopBind ln vs [(dictName c v, p) | p@(IsIn c (TVar v)) <- preds] ft (length passed + ar) body' False, vs) : stLifted st})
+        -- outside, the variables are passed through names nothing can shadow
+        aliases <- forM passed $ \(x, xt) -> do
+          a <- uniq "cap"
+          pure ((a, xt), CBind a xt 0 (CVar x (Inst [] []) xt))
+        let withAliases = extend env (map fst aliases)
+            env' = withAliases
+              { envVars = foldr (\(n, t) -> M.insert n (Forall vs preds t, False)) (envVars withAliases) (zip ns zts')
+              , envCalls = foldr (\(n, ln) -> M.insert n (ln, map fst aliases)) (envCalls env) (zip ns lifted)
+              , envMono = zts' ++ map (snd . fst) aliases ++ envMono env }
+        pure (env', acc ++ map snd aliases)
 
 -- | Elaborates the clauses of one function against its type.
 tcClauses :: Env -> [Clause] -> Type -> TC (Int, CExpr)
@@ -582,7 +662,7 @@ etaTo t (k, body) = do
 
 -- | Errors without a location of their own are reported against the file.
 typecheck :: FilePath -> [Decl] -> Either String Program
-typecheck file ds = first (formatErr file) (evalStateT (tcModule ds) (St 0 IM.empty [] IM.empty Nothing))
+typecheck file ds = first (formatErr file) (evalStateT (tcModule ds) (St 0 IM.empty [] IM.empty Nothing []))
 
 tyconId :: Name -> String
 tyconId = \case
@@ -596,7 +676,7 @@ tcModule :: [Decl] -> TC Program
 tcModule ds = do
   let datas = [d | DData d <- ds]
       types = M.union builtinTypes (M.fromList [(ddName d, length (ddParams d)) | d <- datas])
-      envD = Env M.empty builtinCons types M.empty M.empty [] M.empty
+      envD = Env M.empty builtinCons types M.empty M.empty [] M.empty S.empty [] M.empty
   -- data types
   checked <- forM datas $ \d -> atLoc (Just (ddLoc d)) $ withCtx (ddName d) $ do
     let n = ddName d
@@ -755,7 +835,7 @@ tcModule ds = do
         [(n, n, filter (`M.member` byName) (clausesRefs cs)) | (n, cs) <- binds])
       defaults = [tbName b | b <- defaultBinds]
   st <- get
-  pure Program
+  pure $ withLifted (stSub st) (reverse (stLifted st)) Program
     { progData = dataInfos
     , progCons = cons
     , progForeign = M.fromList [(n, f) | (n, (_, f)) <- foreigns]
@@ -771,7 +851,7 @@ tcModule ds = do
     tcGroup (env, acc) (gi, scc) = do
       let members = flattenSCC scc
       tys <- mapM (const fresh) members
-      let envG = env {envVars = foldr (\((n, _), t) -> M.insert n (Forall [] [] t, True)) (envVars env) (zip members tys)}
+      let envG = env {envVars = foldr (\((n, _), t) -> M.insert n (Forall [] [] t, True)) (envVars env) (zip members tys), envMono = tys ++ envMono env}
       results <- forM (zip members tys) $ \((n, cs), t) -> withCtx n (tcClauses envG cs t)
       -- the monomorphism restriction: a group of plain values is not
       -- generalised over its constraints, which are defaulted instead
@@ -786,6 +866,26 @@ tcModule ds = do
       zts' <- mapM zonkT tys
       let env' = env {envVars = foldr (\((n, _), t) -> M.insert n (Forall vs preds t, False)) (envVars env) (zip members zts')}
       pure (env', acc ++ [topBind n vs preds t ar body | (((n, _), t), (ar, body)) <- zip (zip members zts') results])
+
+-- | Adds the local functions moved to the top. Each also takes the type
+-- variables of the functions around it that it mentions, or that the lifted
+-- functions it calls need; every call passes them as they are.
+withLifted :: Subst -> [(TopBind, [Name])] -> Program -> Program
+withLifted sub lifted prog = everywhere passExtras prog {progBinds = progBinds prog ++ map complete lifted}
+  where
+    own = M.fromList [(tbName b, vs) | (b, vs) <- lifted]
+    direct = M.fromList
+      [ (tbName b, nub (tyVarsOf (zonk sub (tbType b)) ++ concatMap (tyVarsOf . zonk sub) (everything (tbBody b) :: [Type])))
+      | (b, _) <- lifted ]
+    calls = M.fromList [(tbName b, nub [x | CVar x _ _ <- everything (tbBody b), M.member x own]) | (b, _) <- lifted]
+    extras = fixpoint (M.map (const []) own)
+    fixpoint cur =
+      let next' = M.mapWithKey (\n _ -> nub (direct M.! n ++ concat [cur M.! g | g <- calls M.! n]) \\ (own M.! n)) cur
+       in if next' == cur then cur else fixpoint next'
+    complete (b, vs) = b {tbParams = vs ++ extras M.! tbName b}
+    passExtras = \case
+      CVar x (Inst ts ds) t | Just ex <- M.lookup x extras -> CVar x (Inst (ts ++ map TVar ex) ds) t
+      e -> e
 
 topBind :: Name -> [Name] -> [Pred] -> Type -> Int -> CExpr -> TopBind
 topBind n vs preds t ar body =

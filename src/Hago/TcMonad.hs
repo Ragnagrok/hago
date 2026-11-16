@@ -10,6 +10,7 @@ import Control.Monad.State
 import qualified Data.IntMap as IM
 import Data.List (intercalate, nub)
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Hago.Core
 import Hago.Syntax (Loc, Name, showLoc, unqual)
 
@@ -23,6 +24,10 @@ data Env = Env
   , envInsts :: M.Map (Name, Name) InstHead -- ^ by class and type constructor
   , envGivens :: [(Pred, Dict)]            -- ^ constraints available as dictionary parameters
   , envRecords :: M.Map Name Record        -- ^ the fields of each record type
+  , envLocal :: S.Set Name                 -- ^ the local variables in scope
+  , envMono :: [Type]                      -- ^ the types of everything not generalised yet
+  , envCalls :: M.Map Name (Name, [(Name, Type)])
+      -- ^ local functions moved to the top: the new name, and the variables passed to it
   }
 
 -- | A record type: its constructors, and each field's laziness, type (over
@@ -35,6 +40,7 @@ data St = St
   , stWanted :: [(Int, Pred, Maybe Loc)]   -- ^ constraints waiting to be solved, by hole, with where they arose
   , stSolved :: IM.IntMap Dict
   , stLoc :: Maybe Loc                     -- ^ the innermost expression or pattern being checked
+  , stLifted :: [(TopBind, [Name])]        -- ^ local functions moved to the top, with their own type variables
   }
 
 -- | An error: where, inside which definitions (outermost first), and what.
