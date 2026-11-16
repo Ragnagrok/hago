@@ -1,0 +1,209 @@
+-- The Hago prelude, compiled together with every program.
+-- Arithmetic, comparison, show and IO are primitives; the rest is here.
+
+infixr 9 .
+infixr 0 $
+infixr 5 ++
+infixl 1 >>, >>=
+infix 4 ==, /=, <, <=, >, >=
+infixl 7 *, `div`, `mod`
+infixl 6 +, -
+infixr 3 &&
+infixr 2 ||
+infixl 9 !!
+
+data Maybe a = Nothing | Just a
+data Either a b = Left a | Right b
+
+id :: a -> a
+id x = x
+
+const :: a -> b -> a
+const x _ = x
+
+flip :: (a -> b -> c) -> b -> a -> c
+flip f x y = f y x
+
+(.) :: (b -> c) -> (a -> b) -> a -> c
+(.) f g = \x -> f (g x)
+
+($) :: (a -> b) -> a -> b
+($) f x = f x
+
+-- The second argument is suspended, so these short-circuit.
+(&&) :: Bool -> Lazy Bool -> Bool
+True && b = b
+False && _ = False
+
+(||) :: Bool -> Lazy Bool -> Bool
+True || _ = True
+False || b = b
+
+not :: Bool -> Bool
+not True = False
+not False = True
+
+otherwise :: Bool
+otherwise = True
+
+fst :: (a, b) -> a
+fst (x, _) = x
+
+snd :: (a, b) -> b
+snd (_, y) = y
+
+maybe :: b -> (a -> b) -> Maybe a -> b
+maybe d _ Nothing = d
+maybe _ f (Just x) = f x
+
+either :: (a -> c) -> (b -> c) -> Either a b -> c
+either f _ (Left x) = f x
+either _ g (Right y) = g y
+
+max :: a -> a -> a
+max x y = if x <= y then y else x
+
+min :: a -> a -> a
+min x y = if x <= y then x else y
+
+-- Lists ------------------------------------------------------------------
+
+head :: [a] -> a
+head (x:_) = x
+head [] = error "head: empty list"
+
+tail :: [a] -> [a]
+tail (_:xs) = xs
+tail [] = error "tail: empty list"
+
+null :: [a] -> Bool
+null [] = True
+null _ = False
+
+-- What ++ means on lists. The second list is only demanded once the first runs out.
+append :: [a] -> Lazy [a] -> [a]
+append [] ys = ys
+append (x:xs) ys = x : append xs ys
+
+map :: (a -> b) -> [a] -> [b]
+map _ [] = []
+map f (x:xs) = f x : map f xs
+
+filter :: (a -> Bool) -> [a] -> [a]
+filter _ [] = []
+filter p (x:xs)
+  | p x = x : filter p xs
+  | otherwise = filter p xs
+
+-- The accumulator is lazy, so foldr can stop early on infinite lists.
+foldr :: (a -> Lazy b -> b) -> b -> [a] -> b
+foldr _ z [] = z
+foldr f z (x:xs) = f x (foldr f z xs)
+
+foldl :: (b -> a -> b) -> b -> [a] -> b
+foldl _ acc [] = acc
+foldl f acc (x:xs) = foldl f (f acc x) xs
+
+sum :: [Int] -> Int
+sum xs = foldl (+) 0 xs
+
+product :: [Int] -> Int
+product xs = foldl (*) 1 xs
+
+length :: [a] -> Int
+length xs = foldl (\n _ -> n + 1) 0 xs
+
+reverse :: [a] -> [a]
+reverse xs = foldl (\acc x -> x : acc) [] xs
+
+concat :: [[a]] -> [a]
+concat xss = foldr (\xs rest -> xs ++ rest) [] xss
+
+concatMap :: (a -> [b]) -> [a] -> [b]
+concatMap f xs = concat (map f xs)
+
+and :: [Bool] -> Bool
+and xs = foldr (&&) True xs
+
+or :: [Bool] -> Bool
+or xs = foldr (||) False xs
+
+any :: (a -> Bool) -> [a] -> Bool
+any p xs = or (map p xs)
+
+all :: (a -> Bool) -> [a] -> Bool
+all p xs = and (map p xs)
+
+elem :: a -> [a] -> Bool
+elem x xs = any (\y -> y == x) xs
+
+take :: Int -> [a] -> [a]
+take n xs
+  | n <= 0 = []
+  | otherwise = case xs of
+      [] -> []
+      (y:ys) -> y : take (n - 1) ys
+
+drop :: Int -> [a] -> [a]
+drop n xs
+  | n <= 0 = xs
+  | otherwise = case xs of
+      [] -> []
+      (_:ys) -> drop (n - 1) ys
+
+takeWhile :: (a -> Bool) -> [a] -> [a]
+takeWhile _ [] = []
+takeWhile p (x:xs)
+  | p x = x : takeWhile p xs
+  | otherwise = []
+
+dropWhile :: (a -> Bool) -> [a] -> [a]
+dropWhile _ [] = []
+dropWhile p (x:xs)
+  | p x = dropWhile p xs
+  | otherwise = x : xs
+
+(!!) :: [a] -> Int -> a
+(!!) (x:xs) n = if n == 0 then x else xs !! (n - 1)
+(!!) [] _ = error "!!: index too large"
+
+zip :: [a] -> [b] -> [(a, b)]
+zip (x:xs) (y:ys) = (x, y) : zip xs ys
+zip _ _ = []
+
+zipWith :: (a -> b -> c) -> [a] -> [b] -> [c]
+zipWith f (x:xs) (y:ys) = f x y : zipWith f xs ys
+zipWith _ _ _ = []
+
+lookup :: a -> [(a, b)] -> Maybe b
+lookup _ [] = Nothing
+lookup k ((k', v):rest) = if k == k' then Just v else lookup k rest
+
+repeat :: a -> [a]
+repeat x = x : repeat x
+
+replicate :: Int -> a -> [a]
+replicate n x = take n (repeat x)
+
+iterate :: (a -> a) -> a -> [a]
+iterate f x = x : iterate f (f x)
+
+cycle :: [a] -> [a]
+cycle [] = error "cycle: empty list"
+cycle xs = xs ++ cycle xs
+
+enumFrom :: Int -> [Int]
+enumFrom n = n : enumFrom (n + 1)
+
+enumFromTo :: Int -> Int -> [Int]
+enumFromTo a b
+  | a > b = []
+  | otherwise = a : enumFromTo (a + 1) b
+
+-- IO -----------------------------------------------------------------------
+
+mapM_ :: (a -> IO ()) -> [a] -> IO ()
+mapM_ _ [] = return ()
+mapM_ f (x:xs) = do
+  f x
+  mapM_ f xs

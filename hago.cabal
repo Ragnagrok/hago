@@ -1,0 +1,29 @@
+cabal-version:   3.0
+name:            hago
+version:         0.1.0.0
+synopsis:        Haskell 98 syntax, strict by default, compiled to Go
+license:         MIT
+license-file:    LICENSE
+author:          Federico Sawady
+build-type:      Simple
+extra-source-files:
+  prelude/Prelude.hgo
+  runtime/runtime.go
+
+common comun
+  default-language: Haskell2010
+  ghc-options:      -Wall
+  build-depends:    base >=4.18 && <5
+
+library
+  import:          comun
+  hs-source-dirs:  src
+  exposed-modules: Hago.Syntax, Hago.Lexer, Hago.Parser, Hago.Core, Hago.Typecheck,
+                   Hago.CodeGen, Hago.Embed, Hago.Driver
+  build-depends:   containers, mtl, parsec, template-haskell
+
+executable hago
+  import:          comun
+  hs-source-dirs:  app
+  main-is:         Main.hs
+  build-depends:   hago, directory, filepath, process

@@ -1,0 +1,17 @@
+name: check
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.12.2'
+          cabal-version: 'latest'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - run: cabal update
+      - run: (cd runtime && go vet runtime.go)
+      - run: ./check.sh

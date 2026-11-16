@@ -1,0 +1,54 @@
+-- Algebraic data types, pattern matching, guards and where.
+
+data Shape = Circle Int | Rect Int Int | Triangle Int Int Int
+
+data Tree a = Leaf | Node (Tree a) a (Tree a)
+
+area :: Shape -> Int
+area (Circle r) = 3 * r * r
+area (Rect w h) = w * h
+area (Triangle a b c) = isqrt (s * (s - a) * (s - b) * (s - c))
+  where
+    s = (a + b + c) `div` 2
+
+isqrt :: Int -> Int
+isqrt n = go 0
+  where
+    go k
+      | (k + 1) * (k + 1) > n = k
+      | otherwise = go (k + 1)
+
+classify :: Shape -> String
+classify s
+  | a > 100 = "large"
+  | a > 10 = "medium"
+  | otherwise = "small"
+  where
+    a = area s
+
+insert :: Int -> Tree Int -> Tree Int
+insert x Leaf = Node Leaf x Leaf
+insert x t@(Node l y r)
+  | x < y = Node (insert x l) y r
+  | x > y = Node l y (insert x r)
+  | otherwise = t
+
+toList :: Tree a -> [a]
+toList Leaf = []
+toList (Node l x r) = toList l ++ [x] ++ toList r
+
+depth :: Tree a -> Int
+depth t = case t of
+  Leaf -> 0
+  Node l _ r -> 1 + max (depth l) (depth r)
+
+main :: IO ()
+main = do
+  let shapes = [Circle 2, Rect 3 4, Triangle 30 40 50]
+  mapM_ (\s -> putStrLn (show (area s) ++ " " ++ classify s)) shapes
+  print (Rect 3 4)
+  print (Just (Circle (-1)))
+  let tree = foldr insert Leaf [5, 3, 8, 1, 4, 7, 9, 2, 6]
+  print (toList tree)
+  print (depth tree)
+  print (Rect 1 2 == Rect 1 2, Circle 1 < Rect 0 0, lookup 2 [(1, "one"), (2, "two")])

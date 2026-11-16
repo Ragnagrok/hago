@@ -1,0 +1,20 @@
+-- Calling Go: pure functions, functions that can fail, and IO.
+
+foreign import go "strings.ToUpper" toUpper :: String -> String
+foreign import go "strings.Repeat" repeatString :: String -> Int -> String
+foreign import go "strconv.Atoi" parseInt :: String -> Either String Int
+foreign import go "fmt.Println" goPrintln :: String -> IO ()
+foreign import go "math.MaxInt32" maxInt32 :: Int
+
+describe :: String -> String
+describe s = case parseInt s of
+  Right n -> s ++ " is the number " ++ show n
+  Left err -> err
+
+main :: IO ()
+main = do
+  putStrLn (toUpper "hello from go")
+  putStrLn (repeatString "ab" 3)
+  mapM_ (putStrLn . describe) ["42", "forty-two"]
+  goPrintln "printed by fmt.Println"
+  print maxInt32

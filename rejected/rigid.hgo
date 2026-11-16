@@ -1,0 +1,6 @@
+-- expects: type mismatch: expected a, got Int
+same :: a -> a
+same x = 0
+
+main :: IO ()
+main = print (same 1)

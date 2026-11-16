@@ -1,0 +1,3 @@
+-- expects: type mismatch: expected Int, got String
+main :: IO ()
+main = print (1 + "one")

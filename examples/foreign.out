@@ -1,0 +1,6 @@
+HELLO FROM GO
+ababab
+42 is the number 42
+strconv.Atoi: parsing "forty-two": invalid syntax
+printed by fmt.Println
+2147483647

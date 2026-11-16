@@ -1,0 +1,22 @@
+-- Self tail calls compile to loops, so deep recursion needs no stack.
+
+count :: Int -> Int -> Int
+count acc n = if n == 0 then acc else count (acc + n) (n - 1)
+
+collatz :: Int -> Int
+collatz n = go n 0
+  where
+    go 1 steps = steps
+    go m steps
+      | m `mod` 2 == 0 = go (m `div` 2) (steps + 1)
+      | otherwise = go (3 * m + 1) (steps + 1)
+
+main :: IO ()
+main = do
+  print (count 0 10000000)
+  print (sum [1..1000000])
+  print (collatz 27)
+  print (and (map (< 10) [1..]))
+  print (length (filter even [1..100]))
+  where
+    even k = k `mod` 2 == 0

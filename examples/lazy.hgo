@@ -1,0 +1,29 @@
+-- Strict by default. The tail of a list is lazy, so infinite lists work.
+
+ones :: [Int]
+ones = 1 : ones
+
+fibs :: [Int]
+fibs = 0 : 1 : zipWith (+) fibs (tail fibs)
+
+primes :: [Int]
+primes = sieve [2..]
+  where
+    sieve (p:xs) = p : sieve (filter (\x -> x `mod` p /= 0) xs)
+
+-- A Lazy parameter is only evaluated if the function uses it.
+unless' :: Bool -> Lazy Int -> Int
+unless' True _ = 0
+unless' False x = x
+
+main :: IO ()
+main = do
+  print (take 5 (repeat 1))
+  print (take 3 ones)
+  print (take 10 fibs)
+  print (take 10 primes)
+  print (takeWhile (< 30) (map (* 2) [1..]))
+  print (foldr (\x rest -> x > 10 || rest) False [1..])
+  print (False && error "never evaluated")
+  print (unless' True (error "never evaluated"))
+  print (take 7 (cycle [1, 2, 3]))
