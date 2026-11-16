@@ -25,7 +25,7 @@ import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as S
 import Hago.Core
-import Hago.Syntax (Lit (..), Name)
+import Hago.Syntax (Lit (..), Name, tupleArity)
 
 -- | Something compiled to a Go function or variable.
 data Ent = Ent
@@ -329,7 +329,6 @@ typeTag = \case
     tag = \case
       "[]" -> "List"
       "()" -> "Unit"
-      "(,)" -> "Tup2"
-      "(,,)" -> "Tup3"
       "->" -> "Fn"
+      c | Just n <- tupleArity c -> "Tup" ++ show n
       c -> map (\x -> if x == '.' then '_' else x) c

@@ -25,15 +25,6 @@ type Cons[T any] struct {
 func (Nil[T]) isList()  {}
 func (Cons[T]) isList() {}
 
-type Tup2[A, B any] struct {
-	F0 A
-	F1 B
-}
-type Tup3[A, B, C any] struct {
-	F0 A
-	F1 B
-	F2 C
-}
 
 // Every runtime import is used even if the program never prints.
 var _ = rt_fmt.Sprint

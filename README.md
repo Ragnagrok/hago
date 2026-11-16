@@ -324,7 +324,7 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # just compile
 
 The `examples/` folder has lazy lists, ADTs with pattern matching and guards, type classes,
 monads (State, Maybe, Either, lists, reader, writer, Traversable), monad transformers, modules,
-records, newtypes, list comprehensions, calls to Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
+records, newtypes, tuples, list comprehensions, calls to Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
 programs the type checker must refuse, each with the error it expects.
 
 An error says where it is, quotes the line and marks the place:
@@ -348,8 +348,8 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
   `e :: t` annotations.
 - `class` with superclasses, default methods and constrained methods, `instance` with contexts,
   classes over types and over type constructors. `Int`, `Double`, `Char`, `String`, `Bool`.
-- Operators with `infixl`/`infixr`/`infix` declarations, sections, backquotes, tuples of two and
-  three, list literals, `[a..]` and `[a..b]`.
+- Operators with `infixl`/`infixr`/`infix` declarations, sections, backquotes, tuples of up to
+  fifteen elements (as Haskell 98 asks; past that, a record), list literals, `[a..]` and `[a..b]`.
 - Let-polymorphism at the top level, with dependency analysis of unsigned bindings.
 - `foreign import go`.
 
@@ -358,7 +358,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
   type) cannot be specialised, and is rejected.
 - **`Read` and `Enum`.** `[a..b]` only works on `Int`.
 - **`String` is Go's `string`, not `[Char]`.** Convert with `pack` and `unpack`.
-- Tuples beyond three, and updates that change a record's type.
+- Updates that change a record's type.
 - **Modules compile together with the program,** with no separate compilation or package
   manager.
 - **Long loops in pure monads like `State` use stack,** because their `>>=` is a chain of Go
@@ -388,7 +388,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `src/Hago/Specialize.hs` | copies of code over type constructors; instance methods become functions |
 | `src/Hago/Newtype.hs` | newtypes replaced by the type they wrap |
 | `src/Hago/CodeGen.hs` | Go generation |
-| `runtime/runtime.go` | lists, tuples, thunks and trampolined IO, copied into every program |
+| `runtime/runtime.go` | lists, thunks and trampolined IO, copied into every program |
 | `prelude/Prelude.hgo` | the prelude, written in Hago |
 
 ## License

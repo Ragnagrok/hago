@@ -29,12 +29,34 @@ runtimeSource :: String
 runtimeSource = unlines (drop 1 (dropWhile (not . ("// --- runtime ---" `isPrefixOf`)) (lines raw)))
   where raw = $(embedFile "runtime/runtime.go")
 
+-- | Eq, Ord and Show for every size of tuple, written out as Prelude source.
+tupleInstances :: String
+tupleInstances = unlines (concatMap instances [2 .. maxTuple])
+  where
+    instances n =
+      let xs = ["x" ++ show i | i <- [1 .. n]]
+          ys = ["y" ++ show i | i <- [1 .. n]]
+          ts = ["t" ++ show i | i <- [1 .. n]]
+          tuple vs = "(" ++ intercalate ", " vs ++ ")"
+          ctx c = "(" ++ intercalate ", " [c ++ " " ++ t | t <- ts] ++ ")"
+          chain op = foldr1 (\a b -> a ++ " " ++ op ++ " (" ++ b ++ ")")
+       in [ ""
+          , "instance " ++ ctx "Eq" ++ " => Eq " ++ tuple ts ++ " where"
+          , "  " ++ tuple xs ++ " == " ++ tuple ys ++ " = " ++ chain "&&" (zipWith (\x y -> x ++ " == " ++ y) xs ys)
+          , ""
+          , "instance " ++ ctx "Ord" ++ " => Ord " ++ tuple ts ++ " where"
+          , "  compare " ++ tuple xs ++ " " ++ tuple ys ++ " = " ++ chain "<>" (zipWith (\x y -> "compare " ++ x ++ " " ++ y) xs ys)
+          , ""
+          , "instance " ++ ctx "Show" ++ " => Show " ++ tuple ts ++ " where"
+          , "  show " ++ tuple xs ++ " = \"(\" ++ " ++ intercalate " ++ \",\" ++ " ["show " ++ x | x <- xs] ++ " ++ \")\""
+          ]
+
 compileFile :: FilePath -> IO (Either String String)
 compileFile file = do
   loaded <- loadAll file
   either (fmap Left . quoteSource) (pure . Right) $ do
     mods <- loaded
-    prelude <- parseModule "Prelude.hgo" preludeSource
+    prelude <- parseModule "Prelude.hgo" (preludeSource ++ tupleInstances)
     renamed <- renameModules (prelude {modName = "Prelude"} : mods)
     expanded <- expandSynonyms renamed
     decls <- expandDeriving expanded

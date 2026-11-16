@@ -60,7 +60,8 @@ infixr 5 ~>
 builtinTypes :: M.Map Name Int
 builtinTypes = M.fromList
   [ ("Int", 0), ("Double", 0), ("Bool", 0), ("Char", 0), ("String", 0), ("()", 0)
-  , ("[]", 1), ("IO", 1), ("Lazy", 1), ("(,)", 2), ("(,,)", 3), ("->", 2) ]
+  , ("[]", 1), ("IO", 1), ("Lazy", 1), ("->", 2) ]
+    `M.union` M.fromList [(tupleCon n, n) | n <- [2 .. maxTuple]]
 
 builtinCons :: M.Map Name ConInfo
 builtinCons = M.fromList
@@ -69,9 +70,8 @@ builtinCons = M.fromList
   , ("()", ConInfo "()" [] [] 0)
   , ("False", ConInfo "Bool" [] [] 0)
   , ("True", ConInfo "Bool" [] [] 1)
-  , ("(,)", ConInfo "(,)" ["a", "b"] [(False, TVar "a"), (False, TVar "b")] 0)
-  , ("(,,)", ConInfo "(,,)" ["a", "b", "c"] [(False, TVar "a"), (False, TVar "b"), (False, TVar "c")] 0)
   ]
+    `M.union` M.fromList [(k, ConInfo k vs [(False, TVar v) | v <- vs] 0) | n <- [2 .. maxTuple], let k = tupleCon n, let vs = ["t" ++ show i | i <- [1 .. n]]]
 
 -- Types written by the programmer -----------------------------------------------
 
@@ -99,7 +99,7 @@ fromSType env vars = go
     go (STFun a b) = TFun <$> go a <*> go b
     go (STApp h ts) = foldl tApp <$> go h <*> mapM go ts
     go (STCon c ts) = case M.lookup c (envTypes env) of
-      Nothing -> throw ("unknown type: " ++ c)
+      Nothing -> throw (maybe ("unknown type: " ++ c) tooBig (tupleArity c))
       Just n
         | length ts > n -> throw ("type " ++ c ++ " expects " ++ show n ++ " arguments")
         | otherwise -> norm . TCon c <$> mapM go ts
@@ -114,7 +114,10 @@ contextPreds env ctx = forM ctx $ \(c, v) ->
 -- Constructors ---------------------------------------------------------------------
 
 lookupCon :: Env -> Name -> TC ConInfo
-lookupCon env k = maybe (throw ("unknown constructor: " ++ k)) pure (M.lookup k (envCons env))
+lookupCon env k = maybe (throw (maybe ("unknown constructor: " ++ k) tooBig (tupleArity k))) pure (M.lookup k (envCons env))
+
+tooBig :: Int -> String
+tooBig n = "a tuple has at most " ++ show maxTuple ++ " elements, and this one has " ++ show n ++ ": use a record instead"
 
 -- | Field types (lazy ones wrapped in Lazy) and result type, for given type arguments.
 conSig :: ConInfo -> [Type] -> ([Type], Type)
@@ -574,9 +577,8 @@ tyconId :: Name -> String
 tyconId = \case
   "[]" -> "List"
   "()" -> "Unit"
-  "(,)" -> "Tup2"
-  "(,,)" -> "Tup3"
   "->" -> "Fn"
+  k | Just n <- tupleArity k -> "Tup" ++ show n
   k -> k
 
 tcModule :: [Decl] -> TC Program

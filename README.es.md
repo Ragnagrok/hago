@@ -335,7 +335,7 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # sólo compilar
 
 En `examples/` hay listas perezosas, ADTs con pattern matching y guardas, type classes, mónadas
 (State, Maybe, Either, listas, reader, writer, Traversable), transformadores de mónadas, módulos,
-records, newtypes, listas por comprensión, llamadas a Go y loops.
+records, newtypes, tuplas, listas por comprensión, llamadas a Go y loops.
 Cada ejemplo tiene un `.out` con la salida esperada. En `rejected/` hay programas que el type
 checker tiene que rechazar, cada uno con el error que espera.
 
@@ -362,8 +362,8 @@ Haskell 98.
 - `class` con superclases, métodos por defecto y métodos con restricciones, `instance` con
   contextos, clases sobre tipos y sobre constructores de tipos. `Int`, `Double`, `Char`,
   `String`, `Bool`.
-- Operadores con declaraciones `infixl`/`infixr`/`infix`, secciones, backquotes, tuplas de dos y
-  de tres, listas literales, `[a..]` y `[a..b]`.
+- Operadores con declaraciones `infixl`/`infixr`/`infix`, secciones, backquotes, tuplas de hasta
+  quince elementos (lo que pide Haskell 98; para más, un record), listas literales, `[a..]` y `[a..b]`.
 - Polimorfismo de let en el nivel superior, con análisis de dependencias de las definiciones sin
   firma.
 - `foreign import go`.
@@ -373,7 +373,7 @@ Haskell 98.
   en un tipo más grande) no se puede especializar, y se rechaza.
 - **`Read` y `Enum`.** `[a..b]` sólo funciona con `Int`.
 - **`String` es el `string` de Go, no `[Char]`.** Se convierte con `pack` y `unpack`.
-- Tuplas de más de tres, y actualizaciones que cambien el tipo de un record.
+- Actualizaciones que cambien el tipo de un record.
 - **Los módulos se compilan junto con el programa,** sin compilación separada ni gestor de
   paquetes.
 - **Los loops largos en mónadas puras como `State` consumen pila,** porque su `>>=` es una
@@ -406,7 +406,7 @@ Haskell 98.
 | `src/Hago/Specialize.hs` | copias del código sobre constructores de tipos; los métodos de instancia pasan a ser funciones |
 | `src/Hago/Newtype.hs` | los newtypes, reemplazados por el tipo que envuelven |
 | `src/Hago/CodeGen.hs` | generación de Go |
-| `runtime/runtime.go` | listas, tuplas, thunks e IO con trampolín; se copia en cada programa |
+| `runtime/runtime.go` | listas, thunks e IO con trampolín; se copia en cada programa |
 | `prelude/Prelude.hgo` | el prelude, escrito en Hago |
 
 ## Licencia

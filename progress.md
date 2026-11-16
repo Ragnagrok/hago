@@ -9,7 +9,9 @@ From easiest to hardest, which is the order we take them in.
 
 - [x] **Errors quote the source.** The line and a mark under the place, after file:line:column.
 - [x] **Re-exports.** `module M` and imported names in an export list.
-- [ ] **Tuples of any size.** Today only pairs and triples, with their instances.
+- [x] **Tuples up to fifteen.** Eq, Ord and Show for every size, `(,,)` as a function, `zip3`
+      family; a bigger tuple is an error that suggests a record. Fixed on the way: a chain of `++`
+      on strings took exponential time to compile.
 - [ ] **`Enum`.** `[a..b]`, `[a,b..c]`, `succ`/`pred` for `Char`, `Double` and derived enumerations
       (`deriving Enum` for types whose constructors have no fields). Today ranges only work on `Int`.
 - [ ] **Type-changing record updates.** `b { item = "x" }` from `Box Int` to `Box String`.

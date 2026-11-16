@@ -9,6 +9,21 @@ import Data.List (intercalate)
 
 type Name = String
 
+-- | Tuples go up to fifteen elements, as Haskell 98 asks; past that a record
+-- names its fields.
+maxTuple :: Int
+maxTuple = 15
+
+-- | The constructor of an n-tuple: "(,)", "(,,)", ...
+tupleCon :: Int -> Name
+tupleCon n = "(" ++ replicate (n - 1) ',' ++ ")"
+
+-- | How many elements a tuple constructor has, if it is one.
+tupleArity :: Name -> Maybe Int
+tupleArity c = case c of
+  '(' : ',' : rest | all (== ',') (init rest), last rest == ')' -> Just (length rest + 1)
+  _ -> Nothing
+
 -- | Where something is in the source: file, line, column.
 type Loc = (FilePath, Int, Int)
 

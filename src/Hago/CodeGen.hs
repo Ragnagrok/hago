@@ -1,4 +1,8 @@
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 
 -- | Typed core to Go. Output is unformatted; the driver runs gofmt on it.
 module Hago.CodeGen (generate) where
@@ -6,15 +10,18 @@ module Hago.CodeGen (generate) where
 import Control.Monad
 import Control.Monad.State
 import Data.Char
+import Data.Data (Data, gmapQ)
 import Data.Graph (flattenSCCs, stronglyConnComp)
-import Data.List (intercalate, isPrefixOf, nub)
+import Data.List (intercalate, isPrefixOf, nub, sort)
 import qualified Data.IntMap as IM
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
 import Hago.Core
-import Hago.Syntax (Lit (..), Name, splitQual, unqual)
+import Hago.Syntax (Lit (..), Name, splitQual, tupleArity, unqual)
 import Hago.Specialize (instMethodName, typeTag)
 import Hago.Typecheck (primSchemes)
+import Data.Type.Equality ((:~:) (..))
+import Data.Typeable (eqT)
 import Numeric (showHex)
 
 -- | What a name refers to, and with how many arguments it is called directly.
@@ -38,7 +45,7 @@ data GS = GS {gsNext :: Int, gsLoop :: Bool}
 type Gen = State GS
 
 generate :: String -> Program -> String
-generate runtime prog = unlines (header ++ [runtime] ++ dataDecls ++ hkDecls ++ classDecls ++ instDecls ++ foreignUses ++ tops ++ initBlock ++ mainFn)
+generate runtime prog = unlines (header ++ [runtime] ++ tupleDecls ++ dataDecls ++ hkDecls ++ classDecls ++ instDecls ++ foreignUses ++ tops ++ initBlock ++ mainFn)
   where
     foreignPkgs = nub [pkg | f <- M.elems (progForeign prog), let (pkg, _) = splitSymbol (fSymbol f), pkg /= ""]
     header =
@@ -65,6 +72,16 @@ generate runtime prog = unlines (header ++ [runtime] ++ dataDecls ++ hkDecls ++ 
       , cxDictParams = []
       , cxProg = prog
       }
+    -- a struct for each size of tuple the program uses
+    tupleDecls =
+      [ "type Tup" ++ show n ++ "[" ++ commas ["T" ++ show i | i <- [1 .. n]] ++ " any] struct{ "
+          ++ intercalate "; " ["F" ++ show (i - 1) ++ " T" ++ show i | i <- [1 .. n]] ++ " }"
+      | n <- sort (nub (concatMap tupleSizes (typesIn prog {progCons = M.filterWithKey (\k _ -> tupleArity k == Nothing) (progCons prog)}))) ]
+    tupleSizes = \case
+      TCon c ts -> maybe [] pure (tupleArity c) ++ concatMap tupleSizes ts
+      TFun a b -> tupleSizes a ++ tupleSizes b
+      TApp f x -> tupleSizes f ++ tupleSizes x
+      _ -> []
     dataDecls = concatMap (genData prog)
       [(n, d) | (n, d) <- M.toList (progData prog), n `notElem` ["[]", "Bool"], null (hkPositions prog n)]
     hkDecls = concatMap (genHkData prog) (hkInstances prog)
@@ -127,8 +144,7 @@ conStruct :: Program -> Name -> String
 conStruct prog k = case k of
   "[]" -> "Nil"
   ":" -> "Cons"
-  "(,)" -> "Tup2"
-  "(,,)" -> "Tup3"
+  _ | Just n <- tupleArity k -> "Tup" ++ show n
   _ -> typeName (ciType (progCons prog M.! k)) ++ "_" ++ conSuffix k
 
 splitSymbol :: String -> (String, String)
@@ -156,8 +172,7 @@ goTy ctx = render . zonk (progSubst (cxProg ctx))
       TCon "[]" [t] -> "List[" ++ render t ++ "]"
       TCon "IO" [t] -> "IO[" ++ render t ++ "]"
       TCon "Lazy" [t] -> "func() " ++ render t
-      TCon "(,)" ts -> "Tup2[" ++ commas (map render ts) ++ "]"
-      TCon "(,,)" ts -> "Tup3[" ++ commas (map render ts) ++ "]"
+      TCon c ts | Just n <- tupleArity c -> "Tup" ++ show n ++ "[" ++ commas (map render ts) ++ "]"
       TCon c ts
         | not (null (hkPositions (cxProg ctx) c)) ->
             let (n, args) = dataInst (cxProg ctx) c ts
@@ -259,7 +274,7 @@ genHkData prog (c, canon) =
 
 genData :: Program -> (Name, DataInfo) -> [String]
 genData prog (n, DataInfo ps _ ks _)
-  | n `elem` ["()", "(,)", "(,,)"] = []
+  | n == "()" || tupleArity n /= Nothing = []
   | otherwise =
       ["type " ++ typeName n ++ tparamList ps ++ " interface{ " ++ marker ++ "() }"]
         ++ concatMap con ks
@@ -411,7 +426,7 @@ genPats ctx ((s, p) : rest) k = case p of
   CPCon "True" _ _ -> cond s
   CPCon "False" _ _ -> cond ("!" ++ s)
   CPCon "()" _ _ -> genPats ctx rest k
-  CPCon k' _ subs | k' `elem` ["(,)", "(,,)"] ->
+  CPCon k' _ subs | Just _ <- tupleArity k' ->
     genPats ctx ([(s ++ ".F" ++ show i, q) | (i, q) <- zip [0 :: Int ..] subs] ++ rest) k
   CPCon k' targs subs -> do
     let struct = conRef ctx k' targs
@@ -473,8 +488,17 @@ genExpr ctx e = case e of
   CVar x ref t -> genVar ctx x ref t
   CCon k targs t -> genApp ctx e [] (Just (conArity k)) (\args -> pure (conValue ctx k targs args)) t
   CApp f args -> case f of
+    -- s ++ t on strings, with t suspended, needs no suspension: Go's + is
+    -- strict, and t is generated once (generating the suspension too would
+    -- make a chain of ++ exponential)
+    CVar "++" (Inst [targ] _) _
+      | [a, CDelay _ inner] <- args
+      , TCon "String" [] <- zonk (progSubst (cxProg ctx)) targ -> do
+          a' <- genExpr ctx a
+          b' <- genExpr ctx inner
+          pure ("(" ++ a' ++ " + " ++ b' ++ ")")
     CVar x ref t | Just ar <- knownArity x, ar > 0 ->
-      genApp ctx f args (Just ar) (\as -> call ctx x ref t as args) t
+      genApp ctx f args (Just ar) (\as -> call ctx x ref t as) t
     CCon k targs t -> genApp ctx f args (Just (conArity k)) (\as -> pure (conValue ctx k targs as)) t
     _ -> do
       h <- genExpr ctx f
@@ -546,7 +570,7 @@ genVar ctx x ref t = case M.lookup x (cxVars ctx) of
   Just (VKMethod 0) -> pure (genMethodCall ctx x (methodDict ref) [])
   Just (VKLocal 0) -> pure (mangle x)
   Just (VKForeign f) | fArity f == 0 -> pure (foreignCall ctx f [])
-  Just (VKPrim 0) -> call ctx x ref t [] []
+  Just (VKPrim 0) -> call ctx x ref t []
   Just _ -> genExpr ctx (CApp (CVar x ref t) [])
   Nothing -> error ("codegen: unknown variable " ++ x)
   where
@@ -555,13 +579,13 @@ genVar ctx x ref t = case M.lookup x (cxVars ctx) of
       SelfGroup -> if null (cxTParams ctx) then "" else "[" ++ commas (map tyVar (cxTParams ctx)) ++ "]"
 
 -- | A saturated call to a known function.
-call :: Ctx -> Name -> VRef -> Type -> [String] -> [CExpr] -> Gen String
-call ctx x ref _ as cargs = case M.lookup x (cxVars ctx) of
+call :: Ctx -> Name -> VRef -> Type -> [String] -> Gen String
+call ctx x ref _ as = case M.lookup x (cxVars ctx) of
   Just (VKTop _ tps _) -> pure (mangle x ++ insts tps ++ "(" ++ commas (dictArgs ctx ref ++ as) ++ ")")
   Just (VKMethod _) -> pure (genMethodCall ctx x (methodDict ref) as)
   Just (VKLocal _) -> pure (mangle x ++ "(" ++ commas as ++ ")")
   Just (VKForeign f) -> pure (foreignCall ctx f as)
-  Just (VKPrim _) -> genPrim ctx x targs as cargs
+  Just (VKPrim _) -> genPrim ctx x targs as
   Nothing -> error ("codegen: unknown function " ++ x)
   where
     targs = case ref of
@@ -571,8 +595,8 @@ call ctx x ref _ as cargs = case M.lookup x (cxVars ctx) of
       Inst ts _ -> typeArgs ctx ts
       SelfGroup -> if null tps then "" else "[" ++ commas (map tyVar (cxTParams ctx)) ++ "]"
 
-genPrim :: Ctx -> Name -> [Type] -> [String] -> [CExpr] -> Gen String
-genPrim ctx x targs as cargs = case (x, as) of
+genPrim :: Ctx -> Name -> [Type] -> [String] -> Gen String
+genPrim ctx x targs as = case (x, as) of
   (op, [a, b]) | Just o <- lookup op binops -> pure ("(" ++ a ++ " " ++ o ++ " " ++ b ++ ")")
   ("primNeg", [a]) -> pure ("(-" ++ a ++ ")")
   ("primDiv", [a, b]) -> pure ("rt_div(" ++ a ++ ", " ++ b ++ ")")
@@ -593,9 +617,7 @@ genPrim ctx x targs as cargs = case (x, as) of
   ("primThenIO", [a, b]) -> pure ("rt_then" ++ typeArgs ctx targs ++ "(" ++ a ++ ", " ++ b ++ ")")
   ("error", [a]) -> pure ("rt_error" ++ typeArgs ctx targs ++ "(" ++ a ++ ")")
   ("++", [a, b]) -> case targs of
-    [TCon "String" []] -> case cargs of
-      [_, CDelay _ inner] -> (\b' -> "(" ++ a ++ " + " ++ b' ++ ")") <$> genExpr ctx inner
-      _ -> pure ("(" ++ a ++ " + " ++ b ++ "())")
+    [TCon "String" []] -> pure ("(" ++ a ++ " + " ++ b ++ "())")
     [TCon "[]" [el]] -> pure (mangle "append" ++ typeArgs ctx [el] ++ "(" ++ a ++ ", " ++ b ++ ")")
     _ -> pure ("rt_error[" ++ goTy ctx (case targs of (t : _) -> t; [] -> tUnit) ++ "](\"++ needs a String or a list\")")
   ("pack", [a]) -> pure ("rt_pack(" ++ a ++ ")")
@@ -809,3 +831,12 @@ genLit = \case
       | ord c < 0x10000 = "\\u" ++ pad 4 (showHex (ord c) "")
       | otherwise = "\\U" ++ pad 8 (showHex (ord c) "")
     pad n s = replicate (n - length s) '0' ++ s
+
+-- | Every outermost type inside a value.
+typesIn :: forall a. Data a => a -> [Type]
+typesIn = go
+  where
+    go :: forall b. Data b => b -> [Type]
+    go x = case eqT @b @Type of
+      Just Refl -> [x]
+      Nothing -> concat (gmapQ go x)

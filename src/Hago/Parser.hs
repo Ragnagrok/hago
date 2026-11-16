@@ -337,16 +337,18 @@ aType = choice
   where
     tupleType = (STCon "()" [] <$ special ")")
       <|> try (STCon "->" [] <$ (key "->" >> special ")"))
-      <|> try (do n <- many1 (special ","); special ")"; pure (STCon (tupleCon (length n + 1)) []))
+      <|> try (do n <- many1 (special ","); special ")"; flip STCon [] <$> tupleOf (length n + 1))
       <|> do
       ts <- pType `sepBy1` special ","
       special ")"
-      pure $ case ts of
-        [t] -> t
-        _ -> STCon (tupleCon (length ts)) ts
+      case ts of
+        [t] -> pure t
+        _ -> flip STCon ts <$> tupleOf (length ts)
 
-tupleCon :: Int -> Name
-tupleCon n = "(" ++ replicate (n - 1) ',' ++ ")"
+-- | A tuple of n elements. The type checker refuses those past the largest,
+-- where it knows where the tuple is.
+tupleOf :: Int -> Parser Name
+tupleOf = pure . tupleCon
 
 -- Patterns -------------------------------------------------------------------
 
@@ -379,9 +381,9 @@ aPat = locP $ choice
     tuplePat = (PCon "()" [] <$ special ")") <|> do
       ps <- pat `sepBy1` special ","
       special ")"
-      pure $ case ps of
-        [p] -> p
-        _ -> PCon (tupleCon (length ps)) ps
+      case ps of
+        [p] -> pure p
+        _ -> flip PCon ps <$> tupleOf (length ps)
     listPat = foldr (\p acc -> PCon ":" [p, acc]) (PCon "[]" [])
     -- { x = p, y }: y alone binds a variable named like the field
     recordPat = between (special "{") (special "}") $ flip sepBy (special ",") $ do
@@ -573,11 +575,12 @@ comprehension e = \case
           _ -> ELam [PVar "_lc"] (ECase (EVar "_lc") [Alt p (Rhs [(Nothing, body)] []), Alt PWild (Rhs [(Nothing, ECon "[]")] [])])
      in EApp (EApp (EVar "Prelude.concatMap") fn) l
 
--- | After an opening parenthesis: unit, an operator as a value, a section, a
--- parenthesised expression or a tuple.
+-- | After an opening parenthesis: unit, a tuple constructor, an operator as a
+-- value, a section, a parenthesised expression or a tuple.
 parenExpr :: Parser Expr
 parenExpr = choice
   [ ECon "()" <$ special ")"
+  , do n <- many1 (special ","); special ")"; ECon <$> tupleOf (length n + 1)
   , selector
   , try (opValue <* special ")")
   , try rightSection
@@ -590,7 +593,8 @@ parenExpr = choice
         , special ")" >> pure e
         , do es <- many1 (special "," *> expr)
              special ")"
-             pure (foldl EApp (ECon (tupleCon (length es + 1))) (e : es))
+             k <- tupleOf (length es + 1)
+             pure (foldl EApp (ECon k) (e : es))
         ]
   ]
   where
