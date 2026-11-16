@@ -335,6 +335,15 @@ records, newtypes, listas por comprensión, llamadas a Go y loops.
 Cada ejemplo tiene un `.out` con la salida esperada. En `rejected/` hay programas que el type
 checker tiene que rechazar, cada uno con el error que espera.
 
+Un error dice dónde está, cita la línea y marca el lugar:
+
+```
+rejected/mismatch.hgo:3:18: in main: type mismatch: expected String, got Int
+  |
+3 | main = putStrLn (length [1, 2, 3])
+  |                  ^^^^^^
+```
+
 ## Qué hay y qué no
 
 Es un prototipo. El pipeline completo funciona de punta a punta: regla de layout, parser,
@@ -377,8 +386,6 @@ Haskell 98.
   segundo argumento. La adaptación automática cubre el caso de pasar funciones estrictas, pero
   igual puede aparecer un error de tipos que mencione `Lazy` (`liftA2 (:)` es uno; una lambda lo
   resuelve).
-- **Los mensajes de error son escuetos.** Dicen dónde (`examples/x.hgo:12:7: in main: no
-  instance for Show Color`), pero no citan el código ni sugieren correcciones.
 
 ## Organización del código
 

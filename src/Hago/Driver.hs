@@ -6,6 +6,7 @@
 module Hago.Driver (compileFile) where
 
 import Control.Monad (foldM)
+import Data.Char (isAlphaNum, isDigit)
 import Data.List (intercalate, isPrefixOf)
 import qualified Data.Map as M
 import Hago.CodeGen (generate)
@@ -31,7 +32,7 @@ runtimeSource = unlines (drop 1 (dropWhile (not . ("// --- runtime ---" `isPrefi
 compileFile :: FilePath -> IO (Either String String)
 compileFile file = do
   loaded <- loadAll file
-  pure $ do
+  either (fmap Left . quoteSource) (pure . Right) $ do
     mods <- loaded
     prelude <- parseModule "Prelude.hgo" preludeSource
     renamed <- renameModules (prelude {modName = "Prelude"} : mods)
@@ -40,6 +41,47 @@ compileFile file = do
     checked <- typecheck file (resolveFixity decls)
     prog <- either (Left . ((file ++ ": ") ++)) Right (specialize checked)
     pure (generate runtimeSource (eraseNewtypes prog))
+
+-- | Follows an error that starts with file:line:column with that line of the
+-- source and a mark under the place:
+--
+-- > rejected/mismatch.hgo:3:18: in main: type mismatch: expected String, got Int
+-- >   |
+-- > 3 | main = putStrLn (length [1, 2, 3])
+-- >   |                  ^^^^^^
+quoteSource :: String -> IO String
+quoteSource err = case location err of
+  Nothing -> pure err
+  Just (path, l, c) -> do
+    exists <- doesFileExist path
+    src <- if exists then readFile path else pure ""
+    pure $ case drop (l - 1) (lines src) of
+      line : _ | l >= 1, c >= 1, c <= length line + 1 ->
+        let n = show l
+            pad = replicate (length n) ' '
+            rest = drop (c - 1) line
+            (headline, details) = break (== '\n') err
+         in intercalate "\n"
+              [ headline
+              , pad ++ " |"
+              , n ++ " | " ++ line
+              , pad ++ " | " ++ map (\ch -> if ch == '\t' then '\t' else ' ') (take (c - 1) line) ++ replicate (tokenWidth rest) '^' ]
+              ++ details
+      _ -> err
+  where
+    -- a word, an operator, or a field access like .name
+    tokenWidth rest = case rest of
+      '.' : more@(ch : _) | isWordChar ch -> 1 + length (takeWhile isWordChar more)
+      ch : _
+        | isWordChar ch -> length (takeWhile isWordChar rest)
+        | isSymbolChar ch -> length (takeWhile isSymbolChar rest)
+      _ -> 1
+    isWordChar ch = isAlphaNum ch || ch == '_' || ch == '\''
+    isSymbolChar ch = ch `elem` ("!#$%&*+./<=>?@\\^|-~:" :: String)
+    location s = case break (== ':') s of
+      (path, ':' : more) | not (null path), (l, ':' : more') <- span isDigit more, (c, ':' : _) <- span isDigit more', not (null l), not (null c) ->
+        Just (path, read l, read c)
+      _ -> Nothing
 
 -- | The main module and everything it imports, dependencies first. A module
 -- A.B lives in A/B.hgo, next to the main file.

@@ -323,6 +323,15 @@ monads (State, Maybe, Either, lists, reader, writer, Traversable), monad transfo
 records, newtypes, list comprehensions, calls to Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
 programs the type checker must refuse, each with the error it expects.
 
+An error says where it is, quotes the line and marks the place:
+
+```
+rejected/mismatch.hgo:3:18: in main: type mismatch: expected String, got Int
+  |
+3 | main = putStrLn (length [1, 2, 3])
+  |                  ^^^^^^
+```
+
 ## What is there and what isn't
 
 It is a prototype. The pipeline (layout rule, parser, Hindley-Milner inference that elaborates
@@ -359,8 +368,6 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
   `foldr` takes `a -> Lazy b -> b` so it can stop early, and `++` and `<>` suspend their second
   argument. The automatic adaptation covers passing strict functions, but you can still meet a
   type error that mentions `Lazy` (`liftA2 (:)` is one; a lambda fixes it).
-- **Error messages are short.** They do say where (`examples/x.hgo:12:7: in main: no instance
-  for Show Color`), but they do not quote the source or suggest fixes.
 
 ## Layout of the code
 

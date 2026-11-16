@@ -5,27 +5,27 @@ work it describes.
 
 ## Next
 
-In the order we plan to take them.
+From easiest to hardest, which is the order we take them in.
 
+- [x] **Errors quote the source.** The line and a mark under the place, after file:line:column.
+- [ ] **Re-exports.** `module M` in an export list.
+- [ ] **Tuples of any size.** Today only pairs and triples, with their instances.
+- [ ] **`Enum`.** `[a..b]`, `[a,b..c]`, `succ`/`pred` for `Char`, `Double` and derived enumerations
+      (`deriving Enum` for types whose constructors have no fields). Today ranges only work on `Int`.
+- [ ] **Type-changing record updates.** `b { item = "x" }` from `Box Int` to `Box String`.
+- [ ] **`Read`** (at least for `Int`, `Double` and derived types).
+- [ ] **Share polymorphic top-level values.** `xs = []` becomes a generic Go function and is
+      re-evaluated on each use; cache one value per instantiation.
+- [ ] **Polymorphic local definitions.** `let`/`where` bindings are monomorphic because Go function
+      literals cannot be generic; lift polymorphic ones to the top level.
+- [ ] **Less visible `Lazy`.** A type error can still mention `Lazy` (`liftA2 (:)` is one; a lambda
+      fixes it).
 - [ ] **Multi-parameter classes with functional dependencies.** `class Monad m => MonadState s m | m -> s`,
       so `get`, `put`, `throwError` and `ask` work through any transformer stack without `lift`
       (mtl style). Specialisation already removes dictionaries, so this costs nothing at run time.
-- [ ] **`Enum`.** `[a..b]`, `[a,b..c]`, `succ`/`pred` for `Char`, `Double` and derived enumerations
-      (`deriving Enum` for types whose constructors have no fields). Today ranges only work on `Int`.
-- [ ] **Tuples of any size.** Today only pairs and triples, with their instances.
-- [ ] **Type-changing record updates.** `b { item = "x" }` from `Box Int` to `Box String`.
-- [ ] **`Read`** (at least for `Int`, `Double` and derived types).
-- [ ] **Polymorphic local definitions.** `let`/`where` bindings are monomorphic because Go function
-      literals cannot be generic; lift polymorphic ones to the top level.
-- [ ] **Share polymorphic top-level values.** `xs = []` becomes a generic Go function and is
-      re-evaluated on each use; cache one value per instantiation.
-- [ ] **Re-exports.** `module M` in an export list.
-- [ ] **Better error messages.** Quote the offending line and point at the column; suggest fixes.
-- [ ] **Separate compilation.** Today every module is compiled together with the program.
 - [ ] **Stack-safe pure monads.** Long loops in `State` grow the Go stack and need `tailRecM`; IO and
       transformers over IO are already trampolined.
-- [ ] **Less visible `Lazy`.** A type error can still mention `Lazy` (`liftA2 (:)` is one; a lambda
-      fixes it).
+- [ ] **Separate compilation.** Today every module is compiled together with the program.
 
 ## Out of scope, on purpose
 
