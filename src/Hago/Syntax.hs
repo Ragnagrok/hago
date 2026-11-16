@@ -13,6 +13,7 @@ data SType
   = STVar Name
   | STCon Name [SType]
   | STFun SType SType
+  | STApp SType [SType]   -- ^ a type variable applied to arguments, as in @m a@
   deriving (Eq, Show)
 
 data Pat

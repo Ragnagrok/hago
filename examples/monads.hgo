@@ -1,0 +1,111 @@
+-- Functor, Applicative, Monad, Foldable and Traversable.
+
+-- A State monad of our own.
+data State s a = State (s -> (a, s))
+
+runState :: State s a -> s -> (a, s)
+runState (State f) s = f s
+
+get :: State s s
+get = State (\s -> (s, s))
+
+put :: s -> State s ()
+put s = State (\_ -> ((), s))
+
+instance Functor (State s) where
+  fmap f m = State (\s -> case runState m s of
+                            (a, s') -> (f a, s'))
+
+instance Applicative (State s) where
+  pure a = State (\s -> (a, s))
+  mf <*> mx = do { f <- mf; x <- mx; pure (f x) }
+
+instance Monad (State s) where
+  m >>= k = State (\s -> case runState m s of
+                           (a, s') -> runState (k a) s')
+
+-- Long loops in State run in constant stack through tailRecM.
+instance MonadRec (State s) where
+  tailRecM f a = State (\s -> go a s)
+    where
+      go x s = case runState (f x) s of
+        (Left x', s') -> go x' s'
+        (Right b, s') -> (b, s')
+
+sumTo :: Int -> State Int ()
+sumTo n = tailRecM step 0
+  where
+    step i = if i == n then pure (Right ()) else do
+      s <- get
+      put (s + i)
+      pure (Left (i + 1))
+
+-- A tree that can be mapped, folded and traversed.
+data Tree a = Leaf a | Node (Tree a) (Tree a) deriving (Show)
+
+instance Functor Tree where
+  fmap f (Leaf a) = Leaf (f a)
+  fmap f (Node l r) = Node (fmap f l) (fmap f r)
+
+instance Foldable Tree where
+  foldr f z (Leaf a) = f a z
+  foldr f z (Node l r) = foldr f (foldr f z r) l
+
+instance Traversable Tree where
+  traverse f (Leaf a) = Leaf <$> f a
+  traverse f (Node l r) = Node <$> traverse f l <*> traverse f r
+
+-- Number the leaves left to right, threading a counter through State.
+label :: Tree a -> State Int (Tree (Int, a))
+label t = traverse step t
+  where
+    step x = do
+      n <- get
+      put (n + 1)
+      pure (n, x)
+
+-- Maybe and Either for failure.
+safeDiv :: Int -> Int -> Maybe Int
+safeDiv _ 0 = Nothing
+safeDiv a b = Just (a `div` b)
+
+calc :: Int -> Int -> Int -> Maybe Int
+calc a b c = do
+  x <- safeDiv a b
+  y <- safeDiv x c
+  pure (x + y)
+
+checkAge :: Int -> Either String Int
+checkAge n
+  | n < 0 = Left "negative age"
+  | n > 150 = Left "too old"
+  | otherwise = Right n
+
+-- The list monad, with guard from Alternative.
+triples :: Int -> [(Int, Int, Int)]
+triples n = do
+  a <- [1..n]
+  b <- [a..n]
+  c <- [b..n]
+  guard (a * a + b * b == c * c)
+  pure (a, b, c)
+
+main :: IO ()
+main = do
+  print (fmap (+ 1) (Just 41), (* 2) <$> [1, 2, 3])
+  print (calc 100 5 2, calc 1 0 2)
+  print (traverse checkAge [30, 40], traverse checkAge [30, -1, 200])
+  print (sequence [Just 1, Just 2], sequence [Just 1, Nothing])
+  print (triples 20)
+  let tree = Node (Node (Leaf 'a') (Leaf 'b')) (Leaf 'c')
+  print (fst (runState (label tree) 100))
+  print (sum (fmap (\_ -> 1) tree), length tree, toList tree)
+  print (maximum tree, foldMap (\x -> [x, x]) [1, 2, 3], getSum (foldMap Sum [1..10]))
+  print (((+) <$> (* 2) <*> (+ 10)) 3)
+  print (("log1 ", 1) >>= \x -> ("log2", x + 1))
+  mapM_ print (Just "Foldable Maybe")
+  forM_ [1, 2, 3] (\i -> when (odd i) (print i))
+  r <- traverse (\x -> do { print x; pure (x * 10) }) [1, 2]
+  print r
+  print (head ([] :: [Int]), head [1, 2], [1, 2, 3] !! 5)
+  print (snd (runState (sumTo 1000000) 0))

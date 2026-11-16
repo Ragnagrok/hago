@@ -9,6 +9,7 @@ import Hago.CodeGen (generate)
 import Hago.Derive (expandDeriving)
 import Hago.Embed (embedFile)
 import Hago.Parser (parseModule, resolveFixity)
+import Hago.Specialize (specialize)
 import Hago.Typecheck (typecheck)
 
 preludeSource :: String
@@ -23,7 +24,7 @@ compile file src = do
   prelude <- parseModule "Prelude.hgo" preludeSource
   user <- parseModule file src
   decls <- either (Left . ((file ++ ": ") ++)) Right (expandDeriving (prelude ++ user))
-  prog <- either (Left . ((file ++ ": ") ++)) Right (typecheck (resolveFixity decls))
+  prog <- either (Left . ((file ++ ": ") ++)) Right (typecheck (resolveFixity decls) >>= specialize)
   pure (generate runtimeSource prog)
 
 compileFile :: FilePath -> IO (Either String String)

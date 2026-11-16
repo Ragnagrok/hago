@@ -1,22 +1,100 @@
 -- The Hago prelude, compiled together with every program.
--- IO and a few operations on the built-in types are primitives; the rest is here.
+--
+-- The class hierarchy is Haskell's with its known mistakes fixed:
+--   * Functor => Applicative => Monad, and return is just pure.
+--   * Semigroup => Monoid, and <> is the only way to combine.
+--   * fail lives in MonadFail, not in Monad.
+--   * Folding and traversing work on any Foldable or Traversable, and
+--     mapM_/traverse_ only ask for Applicative.
+--   * Num is a ring: abs and signum need an order, so they are functions
+--     on (Ord a, Num a). Decimal literals are overloaded through Fractional.
+--   * No partial functions: head, tail, !!, maximum and minimum return Maybe.
+--   * No Foldable instance for tuples, so length (1, 2) is a type error.
+--   * foldl is strict, because the language is.
+--   * Long monadic loops have MonadRec (tailRecM), and IO is trampolined,
+--     since a strict language cannot rely on laziness to keep the stack flat.
 
 infixr 9 .
-infixr 0 $
-infixr 5 ++
-infixl 1 >>, >>=
-infix 4 ==, /=, <, <=, >, >=
-infixl 7 *, `div`, `mod`
+infixr 8 ^, **
+infixl 7 *, /, `div`, `mod`, `quot`, `rem`
 infixl 6 +, -
+infixr 6 <>
+infixr 5 ++
+infix 4 ==, /=, <, <=, >, >=
+infixl 4 <$>, <$, <*>, *>, <*
+infixl 3 <|>
 infixr 3 &&
 infixr 2 ||
+infixl 1 >>=, >>
+infixr 1 =<<
+infixr 0 $
 infixl 9 !!
 
 data Maybe a = Nothing | Just a deriving (Eq, Ord, Show)
 data Either a b = Left a | Right b deriving (Eq, Ord, Show)
 data Ordering = LT | EQ | GT deriving (Eq, Ord, Show)
 
--- Classes ------------------------------------------------------------------
+-- Functions ----------------------------------------------------------------
+
+id :: a -> a
+id x = x
+
+const :: a -> b -> a
+const x _ = x
+
+flip :: (a -> b -> c) -> b -> a -> c
+flip f x y = f y x
+
+(.) :: (b -> c) -> (a -> b) -> a -> c
+(.) f g = \x -> f (g x)
+
+($) :: (a -> b) -> a -> b
+($) f x = f x
+
+curry :: ((a, b) -> c) -> a -> b -> c
+curry f x y = f (x, y)
+
+uncurry :: (a -> b -> c) -> (a, b) -> c
+uncurry f (x, y) = f x y
+
+undefined :: a
+undefined = error "undefined"
+
+-- The second argument is suspended, so these short-circuit.
+(&&) :: Bool -> Lazy Bool -> Bool
+True && b = b
+False && _ = False
+
+(||) :: Bool -> Lazy Bool -> Bool
+True || _ = True
+False || b = b
+
+not :: Bool -> Bool
+not True = False
+not False = True
+
+otherwise :: Bool
+otherwise = True
+
+fst :: (a, b) -> a
+fst (x, _) = x
+
+snd :: (a, b) -> b
+snd (_, y) = y
+
+maybe :: b -> (a -> b) -> Maybe a -> b
+maybe d _ Nothing = d
+maybe _ f (Just x) = f x
+
+fromMaybe :: a -> Maybe a -> a
+fromMaybe d Nothing = d
+fromMaybe _ (Just x) = x
+
+either :: (a -> c) -> (b -> c) -> Either a b -> c
+either f _ (Left x) = f x
+either _ g (Right y) = g y
+
+-- Equality, order, showing --------------------------------------------------
 
 class Eq a where
   (==), (/=) :: a -> a -> Bool
@@ -49,21 +127,169 @@ class Show a where
   show x = showsPrec 0 x
   showsPrec _ x = show x
 
+-- Used by derived instances.
+thenCmp :: Ordering -> Lazy Ordering -> Ordering
+thenCmp x y = x <> y
+
+showParenString :: Bool -> String -> String
+showParenString True s = "(" ++ s ++ ")"
+showParenString False s = s
+
+-- Semigroups and monoids ------------------------------------------------------
+
+-- The right operand is lazy, as for ++.
+class Semigroup a where
+  (<>) :: a -> Lazy a -> a
+
+class Semigroup a => Monoid a where
+  mempty :: a
+
+mconcat :: Monoid a => [a] -> a
+mconcat xs = foldr (<>) mempty xs
+
+data Sum a = Sum a deriving (Eq, Ord, Show)
+data Product a = Product a deriving (Eq, Ord, Show)
+data All = All Bool deriving (Eq, Ord, Show)
+data Any = Any Bool deriving (Eq, Ord, Show)
+
+getSum :: Sum a -> a
+getSum (Sum x) = x
+
+getProduct :: Product a -> a
+getProduct (Product x) = x
+
+getAll :: All -> Bool
+getAll (All b) = b
+
+getAny :: Any -> Bool
+getAny (Any b) = b
+
+instance Semigroup [a] where
+  xs <> ys = xs ++ ys
+
+instance Monoid [a] where
+  mempty = []
+
+instance Semigroup String where
+  a <> b = a ++ b
+
+instance Monoid String where
+  mempty = ""
+
+instance Semigroup Ordering where
+  LT <> _ = LT
+  EQ <> y = y
+  GT <> _ = GT
+
+instance Monoid Ordering where
+  mempty = EQ
+
+instance Semigroup () where
+  _ <> _ = ()
+
+instance Monoid () where
+  mempty = ()
+
+instance Semigroup a => Semigroup (Maybe a) where
+  Nothing <> y = y
+  Just a <> y = case y of
+    Nothing -> Just a
+    Just b -> Just (a <> b)
+
+instance Semigroup a => Monoid (Maybe a) where
+  mempty = Nothing
+
+instance (Semigroup a, Semigroup b) => Semigroup (a, b) where
+  (a, b) <> (c, d) = (a <> c, b <> d)
+
+instance (Monoid a, Monoid b) => Monoid (a, b) where
+  mempty = (mempty, mempty)
+
+instance Num a => Semigroup (Sum a) where
+  Sum a <> Sum b = Sum (a + b)
+
+instance Num a => Monoid (Sum a) where
+  mempty = Sum 0
+
+instance Num a => Semigroup (Product a) where
+  Product a <> Product b = Product (a * b)
+
+instance Num a => Monoid (Product a) where
+  mempty = Product 1
+
+instance Semigroup All where
+  All a <> b = All (a && getAll b)
+
+instance Monoid All where
+  mempty = All True
+
+instance Semigroup Any where
+  Any a <> b = Any (a || getAny b)
+
+instance Monoid Any where
+  mempty = Any False
+
+-- Numbers ----------------------------------------------------------------
+
+-- A ring: no abs or signum, which only make sense with an order.
 class Num a where
   (+), (-), (*) :: a -> a -> a
-  negate, abs, signum :: a -> a
+  negate :: a -> a
   fromInteger :: Int -> a
   x - y = x + negate y
   negate x = fromInteger 0 - x
 
 class (Num a, Ord a) => Integral a where
-  div, mod :: a -> a -> a
+  div, mod, quot, rem :: a -> a -> a
   toInt :: a -> Int
 
 class Num a => Fractional a where
   (/) :: a -> a -> a
+  fromDouble :: Double -> a
 
--- Instances for the built-in types ----------------------------------------------
+class Fractional a => Floating a where
+  pi :: a
+  sqrt, exp, log, sin, cos :: a -> a
+  (**) :: a -> a -> a
+
+abs :: (Ord a, Num a) => a -> a
+abs x = if x < 0 then negate x else x
+
+signum :: (Ord a, Num a) => a -> a
+signum x = if x < 0 then -1 else if x == 0 then 0 else 1
+
+fromIntegral :: (Integral a, Num b) => a -> b
+fromIntegral x = fromInteger (toInt x)
+
+even, odd :: Integral a => a -> Bool
+even n = n `mod` 2 == 0
+odd n = not (even n)
+
+subtract :: Num a => a -> a -> a
+subtract x y = y - x
+
+gcd :: Integral a => a -> a -> a
+gcd a b = if b == 0 then abs a else gcd b (a `mod` b)
+
+(^) :: (Num a, Integral b) => a -> b -> a
+(^) x n = if n <= 0 then 1 else x * (x ^ (n - 1))
+
+foreign import go "math.Sqrt" goSqrt :: Double -> Double
+foreign import go "math.Exp" goExp :: Double -> Double
+foreign import go "math.Log" goLog :: Double -> Double
+foreign import go "math.Sin" goSin :: Double -> Double
+foreign import go "math.Cos" goCos :: Double -> Double
+foreign import go "math.Pow" goPow :: Double -> Double -> Double
+foreign import go "math.Floor" goFloor :: Double -> Double
+foreign import go "math.Ceil" goCeil :: Double -> Double
+foreign import go "math.RoundToEven" goRound :: Double -> Double
+foreign import go "math.Pi" goPi :: Double
+
+truncate, floor, ceiling, round :: Double -> Int
+truncate x = primTruncate x
+floor x = primTruncate (goFloor x)
+ceiling x = primTruncate (goCeil x)
+round x = primTruncate (goRound x)
 
 instance Eq Int where
   x == y = primEq x y
@@ -85,13 +311,13 @@ instance Num Int where
   x - y = primSub x y
   x * y = primMul x y
   negate x = primNeg x
-  abs x = if x < 0 then primNeg x else x
-  signum x = if x < 0 then -1 else if x == 0 then 0 else 1
   fromInteger n = n
 
 instance Integral Int where
   div x y = primDiv x y
   mod x y = primMod x y
+  quot x y = primQuot x y
+  rem x y = primRem x y
   toInt x = x
 
 instance Eq Double where
@@ -107,19 +333,29 @@ instance Ord Double where
 
 instance Show Double where
   show x = primShow x
-  showsPrec d x = if d > 6 && x < 0.0 then "(" ++ primShow x ++ ")" else primShow x
+  showsPrec d x = if d > 6 && x < 0 then "(" ++ primShow x ++ ")" else primShow x
 
 instance Num Double where
   x + y = primAdd x y
   x - y = primSub x y
   x * y = primMul x y
   negate x = primNeg x
-  abs x = if x < 0.0 then primNeg x else x
-  signum x = if x < 0.0 then -1.0 else if x == 0.0 then 0.0 else 1.0
   fromInteger n = primIntToDouble n
 
 instance Fractional Double where
   x / y = primFDiv x y
+  fromDouble x = x
+
+instance Floating Double where
+  pi = goPi
+  sqrt x = goSqrt x
+  exp x = goExp x
+  log x = goLog x
+  sin x = goSin x
+  cos x = goCos x
+  x ** y = goPow x y
+
+-- Other built-in types ---------------------------------------------------------
 
 instance Eq Char where
   x == y = primEq x y
@@ -181,7 +417,7 @@ instance Ord a => Ord [a] where
   compare [] [] = EQ
   compare [] _ = LT
   compare _ [] = GT
-  compare (x:xs) (y:ys) = thenCmp (compare x y) (compare xs ys)
+  compare (x:xs) (y:ys) = compare x y <> compare xs ys
 
 instance Show a => Show [a] where
   show xs = "[" ++ items xs ++ "]"
@@ -194,7 +430,7 @@ instance (Eq a, Eq b) => Eq (a, b) where
   (a, b) == (c, d) = a == c && b == d
 
 instance (Ord a, Ord b) => Ord (a, b) where
-  compare (a, b) (c, d) = thenCmp (compare a c) (compare b d)
+  compare (a, b) (c, d) = compare a c <> compare b d
 
 instance (Show a, Show b) => Show (a, b) where
   show (a, b) = "(" ++ show a ++ "," ++ show b ++ ")"
@@ -203,93 +439,298 @@ instance (Eq a, Eq b, Eq c) => Eq (a, b, c) where
   (a, b, c) == (d, e, f) = a == d && b == e && c == f
 
 instance (Ord a, Ord b, Ord c) => Ord (a, b, c) where
-  compare (a, b, c) (d, e, f) = thenCmp (compare a d) (thenCmp (compare b e) (compare c f))
+  compare (a, b, c) (d, e, f) = compare a d <> (compare b e <> compare c f)
 
 instance (Show a, Show b, Show c) => Show (a, b, c) where
   show (a, b, c) = "(" ++ show a ++ "," ++ show b ++ "," ++ show c ++ ")"
 
--- Used by derived instances.
-thenCmp :: Ordering -> Lazy Ordering -> Ordering
-thenCmp EQ o = o
-thenCmp o _ = o
+-- Functor, Applicative, Monad ----------------------------------------------------
 
-showParenString :: Bool -> String -> String
-showParenString True s = "(" ++ s ++ ")"
-showParenString False s = s
+class Functor f where
+  fmap :: (a -> b) -> f a -> f b
+  (<$) :: a -> f b -> f a
+  x <$ m = fmap (const x) m
 
--- Numbers ------------------------------------------------------------------
+(<$>) :: Functor f => (a -> b) -> f a -> f b
+(<$>) g x = fmap g x
 
-fromIntegral :: (Integral a, Num b) => a -> b
-fromIntegral x = fromInteger (toInt x)
+class Functor f => Applicative f where
+  pure :: a -> f a
+  (<*>) :: f (a -> b) -> f a -> f b
+  liftA2 :: (a -> b -> c) -> f a -> f b -> f c
+  (*>) :: f a -> Lazy (f b) -> f b
+  (<*) :: f a -> f b -> f a
+  mf <*> mx = liftA2 id mf mx
+  liftA2 g x y = fmap g x <*> y
+  a *> b = liftA2 (\_ y -> y) a b
+  a <* b = liftA2 const a b
 
-truncate :: Double -> Int
-truncate x = primTruncate x
+class Applicative m => Monad m where
+  (>>=) :: m a -> (a -> m b) -> m b
 
-even, odd :: Integral a => a -> Bool
-even n = n `mod` 2 == 0
-odd n = not (even n)
+class Monad m => MonadFail m where
+  fail :: String -> m a
 
-subtract :: Num a => a -> a -> a
-subtract x y = y - x
+class Applicative f => Alternative f where
+  empty :: f a
+  (<|>) :: f a -> Lazy (f a) -> f a
 
-id :: a -> a
-id x = x
+return :: Monad m => a -> m a
+return x = pure x
 
-const :: a -> b -> a
-const x _ = x
+(>>) :: Monad m => m a -> Lazy (m b) -> m b
+(>>) m k = m >>= \_ -> k
 
-flip :: (a -> b -> c) -> b -> a -> c
-flip f x y = f y x
+(=<<) :: Monad m => (a -> m b) -> m a -> m b
+(=<<) k m = m >>= k
 
-(.) :: (b -> c) -> (a -> b) -> a -> c
-(.) f g = \x -> f (g x)
+join :: Monad m => m (m a) -> m a
+join mm = mm >>= id
 
-($) :: (a -> b) -> a -> b
-($) f x = f x
+when :: Applicative f => Bool -> Lazy (f ()) -> f ()
+when c a = if c then a else pure ()
 
--- The second argument is suspended, so these short-circuit.
-(&&) :: Bool -> Lazy Bool -> Bool
-True && b = b
-False && _ = False
+unless :: Applicative f => Bool -> Lazy (f ()) -> f ()
+unless c a = if c then pure () else a
 
-(||) :: Bool -> Lazy Bool -> Bool
-True || _ = True
-False || b = b
+guard :: Alternative f => Bool -> f ()
+guard True = pure ()
+guard False = empty
 
-not :: Bool -> Bool
-not True = False
-not False = True
+instance Functor Maybe where
+  fmap _ Nothing = Nothing
+  fmap g (Just x) = Just (g x)
 
-otherwise :: Bool
-otherwise = True
+instance Applicative Maybe where
+  pure x = Just x
+  Just g <*> m = fmap g m
+  Nothing <*> _ = Nothing
 
-fst :: (a, b) -> a
-fst (x, _) = x
+instance Monad Maybe where
+  Just x >>= k = k x
+  Nothing >>= _ = Nothing
 
-snd :: (a, b) -> b
-snd (_, y) = y
+instance MonadFail Maybe where
+  fail _ = Nothing
 
-maybe :: b -> (a -> b) -> Maybe a -> b
-maybe d _ Nothing = d
-maybe _ f (Just x) = f x
+instance Alternative Maybe where
+  empty = Nothing
+  Nothing <|> r = r
+  l <|> _ = l
 
-either :: (a -> c) -> (b -> c) -> Either a b -> c
-either f _ (Left x) = f x
-either _ g (Right y) = g y
+instance Functor (Either e) where
+  fmap _ (Left e) = Left e
+  fmap g (Right x) = Right (g x)
 
--- Lists ------------------------------------------------------------------
+instance Applicative (Either e) where
+  pure x = Right x
+  Right g <*> m = fmap g m
+  Left e <*> _ = Left e
 
-head :: [a] -> a
-head (x:_) = x
-head [] = error "head: empty list"
+instance Monad (Either e) where
+  Right x >>= k = k x
+  Left e >>= _ = Left e
 
-tail :: [a] -> [a]
-tail (_:xs) = xs
-tail [] = error "tail: empty list"
+instance Functor [] where
+  fmap g xs = map g xs
 
-null :: [a] -> Bool
-null [] = True
-null _ = False
+instance Applicative [] where
+  pure x = [x]
+  gs <*> xs = concatMap (\g -> map g xs) gs
+
+instance Monad [] where
+  xs >>= k = concatMap k xs
+
+instance MonadFail [] where
+  fail _ = []
+
+instance Alternative [] where
+  empty = []
+  xs <|> ys = xs ++ ys
+
+instance Functor IO where
+  fmap g m = primBindIO m (\x -> primReturnIO (g x))
+
+instance Applicative IO where
+  pure x = primReturnIO x
+  mg <*> mx = primBindIO mg (\g -> primBindIO mx (\x -> primReturnIO (g x)))
+  a *> b = primThenIO a b
+
+instance Monad IO where
+  m >>= k = primBindIO m k
+
+instance MonadFail IO where
+  fail s = error s
+
+-- In a strict language a monadic loop grows the stack unless the monad can
+-- run it as a loop. MonadRec is that promise (as in PureScript): tailRecM
+-- runs in constant stack. IO is trampolined, so plain recursion in IO is
+-- already safe; for other monads, write long loops with tailRecM.
+class Monad m => MonadRec m where
+  tailRecM :: (a -> m (Either a b)) -> a -> m b
+
+forever :: MonadRec m => m a -> m b
+forever act = tailRecM (\u -> fmap (\_ -> Left u) act) ()
+
+instance MonadRec IO where
+  tailRecM f a = primBindIO (f a) (\r -> case r of
+    Left a' -> tailRecM f a'
+    Right b -> primReturnIO b)
+
+instance MonadRec Maybe where
+  tailRecM f a = case f a of
+    Nothing -> Nothing
+    Just (Left a') -> tailRecM f a'
+    Just (Right b) -> Just b
+
+instance MonadRec (Either e) where
+  tailRecM f a = case f a of
+    Left e -> Left e
+    Right (Left a') -> tailRecM f a'
+    Right (Right b) -> Right b
+
+-- Functions are a reader.
+instance Functor ((->) r) where
+  fmap g h = \x -> g (h x)
+
+instance Applicative ((->) r) where
+  pure x = \_ -> x
+  g <*> h = \x -> g x (h x)
+
+instance Monad ((->) r) where
+  m >>= k = \r -> k (m r) r
+
+-- Pairs are a writer, when the first component is a monoid.
+instance Functor ((,) w) where
+  fmap g (w, x) = (w, g x)
+
+instance Monoid w => Applicative ((,) w) where
+  pure x = (mempty, x)
+  (u, g) <*> (v, x) = (u <> v, g x)
+
+instance Monoid w => Monad ((,) w) where
+  (u, x) >>= k = case k x of
+    (v, y) -> (u <> v, y)
+
+-- Foldable and Traversable ---------------------------------------------------------
+
+-- foldr's accumulator is lazy, so it can stop early on infinite structures.
+class Foldable t where
+  foldr :: (a -> Lazy b -> b) -> b -> t a -> b
+  foldMap :: Monoid m => (a -> m) -> t a -> m
+  foldl :: (b -> a -> b) -> b -> t a -> b
+  toList :: t a -> [a]
+  foldMap g xs = foldr (\x acc -> g x <> acc) mempty xs
+  toList xs = foldr (\x acc -> x : acc) [] xs
+  foldl g z xs = listFoldl g z (toList xs)
+
+class (Functor t, Foldable t) => Traversable t where
+  traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
+
+null :: Foldable t => t a -> Bool
+null xs = foldr (\_ _ -> False) True xs
+
+length :: Foldable t => t a -> Int
+length xs = foldl (\n _ -> n + 1) 0 xs
+
+sum :: (Foldable t, Num a) => t a -> a
+sum xs = foldl (+) 0 xs
+
+product :: (Foldable t, Num a) => t a -> a
+product xs = foldl (*) 1 xs
+
+elem :: (Foldable t, Eq a) => a -> t a -> Bool
+elem x xs = any (\y -> y == x) xs
+
+and :: Foldable t => t Bool -> Bool
+and xs = foldr (&&) True xs
+
+or :: Foldable t => t Bool -> Bool
+or xs = foldr (||) False xs
+
+any :: Foldable t => (a -> Bool) -> t a -> Bool
+any p xs = foldr (\x rest -> p x || rest) False xs
+
+all :: Foldable t => (a -> Bool) -> t a -> Bool
+all p xs = foldr (\x rest -> p x && rest) True xs
+
+maximum :: (Foldable t, Ord a) => t a -> Maybe a
+maximum xs = foldl (\acc x -> Just (maybe x (\m -> max m x) acc)) Nothing xs
+
+minimum :: (Foldable t, Ord a) => t a -> Maybe a
+minimum xs = foldl (\acc x -> Just (maybe x (\m -> min m x) acc)) Nothing xs
+
+find :: Foldable t => (a -> Bool) -> t a -> Maybe a
+find p xs = foldr (\x rest -> if p x then Just x else rest) Nothing xs
+
+concat :: Foldable t => t [a] -> [a]
+concat xss = foldr (\xs rest -> xs ++ rest) [] xss
+
+concatMap :: Foldable t => (a -> [b]) -> t a -> [b]
+concatMap g xs = foldr (\x rest -> g x ++ rest) [] xs
+
+traverse_ :: (Foldable t, Applicative f) => (a -> f b) -> t a -> f ()
+traverse_ g xs = foldr (\x rest -> g x *> rest) (pure ()) xs
+
+for_ :: (Foldable t, Applicative f) => t a -> (a -> f b) -> f ()
+for_ xs g = traverse_ g xs
+
+mapM_ :: (Foldable t, Applicative f) => (a -> f b) -> t a -> f ()
+mapM_ g xs = traverse_ g xs
+
+forM_ :: (Foldable t, Applicative f) => t a -> (a -> f b) -> f ()
+forM_ xs g = traverse_ g xs
+
+sequence_ :: (Foldable t, Applicative f) => t (f a) -> f ()
+sequence_ xs = foldr (\m rest -> m *> rest) (pure ()) xs
+
+sequenceA :: (Traversable t, Applicative f) => t (f a) -> f (t a)
+sequenceA xs = traverse id xs
+
+mapM :: (Traversable t, Applicative f) => (a -> f b) -> t a -> f (t b)
+mapM g xs = traverse g xs
+
+forM :: (Traversable t, Applicative f) => t a -> (a -> f b) -> f (t b)
+forM xs g = traverse g xs
+
+sequence :: (Traversable t, Applicative f) => t (f a) -> f (t a)
+sequence xs = traverse id xs
+
+instance Foldable [] where
+  foldr g z xs = listFoldr g z xs
+  foldl g z xs = listFoldl g z xs
+  toList xs = xs
+
+instance Foldable Maybe where
+  foldr _ z Nothing = z
+  foldr g z (Just x) = g x z
+  foldl _ z Nothing = z
+  foldl g z (Just x) = g z x
+
+instance Traversable [] where
+  traverse g xs = listFoldr (\x rest -> liftA2 (\y ys -> y : ys) (g x) rest) (pure []) xs
+
+instance Traversable Maybe where
+  traverse _ Nothing = pure Nothing
+  traverse g (Just x) = fmap Just (g x)
+
+-- Lists ------------------------------------------------------------------------
+
+listFoldr :: (a -> Lazy b -> b) -> b -> [a] -> b
+listFoldr _ z [] = z
+listFoldr g z (x:xs) = g x (listFoldr g z xs)
+
+listFoldl :: (b -> a -> b) -> b -> [a] -> b
+listFoldl _ acc [] = acc
+listFoldl g acc (x:xs) = listFoldl g (g acc x) xs
+
+head :: [a] -> Maybe a
+head (x:_) = Just x
+head [] = Nothing
+
+tail :: [a] -> Maybe [a]
+tail (_:xs) = Just xs
+tail [] = Nothing
 
 -- What ++ means on lists. The second list is only demanded once the first runs out.
 append :: [a] -> Lazy [a] -> [a]
@@ -298,7 +739,7 @@ append (x:xs) ys = x : append xs ys
 
 map :: (a -> b) -> [a] -> [b]
 map _ [] = []
-map f (x:xs) = f x : map f xs
+map g (x:xs) = g x : map g xs
 
 filter :: (a -> Bool) -> [a] -> [a]
 filter _ [] = []
@@ -306,47 +747,8 @@ filter p (x:xs)
   | p x = x : filter p xs
   | otherwise = filter p xs
 
--- The accumulator is lazy, so foldr can stop early on infinite lists.
-foldr :: (a -> Lazy b -> b) -> b -> [a] -> b
-foldr _ z [] = z
-foldr f z (x:xs) = f x (foldr f z xs)
-
-foldl :: (b -> a -> b) -> b -> [a] -> b
-foldl _ acc [] = acc
-foldl f acc (x:xs) = foldl f (f acc x) xs
-
-sum :: Num a => [a] -> a
-sum xs = foldl (+) 0 xs
-
-product :: Num a => [a] -> a
-product xs = foldl (*) 1 xs
-
-length :: [a] -> Int
-length xs = foldl (\n _ -> n + 1) 0 xs
-
 reverse :: [a] -> [a]
-reverse xs = foldl (\acc x -> x : acc) [] xs
-
-concat :: [[a]] -> [a]
-concat xss = foldr (\xs rest -> xs ++ rest) [] xss
-
-concatMap :: (a -> [b]) -> [a] -> [b]
-concatMap f xs = concat (map f xs)
-
-and :: [Bool] -> Bool
-and xs = foldr (&&) True xs
-
-or :: [Bool] -> Bool
-or xs = foldr (||) False xs
-
-any :: (a -> Bool) -> [a] -> Bool
-any p xs = or (map p xs)
-
-all :: (a -> Bool) -> [a] -> Bool
-all p xs = and (map p xs)
-
-elem :: Eq a => a -> [a] -> Bool
-elem x xs = any (\y -> y == x) xs
+reverse xs = listFoldl (\acc x -> x : acc) [] xs
 
 take :: Int -> [a] -> [a]
 take n xs
@@ -362,6 +764,9 @@ drop n xs
       [] -> []
       (_:ys) -> drop (n - 1) ys
 
+splitAt :: Int -> [a] -> ([a], [a])
+splitAt n xs = (take n xs, drop n xs)
+
 takeWhile :: (a -> Bool) -> [a] -> [a]
 takeWhile _ [] = []
 takeWhile p (x:xs)
@@ -374,17 +779,20 @@ dropWhile p (x:xs)
   | p x = dropWhile p xs
   | otherwise = x : xs
 
-(!!) :: [a] -> Int -> a
-(!!) (x:xs) n = if n == 0 then x else xs !! (n - 1)
-(!!) [] _ = error "!!: index too large"
+(!!) :: [a] -> Int -> Maybe a
+(!!) (x:xs) n = if n == 0 then Just x else xs !! (n - 1)
+(!!) [] _ = Nothing
 
 zip :: [a] -> [b] -> [(a, b)]
 zip (x:xs) (y:ys) = (x, y) : zip xs ys
 zip _ _ = []
 
 zipWith :: (a -> b -> c) -> [a] -> [b] -> [c]
-zipWith f (x:xs) (y:ys) = f x y : zipWith f xs ys
+zipWith g (x:xs) (y:ys) = g x y : zipWith g xs ys
 zipWith _ _ _ = []
+
+unzip :: [(a, b)] -> ([a], [b])
+unzip ps = (map fst ps, map snd ps)
 
 lookup :: Eq a => a -> [(a, b)] -> Maybe b
 lookup _ [] = Nothing
@@ -397,10 +805,10 @@ replicate :: Int -> a -> [a]
 replicate n x = take n (repeat x)
 
 iterate :: (a -> a) -> a -> [a]
-iterate f x = x : iterate f (f x)
+iterate g x = x : iterate g (g x)
 
 cycle :: [a] -> [a]
-cycle [] = error "cycle: empty list"
+cycle [] = []
 cycle xs = xs ++ cycle xs
 
 enumFrom :: Int -> [Int]
@@ -411,21 +819,16 @@ enumFromTo a b
   | a > b = []
   | otherwise = a : enumFromTo (a + 1) b
 
--- IO -----------------------------------------------------------------------
+unwords :: [String] -> String
+unwords [] = ""
+unwords [w] = w
+unwords (w:ws) = w ++ " " ++ unwords ws
+
+unlines :: [String] -> String
+unlines [] = ""
+unlines (l:ls) = l ++ "\n" ++ unlines ls
+
+-- IO -----------------------------------------------------------------------------
 
 print :: Show a => a -> IO ()
 print x = putStrLn (show x)
-
-mapM_ :: (a -> IO ()) -> [a] -> IO ()
-mapM_ _ [] = return ()
-mapM_ f (x:xs) = do
-  f x
-  mapM_ f xs
-
-maximum :: Ord a => [a] -> a
-maximum (x:xs) = foldl max x xs
-maximum [] = error "maximum: empty list"
-
-minimum :: Ord a => [a] -> a
-minimum (x:xs) = foldl min x xs
-minimum [] = error "minimum: empty list"

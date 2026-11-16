@@ -27,8 +27,6 @@ instance Num V2 where
   V2 a b + V2 c d = V2 (a + c) (b + d)
   V2 a b * V2 c d = V2 (a * c) (b * d)
   negate (V2 a b) = V2 (negate a) (negate b)
-  abs (V2 a b) = V2 (abs a) (abs b)
-  signum (V2 a b) = V2 (signum a) (signum b)
   fromInteger n = V2 n n
 
 -- Derived instances on a parameterised type need the parameter's instance.

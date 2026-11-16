@@ -4,7 +4,7 @@ Pair (Square 1.0) (Square 2.0) has area 5.0
 V2 11 12
 V2 (-1) 4
 (True,True)
-Pair 3 4
+Just (Pair 3 4)
 Just (Pair (-1.5) 2.0)
 2.5
 ([1,4,9],[0.25,2.25])

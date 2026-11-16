@@ -1,0 +1,12 @@
+-- expects: abs is not a method of Num
+data N = N Int
+
+instance Num N where
+  N a + N b = N (a + b)
+  N a * N b = N (a * b)
+  negate (N a) = N (negate a)
+  fromInteger n = N n
+  abs (N a) = N (abs a)
+
+main :: IO ()
+main = print 1

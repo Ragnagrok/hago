@@ -1,0 +1,18 @@
+(Just 42,[2,4,6])
+(Just 30,Nothing)
+(Right [30,40],Left "negative age")
+(Just [1,2],Nothing)
+[(3,4,5),(5,12,13),(6,8,10),(8,15,17),(9,12,15),(12,16,20)]
+Node (Node (Leaf (100,'a')) (Leaf (101,'b'))) (Leaf (102,'c'))
+(3,3,['a','b','c'])
+(Just 'c',[1,1,2,2,3,3],55)
+19
+("log1 log2",2)
+"Foldable Maybe"
+1
+3
+1
+2
+[10,20]
+(Nothing,Just 1,Nothing)
+499999500000

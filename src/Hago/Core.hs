@@ -1,3 +1,5 @@
+{-# LANGUAGE LambdaCase #-}
+
 -- | Typed core: the output of the type checker and the input of code
 -- generation. Every node that Go needs a type for carries one; types may
 -- still mention unification variables, which code generation resolves with
@@ -11,9 +13,26 @@ import Hago.Syntax (Lit (..), Name)
 data Type
   = TVar Name          -- ^ rigid (quantified) type variable
   | TMeta Int          -- ^ unification variable
-  | TCon Name [Type]   -- ^ Int, Double, Bool, Char, String, (), [], (,), IO, Lazy, user types
+  | TCon Name [Type]   -- ^ Int, Double, Bool, Char, String, (), [], (,), IO, Lazy, user types;
+                       --   with fewer arguments than its arity it is partially applied (Either e)
   | TFun Type Type
+  | TApp Type Type     -- ^ application whose head is not known yet, as in @f a@
   deriving (Eq, Show)
+
+-- | Puts a type in normal form: an application to a known constructor joins
+-- its arguments, and a fully applied (->) is a function type.
+tApp :: Type -> Type -> Type
+tApp (TCon "->" [a]) b = TFun a b
+tApp (TCon c ts) x = TCon c (ts ++ [x])
+tApp f x = TApp f x
+
+norm :: Type -> Type
+norm = \case
+  TCon "->" [a, b] -> TFun (norm a) (norm b)
+  TCon c ts -> TCon c (map norm ts)
+  TFun a b -> TFun (norm a) (norm b)
+  TApp f x -> tApp (norm f) (norm x)
+  t -> t
 
 -- | A class constraint: the class and the type it applies to.
 data Pred = IsIn Name Type
@@ -37,13 +56,40 @@ tList t = TCon "[]" [t]
 tIO t = TCon "IO" [t]
 tLazy t = TCon "Lazy" [t]
 
--- | Applies a substitution all the way down.
+-- | Applies a substitution all the way down, normalising as it goes.
 zonk :: Subst -> Type -> Type
 zonk s t = case t of
   TMeta m | Just t' <- IM.lookup m s -> zonk s t'
   TCon c ts -> TCon c (map (zonk s) ts)
   TFun a b -> TFun (zonk s a) (zonk s b)
+  TApp f x -> tApp (zonk s f) (zonk s x)
   _ -> t
+
+-- | Replaces rigid type variables.
+substTV :: M.Map Name Type -> Type -> Type
+substTV s = \case
+  TVar v -> M.findWithDefault (TVar v) v s
+  TCon c ts -> TCon c (map (substTV s) ts)
+  TFun a b -> TFun (substTV s a) (substTV s b)
+  TApp f x -> tApp (substTV s f) (substTV s x)
+  t -> t
+
+tyVarsOf :: Type -> [Name]
+tyVarsOf = \case
+  TVar v -> [v]
+  TCon _ ts -> concatMap tyVarsOf ts
+  TFun a b -> tyVarsOf a ++ tyVarsOf b
+  TApp f x -> tyVarsOf f ++ tyVarsOf x
+  TMeta _ -> []
+
+-- | Type variables used as the head of an application: those of a higher kind.
+headVars :: Type -> [Name]
+headVars = \case
+  TApp (TVar v) x -> v : headVars x
+  TApp f x -> headVars f ++ headVars x
+  TCon _ ts -> concatMap headVars ts
+  TFun a b -> headVars a ++ headVars b
+  _ -> []
 
 -- | Evidence that a constraint holds.
 data Dict
@@ -64,6 +110,7 @@ data CExpr
   | CCon Name [Type] Type           -- ^ constructor, its type arguments, its type
   | CLit Lit
   | CNum Integer Type Dict          -- ^ an integer literal at a Num type
+  | CFrac Double Type Dict          -- ^ a decimal literal at a Fractional type
   | CApp CExpr [CExpr]
   | CLam [(Name, Type)] Type CExpr  -- ^ curried parameters, result type, body
   | CLet [CBind] CExpr Type
@@ -71,7 +118,7 @@ data CExpr
   | CIf CExpr CExpr CExpr Type
   | CDelay Type CExpr               -- ^ suspend a computation of the given type
   | CForce CExpr
-  | CDo Type [CStmt]                -- ^ an IO action whose result has the given type
+  | CDo Type Dict Type [CStmt]      -- ^ do block: the monad, its Monad dictionary, the result type
   deriving (Show)
 
 -- | A local or top-level binding. With arity n > 0 the body is a 'CLam'
@@ -94,8 +141,8 @@ data CPat
   deriving (Show)
 
 data CStmt
-  = CSBind Name Type CExpr
-  | CSExpr CExpr
+  = CSBind Name Type CExpr   -- ^ @x <- e@, where e :: m t
+  | CSExpr Type CExpr        -- ^ @e@, where e :: m t
   | CSLet [CBind]
   deriving (Show)
 
@@ -116,8 +163,9 @@ data Foreign = Foreign {fSymbol :: String, fType :: Type, fArity :: Int}
 
 data ClassInfo = ClassInfo
   { clsVar :: Name
+  , clsKind :: Int                 -- ^ how many arguments the class variable takes: 0 for Eq, 1 for Monad
   , clsSupers :: [Name]
-  , clsMethods :: [(Name, Type)]   -- ^ in declaration order; types mention only clsVar
+  , clsMethods :: [(Name, Scheme)] -- ^ in declaration order: Forall (clsVar : own vars) (class : own constraints)
   , clsDefaults :: [Name]          -- ^ methods with a default definition
   }
   deriving (Show)
@@ -135,11 +183,12 @@ data InstInfo = InstInfo
 
 data TopBind = TopBind
   { tbName :: Name
-  , tbParams :: [Name]   -- ^ quantified type variables, in order
-  , tbPreds :: [Pred]    -- ^ constraints, one dictionary parameter each
+  , tbParams :: [Name]           -- ^ quantified type variables, in order
+  , tbDicts :: [(Name, Pred)]    -- ^ one dictionary parameter per constraint
   , tbType :: Type
   , tbArity :: Int
   , tbBody :: CExpr
+  , tbShared :: Bool             -- ^ a value computed once (a CAF), not a function
   }
   deriving (Show)
 

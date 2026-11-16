@@ -18,7 +18,7 @@ common comun
 library
   import:          comun
   hs-source-dirs:  src
-  exposed-modules: Hago.Syntax, Hago.Lexer, Hago.Parser, Hago.Core, Hago.TcMonad, Hago.Typecheck, Hago.Derive,
+  exposed-modules: Hago.Syntax, Hago.Lexer, Hago.Parser, Hago.Core, Hago.TcMonad, Hago.Typecheck, Hago.Derive, Hago.Specialize,
                    Hago.CodeGen, Hago.Embed, Hago.Driver
   build-depends:   containers, mtl, parsec, template-haskell
 

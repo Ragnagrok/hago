@@ -10,7 +10,6 @@ import Control.Monad.State
 import qualified Data.IntMap as IM
 import Data.List (intercalate, nub)
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe)
 import Hago.Core
 import Hago.Syntax (Name)
 
@@ -67,6 +66,12 @@ unify x y = do
     go (TVar a) (TVar b) | a == b = pure ()
     go (TCon c ts) (TCon d us) | c == d, length ts == length us = zipWithM_ unify ts us
     go (TFun a b) (TFun c d) = unify a c >> unify b d
+    -- f a against a known application: f takes the constructor with one argument fewer
+    go (TApp f a) (TApp g b) = unify f g >> unify a b
+    go (TApp f a) (TCon c us@(_ : _)) = unify f (TCon c (init us)) >> unify a (last us)
+    go (TCon c us@(_ : _)) (TApp f a) = unify (TCon c (init us)) f >> unify (last us) a
+    go (TApp f a) (TFun b r) = unify f (TCon "->" [b]) >> unify a r
+    go (TFun b r) (TApp f a) = unify (TCon "->" [b]) f >> unify r a
     go _ _ = do
       x' <- zonkT x
       y' <- zonkT y
@@ -80,14 +85,11 @@ metas = \case
   TMeta m -> [m]
   TCon _ ts -> concatMap metas ts
   TFun a b -> metas a ++ metas b
+  TApp f x -> metas f ++ metas x
   TVar _ -> []
 
 substT :: M.Map Name Type -> Type -> Type
-substT s = \case
-  TVar v -> fromMaybe (TVar v) (M.lookup v s)
-  TCon c ts -> TCon c (map (substT s) ts)
-  TFun a b -> TFun (substT s a) (substT s b)
-  t -> t
+substT = substTV
 
 -- | A new constraint to solve; returns the hole its dictionary will fill.
 newHole :: Pred -> TC Dict
@@ -173,7 +175,7 @@ solve env gen = nub <$> loop []
 -- equality, order or showing.
 defaultFor :: [Name] -> Maybe Type
 defaultFor cs
-  | "Fractional" `elem` cs = Just tDouble
+  | any (`elem` ["Fractional", "Floating"]) cs = Just tDouble
   | any (`elem` ["Num", "Integral"]) cs = Just tInt
   | all (`elem` ["Eq", "Ord", "Show"]) cs = Just tUnit
   | otherwise = Nothing
@@ -182,12 +184,15 @@ pretty :: Type -> String
 pretty = go (0 :: Int)
   where
     go _ (TVar v) = v
-    go _ (TMeta m) = "?" ++ show m
+    go _ (TMeta _) = "_"
     go _ (TCon "[]" [t]) = "[" ++ go 0 t ++ "]"
-    go _ (TCon c ts) | take 2 c == "(," = "(" ++ intercalate ", " (map (go 0) ts) ++ ")"
+    go _ (TCon c ts) | take 2 c == "(,", length ts == length c - 1 = "(" ++ intercalate ", " (map (go 0) ts) ++ ")"
+    go p (TCon "->" [a]) = paren (p > 1) ("(->) " ++ go 2 a)
+    go p (TCon c ts) | take 2 c == "(,", not (null ts) = paren (p > 1) (unwords (c : map (go 2) ts))
     go _ (TCon c []) = c
     go p (TCon c ts) = paren (p > 1) (unwords (c : map (go 2) ts))
     go p (TFun a b) = paren (p > 0) (go 1 a ++ " -> " ++ go 0 b)
+    go p (TApp f x) = paren (p > 1) (go 1 f ++ " " ++ go 2 x)
     paren True s = "(" ++ s ++ ")"
     paren False s = s
 
@@ -195,4 +200,5 @@ prettyAtom :: Type -> String
 prettyAtom t = case t of
   TCon _ (_ : _) -> "(" ++ pretty t ++ ")"
   TFun _ _ -> "(" ++ pretty t ++ ")"
+  TApp _ _ -> "(" ++ pretty t ++ ")"
   _ -> pretty t

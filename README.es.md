@@ -8,7 +8,7 @@ El compilador está escrito en Haskell.
 
 ```haskell
 fibs :: [Int]
-fibs = 0 : 1 : zipWith (+) fibs (tail fibs)
+fibs = 0 : 1 : zipWith (+) fibs (drop 1 fibs)
 
 foreign import go "strings.ToUpper" toUpper :: String -> String
 
@@ -60,24 +60,84 @@ describe :: Shape a => a -> String
 describe s = name s ++ " has area " ++ show (area s)
 ```
 
-- **El Prelude** define `Eq`, `Ord`, `Show`, `Num`, `Integral` y `Fractional`, con instancias
-  para `Int`, `Double`, `Char`, `String`, `Bool`, `()`, listas, tuplas, `Maybe`, `Either` y
-  `Ordering`.
+También hay clases sobre constructores de tipos, como `Functor`, `Applicative`, `Monad`,
+`Foldable` y `Traversable`, y se pueden escribir instancias propias:
+
+```haskell
+data State s a = State (s -> (a, s))
+
+instance Monad (State s) where
+  m >>= k = State (\s -> case runState m s of
+                           (a, s') -> runState (k a) s')
+
+-- get y put como en examples/monads.hgo
+label :: Tree a -> State Int (Tree (Int, a))
+label t = traverse step t
+  where
+    step x = do
+      n <- get
+      put (n + 1)
+      pure (n, x)
+```
+
+- **`do` funciona en cualquier mónada.** En IO se compila a Go secuencial, y en el resto a
+  `>>=`.
+- **Las instancias pueden ser aplicaciones parciales,** como `Functor (Either e)`,
+  `Monad ((->) r)` (un *reader*) y `Monoid w => Monad ((,) w)` (un *writer*).
 - **`deriving (Eq, Ord, Show)`** se expande a instancias comunes antes del type checking.
-- **Los literales enteros** están sobrecargados con `fromInteger`, y los tipos ambiguos caen por
-  defecto en `Int` (o en `Double` si hay `Fractional`), como en Haskell. Las definiciones sin
-  firma y sin parámetros siguen la monomorphism restriction.
+- **Los literales enteros** están sobrecargados con `fromInteger`, y los decimales con
+  `Fractional`. Los tipos ambiguos caen por defecto en `Int`, o en `Double` si hay `Fractional`
+  o `Floating`, como en Haskell. Las definiciones sin firma y sin parámetros siguen la
+  monomorphism restriction.
 
-Las clases se compilan con paso de diccionarios. Cada clase es un struct genérico de Go con
-campos que son funciones no currificadas, y una función con restricciones recibe un puntero a
-diccionario por cada restricción. Cuando la instancia se conoce en tiempo de compilación, la
-llamada va directo a la función de esa instancia, sin diccionario: `n + 1` sobre `Int` queda
-`inst_Num_Int_m_op_plus(n, 1)`, que Go inlinea en un `+` común. Sólo el código que sigue siendo
-polimórfico, como `(Ord a, Num a) => a -> a`, paga las llamadas indirectas.
+### Cómo se compilan
 
-Las clases son sólo sobre tipos de kind `*`, y los tipos de los métodos sólo pueden mencionar la
-variable de la clase. Go no puede ser genérico sobre constructores de tipos, así que no hay
-`Functor` ni `Monad`.
+- **Las clases sobre tipos simples** (`Eq`, `Num`, `Monoid`) usan paso de diccionarios. Cada
+  clase es un struct genérico de Go con campos que son funciones no currificadas, y una función
+  con restricciones recibe un puntero a diccionario por cada restricción. Cuando la instancia se
+  conoce en tiempo de compilación, la llamada va directo a la función de esa instancia:
+  `n + 1` sobre `Int` queda `inst_Num_Int_m_op_plus(n, 1)`, que Go inlinea en un `+` común.
+- **Las clases sobre constructores de tipos se especializan.** Los genéricos de Go son sobre
+  tipos, no sobre constructores de tipos: no existe `F[_]`, así que un diccionario de
+  `Functor f` no puede existir en tiempo de ejecución. En cambio, toda función polimórfica sobre
+  un constructor de tipos es una plantilla. El compilador genera una copia por cada constructor
+  con que se usa (`traverse` en `State Int`, `mapM_` en `IO`), como hacen Rust y MLton, y cada
+  llamada a un método pasa a ser una llamada directa. El código sobre constructores de tipos
+  nunca pasa por un diccionario.
+
+## Una jerarquía sin los errores de Haskell
+
+El Prelude conserva las clases de Haskell, pero no las decisiones que el propio Haskell tuvo que
+deshacer o con las que todavía convive:
+
+- **`Functor => Applicative => Monad` desde el principio.** `return` no es un método, es `pure`.
+- **`Semigroup => Monoid`.** `<>` es la única forma de combinar, y no existe `mappend`.
+- **`fail` está en `MonadFail`,** no en `Monad`.
+- **Plegar y recorrer pasa por `Foldable` y `Traversable`.** `sum`, `elem`, `length`, `mapM_` y
+  compañía funcionan con cualquier `Foldable`. `mapM_`, `traverse_` y `sequence_` sólo piden
+  `Applicative`, y `mapM` es simplemente `traverse`.
+- **`Num` es un anillo:** `+`, `-`, `*`, `negate` y `fromInteger`. `abs` y `signum` sólo tienen
+  sentido con un orden, así que son funciones sobre `(Ord a, Num a)`. `Num` no exige `Eq` ni
+  `Show`. `Integral` exige `Ord`, y `Floating` tiene `sqrt`, `pi` y el resto.
+- **Sin funciones parciales en el Prelude.** `head`, `tail`, `!!`, `maximum` y `minimum`
+  devuelven `Maybe`.
+- **Sin instancia de `Foldable` para tuplas,** así que `length (1, 2)` es un error de tipos, no
+  `1`.
+- **`foldl` es estricto,** porque el lenguaje lo es, así que no hace falta `foldl'`.
+- **`String` no es `[Char]`.**
+
+### Loops y la pila
+
+Un lenguaje estricto no puede contar con la pereza para que la recursión monádica no crezca, y
+Go no elimina llamadas de cola. Hago lo resuelve de dos maneras, siguiendo a PureScript:
+
+- **IO usa un trampolín.** Ejecutar una acción devuelve su resultado o la acción siguiente, y el
+  runtime itera sobre ellas. Un bloque `do` que termina en otra acción, `>>=` y `*>` no consumen
+  pila: `loop n = do { ...; loop (n + 1) }` corre para siempre, y `mapM_` sobre un millón de
+  elementos corre en memoria constante.
+- **`MonadRec` y `tailRecM`** corren loops con pila constante en otras mónadas. `IO`, `Maybe` y
+  `Either e` tienen instancia, se puede escribir una para una mónada propia (ver
+  `examples/monads.hgo`), y `forever` está construido encima.
 
 ## Cómo queda el Go
 
@@ -130,13 +190,17 @@ Son números de una sola máquina, como referencia y no como benchmark.
 |---|---|---|
 | `nfib 40`, Go escrito a mano | 0,34 s | — |
 | `nfib 40 :: Int -> Int`, Hago | 0,34 s | — |
-| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, en `Int` | 1,88 s | — |
-| suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | 0,41 s | ~10 MB |
+| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, en `Int` | 1,90 s | — |
+| suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | 0,42 s | ~8 MB |
+| `mapM_` sobre un millón de elementos en IO | 0,17 s | ~9 MB |
+| un loop recursivo en IO de cinco millones de iteraciones | 0,31 s | ~8 MB |
 
 - **El código estricto en tipos concretos** se compila al Go que escribirías a mano, y rinde
   igual.
-- **El código polimórfico con restricciones** es unas 5,5 veces más lento por las llamadas a
-  través de diccionarios. Especializarlo en los tipos con que se usa es el siguiente paso obvio.
+- **El código polimórfico sobre un constructor de tipos** (`Monad m =>`) no cuesta nada extra,
+  porque se especializa.
+- **El código con restricciones sobre tipos simples** (`Num a =>`) es unas 5,5 veces más lento,
+  porque llama a través de diccionarios. Especializarlo también es el siguiente paso obvio.
 - **La cadena de listas perezosas** corre en memoria constante, pero cada celda reserva un
   thunk, así que es mucho más lenta que un loop de Go.
 
@@ -151,8 +215,8 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # sólo compilar
 ./check.sh                                                  # todos los ejemplos y los rechazados
 ```
 
-En `examples/` hay listas perezosas, ADTs con pattern matching y guardas, type classes, llamadas
-a Go y loops.
+En `examples/` hay listas perezosas, ADTs con pattern matching y guardas, type classes, mónadas
+(State, Maybe, Either, listas, reader, writer, Traversable), llamadas a Go y loops.
 Cada ejemplo tiene un `.out` con la salida esperada. En `rejected/` hay programas que el type
 checker tiene que rechazar, cada uno con el error que espera.
 
@@ -164,10 +228,11 @@ Haskell 98.
 
 **Soportado**
 - `data` con campos perezosos (`~`) y `deriving`, firmas de tipos con contextos, funciones con
-  varias cláusulas, guardas, `where`, `let`, `case`, `if`, lambdas, `do` para IO, as-patterns,
-  anotaciones `e :: t`.
-- `class` con superclases y métodos por defecto, `instance` con contextos. `Int`, `Double`,
-  `Char`, `String`, `Bool`.
+  varias cláusulas, guardas, `where`, `let`, `case`, `if`, lambdas, `do` en cualquier mónada,
+  as-patterns, anotaciones `e :: t`.
+- `class` con superclases, métodos por defecto y métodos con restricciones, `instance` con
+  contextos, clases sobre tipos y sobre constructores de tipos. `Int`, `Double`, `Char`,
+  `String`, `Bool`.
 - Operadores con declaraciones `infixl`/`infixr`/`infix`, secciones, backquotes, tuplas de dos y
   de tres, listas literales, `[a..]` y `[a..b]`.
 - Polimorfismo de let en el nivel superior, con análisis de dependencias de las definiciones sin
@@ -175,21 +240,25 @@ Haskell 98.
 - `foreign import go`.
 
 **Falta**
-- **Clases de constructores** (`Functor`, `Monad`), clases de varios parámetros, y
-  especialización del código con restricciones.
+- **Parámetros de orden superior en tipos de datos,** así que todavía no hay transformadores de
+  mónadas como `StateT s m a`. Sus tipos de Go también tendrían que especializarse.
+- Clases de varios parámetros, `deriving Functor`, especialización del código con restricciones
+  sobre tipos simples.
 - **`Read` y `Enum`.** `[a..b]` sólo funciona con `Int`.
-- **`String` es el `string` de Go, no `[Char]`.** Se convierte con `pack` y `unpack`. Los
-  literales con decimales son siempre `Double`, no están sobrecargados con `Fractional`.
+- **`String` es el `string` de Go, no `[Char]`.** Se convierte con `pack` y `unpack`.
 - Módulos e imports, records, la semántica de `newtype`, listas por comprensión, sinónimos con
-  `type`, mónadas que no sean IO, tuplas de más de tres.
+  `type`, tuplas de más de tres.
+- **`traverse_` sobre listas largas en una mónada que no sea IO consume pila.** Esos loops se
+  escriben con `tailRecM`.
 - **Las definiciones locales son monomórficas.** Las funciones literales de Go no pueden ser
   genéricas.
 - **Los valores polimórficos del nivel superior no se comparten.** `xs = []` se vuelve una
   función genérica y se reevalúa en cada uso.
 - **`Lazy` es un tipo de verdad.** La pereza sólo llega hasta donde la llevan los tipos. Por
-  ejemplo, `foldr` toma `a -> Lazy b -> b` para poder cortar antes, y `++` suspende su segundo
-  argumento. La adaptación automática cubre el caso de pasar funciones estrictas, pero igual
-  puede aparecer un error de tipos que mencione `Lazy`.
+  ejemplo, `foldr` toma `a -> Lazy b -> b` para poder cortar antes, y `++` y `<>` suspenden su
+  segundo argumento. La adaptación automática cubre el caso de pasar funciones estrictas, pero
+  igual puede aparecer un error de tipos que mencione `Lazy` (`liftA2 (:)` es uno; una lambda lo
+  resuelve).
 - **Los mensajes de error son mínimos** y el type checker no da posiciones en el código.
 
 ## Organización del código
@@ -202,8 +271,9 @@ Haskell 98.
 | `src/Hago/TcMonad.hs` | unificación y el solver de restricciones (instancias, defaulting) |
 | `src/Hago/Typecheck.hs` | inferencia y elaboración, donde se insertan `Lazy` y los diccionarios |
 | `src/Hago/Core.hs` | el core tipado |
+| `src/Hago/Specialize.hs` | copias del código sobre constructores de tipos; los métodos de instancia pasan a ser funciones |
 | `src/Hago/CodeGen.hs` | generación de Go |
-| `runtime/runtime.go` | listas, tuplas, thunks e IO; se copia en cada programa |
+| `runtime/runtime.go` | listas, tuplas, thunks e IO con trampolín; se copia en cada programa |
 | `prelude/Prelude.hgo` | el prelude, escrito en Hago |
 
 ## Licencia

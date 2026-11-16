@@ -39,23 +39,44 @@ type Tup3[A, B, C any] struct {
 var _ = rt_fmt.Sprint
 
 // Thunks.
-func rt_ready[T any](v T) func() T          { return func() T { return v } }
-func rt_lazy[T any](f func() T) func() T    { return rt_sync.OnceValue(f) }
-func rt_error[T any](msg string) T          { panic(msg) }
+func rt_lazy[T any](f func() T) func() T { return rt_sync.OnceValue(f) }
+func rt_error[T any](msg string) T       { panic(msg) }
 
-// IO actions are functions without arguments.
-func rt_bind[A, B any](m func() A, k func(A) func() B) func() B {
-	return func() B { return k(m())() }
+// IO is trampolined: running an action yields either its result or the
+// next action to run, and rt_run loops over them. A do block that ends in
+// another action, a bind, and *> therefore run in constant stack, so
+// recursive IO loops and mapM_ over long lists do not grow the Go stack.
+type IO[A any] func() IOStep[A]
+type IOStep[A any] struct {
+	done bool
+	val  A
+	next IO[A]
 }
-func rt_then[A, B any](m func() A, n func() func() B) func() B {
-	return func() B { m(); return n()() }
+
+func rt_run[A any](m IO[A]) A {
+	for {
+		s := m()
+		if s.done {
+			return s.val
+		}
+		m = s.next
+	}
+}
+func rt_done[A any](v A) IOStep[A]     { return IOStep[A]{done: true, val: v} }
+func rt_next[A any](m IO[A]) IOStep[A] { return IOStep[A]{next: m} }
+func rt_pure[A any](v A) IO[A]         { return func() IOStep[A] { return IOStep[A]{done: true, val: v} } }
+func rt_bind[A, B any](m IO[A], k func(A) IO[B]) IO[B] {
+	return func() IOStep[B] { return IOStep[B]{next: k(rt_run(m))} }
+}
+func rt_then[A, B any](m IO[A], n func() IO[B]) IO[B] {
+	return func() IOStep[B] { rt_run(m); return IOStep[B]{next: n()} }
 }
 
 var rt_stdin = rt_bufio.NewReader(rt_os.Stdin)
 
-func rt_getLine() string {
+var rt_getLine IO[string] = func() IOStep[string] {
 	s, _ := rt_stdin.ReadString('\n')
-	return rt_strings.TrimRight(s, "\r\n")
+	return rt_done(rt_strings.TrimRight(s, "\r\n"))
 }
 
 // Haskell's div and mod round towards negative infinity.

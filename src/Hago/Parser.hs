@@ -219,17 +219,26 @@ pType = do
   option t (STFun t <$> (key "->" *> pType))
 
 bType :: Parser SType
-bType = (STCon <$> conId <*> many aType) <|> aType
+bType = do
+  h <- aType
+  args <- many aType
+  pure $ case (h, args) of
+    (_, []) -> h
+    (STCon c xs, _) -> STCon c (xs ++ args)
+    _ -> STApp h args
 
 aType :: Parser SType
 aType = choice
   [ STVar <$> varId
   , (\c -> STCon c []) <$> conId
-  , STCon "[]" . pure <$> brackets pType
+  , special "[" *> ((STCon "[]" [] <$ special "]") <|> (STCon "[]" . pure <$> pType <* special "]"))
   , special "(" *> tupleType
   ]
   where
-    tupleType = (STCon "()" [] <$ special ")") <|> do
+    tupleType = (STCon "()" [] <$ special ")")
+      <|> try (STCon "->" [] <$ (key "->" >> special ")"))
+      <|> try (do n <- many1 (special ","); special ")"; pure (STCon (tupleCon (length n + 1)) []))
+      <|> do
       ts <- pType `sepBy1` special ","
       special ")"
       pure $ case ts of

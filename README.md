@@ -8,7 +8,7 @@ written in Haskell.
 
 ```haskell
 fibs :: [Int]
-fibs = 0 : 1 : zipWith (+) fibs (tail fibs)
+fibs = 0 : 1 : zipWith (+) fibs (drop 1 fibs)
 
 foreign import go "strings.ToUpper" toUpper :: String -> String
 
@@ -60,23 +60,80 @@ describe :: Shape a => a -> String
 describe s = name s ++ " has area " ++ show (area s)
 ```
 
-- **The Prelude** defines `Eq`, `Ord`, `Show`, `Num`, `Integral` and `Fractional`, with instances
-  for `Int`, `Double`, `Char`, `String`, `Bool`, `()`, lists, tuples, `Maybe`, `Either` and
-  `Ordering`.
+There are also classes over type constructors, such as `Functor`, `Applicative`, `Monad`,
+`Foldable` and `Traversable`, and you can write your own instances:
+
+```haskell
+data State s a = State (s -> (a, s))
+
+instance Monad (State s) where
+  m >>= k = State (\s -> case runState m s of
+                           (a, s') -> runState (k a) s')
+
+-- get and put as in examples/monads.hgo
+label :: Tree a -> State Int (Tree (Int, a))
+label t = traverse step t
+  where
+    step x = do
+      n <- get
+      put (n + 1)
+      pure (n, x)
+```
+
+- **`do` works in any monad.** It compiles to straight-line Go in IO, and to `>>=` elsewhere.
+- **Instances can be partial applications,** as in `Functor (Either e)`, `Monad ((->) r)` (a
+  reader) and `Monoid w => Monad ((,) w)` (a writer).
 - **`deriving (Eq, Ord, Show)`** expands into ordinary instances before type checking.
-- **Integer literals** are overloaded through `fromInteger`, and ambiguous types default to `Int`
-  (or `Double` when `Fractional` is involved), as in Haskell. Unsigned bindings without
-  parameters follow the monomorphism restriction.
+- **Integer literals** are overloaded through `fromInteger`, and decimal literals through
+  `Fractional`. Ambiguous types default to `Int`, or to `Double` with `Fractional` or `Floating`,
+  as in Haskell. Unsigned bindings without parameters follow the monomorphism restriction.
 
-Classes compile to dictionary passing. Each class becomes a generic Go struct of uncurried
-function fields, and a constrained function takes one dictionary pointer per constraint. When
-the instance is known at compile time, the call goes straight to that instance's function, with
-no dictionary: `n + 1` on `Int` becomes `inst_Num_Int_m_op_plus(n, 1)`, which Go inlines into a
-plain `+`. Only code that stays polymorphic, like `(Ord a, Num a) => a -> a`, pays for indirect
-calls.
+### How they compile
 
-Classes range over types of kind `*` only, and method types can only mention the class variable.
-Go cannot be generic over type constructors, so there is no `Functor` or `Monad`.
+- **Classes over plain types** (`Eq`, `Num`, `Monoid`) use dictionary passing. Each class
+  becomes a generic Go struct of uncurried function fields, and a constrained function takes
+  one dictionary pointer per constraint. When the instance is known at compile time, the call
+  goes straight to that instance's function: `n + 1` on `Int` becomes
+  `inst_Num_Int_m_op_plus(n, 1)`, which Go inlines into a plain `+`.
+- **Classes over type constructors are specialised.** Go generics range over types, not type
+  constructors: there is no `F[_]`, so a `Functor f` dictionary cannot exist at run time.
+  Instead, every function polymorphic over a type constructor is a template. The compiler makes
+  one copy per constructor it is used at (`traverse` at `State Int`, `mapM_` at `IO`), as Rust
+  and MLton do, and every method call becomes a direct call. Constructor-class code never goes
+  through a dictionary.
+
+## A hierarchy without Haskell's mistakes
+
+The Prelude keeps Haskell's classes, but not the decisions that Haskell itself had to undo or
+still lives with:
+
+- **`Functor => Applicative => Monad` from the start.** `return` is not a method, just `pure`.
+- **`Semigroup => Monoid`.** `<>` is the only way to combine, and there is no `mappend`.
+- **`fail` lives in `MonadFail`,** not in `Monad`.
+- **Folding and traversing go through `Foldable` and `Traversable`.** `sum`, `elem`, `length`,
+  `mapM_` and friends work on any `Foldable`. `mapM_`, `traverse_` and `sequence_` only ask for
+  `Applicative`, and `mapM` is just `traverse`.
+- **`Num` is a ring:** `+`, `-`, `*`, `negate` and `fromInteger`. `abs` and `signum` only make
+  sense with an order, so they are functions on `(Ord a, Num a)`. `Num` does not require `Eq`
+  or `Show`. `Integral` requires `Ord`, and `Floating` has `sqrt`, `pi` and the rest.
+- **No partial functions in the Prelude.** `head`, `tail`, `!!`, `maximum` and `minimum` return
+  `Maybe`.
+- **No `Foldable` instance for tuples,** so `length (1, 2)` is a type error, not `1`.
+- **`foldl` is strict,** because the language is, so there is no `foldl'`.
+- **`String` is not `[Char]`.**
+
+### Loops and the stack
+
+A strict language cannot rely on laziness to keep monadic recursion flat, and Go has no tail
+calls. Hago handles this in two ways, following PureScript:
+
+- **IO is trampolined.** Running an action yields its result or the next action, and the runtime
+  loops over them. A `do` block that ends in another action, `>>=` and `*>` therefore use no
+  stack: `loop n = do { ...; loop (n + 1) }` runs forever, and `mapM_` over a million elements
+  runs in constant memory.
+- **`MonadRec` and `tailRecM`** run loops in constant stack in other monads. `IO`, `Maybe` and
+  `Either e` have instances, you can write one for your own monad (see `examples/monads.hgo`),
+  and `forever` is built on it.
 
 ## What the Go looks like
 
@@ -129,12 +186,16 @@ These numbers come from one machine, as a reference and not as a benchmark.
 |---|---|---|
 | `nfib 40`, hand-written Go | 0.34 s | — |
 | `nfib 40 :: Int -> Int`, Hago | 0.34 s | — |
-| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, at `Int` | 1.88 s | — |
-| sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.41 s | ~10 MB |
+| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, at `Int` | 1.90 s | — |
+| sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.42 s | ~8 MB |
+| `mapM_` over a million elements in IO | 0.17 s | ~9 MB |
+| a recursive IO loop of five million iterations | 0.31 s | ~8 MB |
 
 - **Strict code at concrete types** compiles to the Go you would write by hand, and runs like it.
-- **Constrained polymorphic code** is about 5.5 times slower because of the calls through
-  dictionaries. Specialising it to the types it is used at is the obvious next step.
+- **Code polymorphic over a type constructor** (`Monad m =>`) costs nothing extra, because it is
+  specialised.
+- **Code constrained over plain types** (`Num a =>`) is about 5.5 times slower, because it calls
+  through dictionaries. Specialising it too is the obvious next step.
 - **The lazy list pipeline** streams in constant memory, but every cell allocates a thunk, so it
   is much slower than a Go loop.
 
@@ -150,7 +211,7 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # just compile
 ```
 
 The `examples/` folder has lazy lists, ADTs with pattern matching and guards, type classes,
-calls to Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
+monads (State, Maybe, Either, lists, reader, writer, Traversable), calls to Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
 programs the type checker must refuse, each with the error it expects.
 
 ## What is there and what isn't
@@ -160,30 +221,33 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 
 **Supported**
 - `data` with lazy fields (`~`) and `deriving`, type signatures with contexts, multi-clause
-  functions, guards, `where`, `let`, `case`, `if`, lambdas, `do` for IO, as-patterns, `e :: t`
-  annotations.
-- `class` with superclasses and default methods, `instance` with contexts. `Int`, `Double`,
-  `Char`, `String`, `Bool`.
+  functions, guards, `where`, `let`, `case`, `if`, lambdas, `do` in any monad, as-patterns,
+  `e :: t` annotations.
+- `class` with superclasses, default methods and constrained methods, `instance` with contexts,
+  classes over types and over type constructors. `Int`, `Double`, `Char`, `String`, `Bool`.
 - Operators with `infixl`/`infixr`/`infix` declarations, sections, backquotes, tuples of two and
   three, list literals, `[a..]` and `[a..b]`.
 - Let-polymorphism at the top level, with dependency analysis of unsigned bindings.
 - `foreign import go`.
 
 **Missing**
-- **Constructor classes** (`Functor`, `Monad`), multi-parameter classes, and specialisation of
-  constrained code.
+- **Type parameters of a higher kind in data types,** so no monad transformers like
+  `StateT s m a` yet. Their Go types would have to be specialised as well.
+- Multi-parameter classes, `deriving Functor`, specialisation of code constrained over plain
+  types.
 - **`Read` and `Enum`.** `[a..b]` only works on `Int`.
-- **`String` is Go's `string`, not `[Char]`.** Convert with `pack` and `unpack`. Double
-  literals are always `Double`, not overloaded through `Fractional`.
-- Modules and imports, records, `newtype` semantics, list comprehensions, `type` synonyms,
-  monads other than IO, tuples beyond three.
+- **`String` is Go's `string`, not `[Char]`.** Convert with `pack` and `unpack`.
+- Modules and imports, records, `newtype` semantics, list comprehensions, `type` synonyms, tuples
+  beyond three.
+- **`traverse_` over long lists in a monad other than IO uses stack.** Write those loops with
+  `tailRecM`.
 - **Local bindings are monomorphic.** Go function literals cannot be generic.
 - **Polymorphic top-level values are not shared.** `xs = []` becomes a generic function and is
   re-evaluated at each use.
 - **`Lazy` is a real type.** Laziness only reaches where the types carry it. For example,
-  `foldr` takes `a -> Lazy b -> b` so it can stop early, and `++` suspends its second argument.
-  The automatic adaptation covers passing strict functions, but you can still meet a type error
-  that mentions `Lazy`.
+  `foldr` takes `a -> Lazy b -> b` so it can stop early, and `++` and `<>` suspend their second
+  argument. The automatic adaptation covers passing strict functions, but you can still meet a
+  type error that mentions `Lazy` (`liftA2 (:)` is one; a lambda fixes it).
 - **Error messages are minimal** and have no source positions in the type checker.
 
 ## Layout of the code
@@ -196,8 +260,9 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `src/Hago/TcMonad.hs` | unification and the constraint solver (instances, defaulting) |
 | `src/Hago/Typecheck.hs` | inference and elaboration, where `Lazy` and dictionaries are inserted |
 | `src/Hago/Core.hs` | the typed core |
+| `src/Hago/Specialize.hs` | copies of code over type constructors; instance methods become functions |
 | `src/Hago/CodeGen.hs` | Go generation |
-| `runtime/runtime.go` | lists, tuples, thunks and IO, copied into every program |
+| `runtime/runtime.go` | lists, tuples, thunks and trampolined IO, copied into every program |
 | `prelude/Prelude.hgo` | the prelude, written in Hago |
 
 ## License

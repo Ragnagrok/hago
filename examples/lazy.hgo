@@ -4,7 +4,7 @@ ones :: [Int]
 ones = 1 : ones
 
 fibs :: [Int]
-fibs = 0 : 1 : zipWith (+) fibs (tail fibs)
+fibs = 0 : 1 : zipWith (+) fibs (drop 1 fibs)
 
 primes :: [Int]
 primes = sieve [2..]

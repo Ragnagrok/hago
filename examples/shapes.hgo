@@ -34,9 +34,9 @@ insert x t@(Node l y r)
   | x > y = Node l y (insert x r)
   | otherwise = t
 
-toList :: Tree a -> [a]
-toList Leaf = []
-toList (Node l x r) = toList l ++ [x] ++ toList r
+inorder :: Tree a -> [a]
+inorder Leaf = []
+inorder (Node l x r) = inorder l ++ [x] ++ inorder r
 
 depth :: Tree a -> Int
 depth t = case t of
@@ -50,6 +50,6 @@ main = do
   print (Rect 3 4)
   print (Just (Circle (-1)))
   let tree = foldr insert Leaf [5, 3, 8, 1, 4, 7, 9, 2, 6]
-  print (toList tree)
+  print (inorder tree)
   print (depth tree)
   print (Rect 1 2 == Rect 1 2, Circle 1 < Rect 0 0, lookup 2 [(1, "one"), (2, "two")])

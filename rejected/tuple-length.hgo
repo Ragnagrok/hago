@@ -1,0 +1,3 @@
+-- expects: no instance for Foldable ((,) 
+main :: IO ()
+main = print (length (1, 2))
