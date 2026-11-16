@@ -620,6 +620,7 @@ genPrim ctx x targs as = case (x, as) of
   ("primReturnIO", [a]) -> pure ("rt_pure" ++ typeArgs ctx targs ++ "(" ++ a ++ ")")
   ("primBindIO", [a, b]) -> pure ("rt_bind" ++ typeArgs ctx targs ++ "(" ++ a ++ ", " ++ b ++ ")")
   ("primThenIO", [a, b]) -> pure ("rt_then" ++ typeArgs ctx targs ++ "(" ++ a ++ ", " ++ b ++ ")")
+  ("primRunIO", [a]) -> pure ("rt_run" ++ typeArgs ctx targs ++ "(" ++ a ++ ")")
   ("error", [a]) -> pure ("rt_error" ++ typeArgs ctx targs ++ "(" ++ a ++ ")")
   ("++", [a, b]) -> case targs of
     [TCon "String" []] -> pure ("(" ++ a ++ " + " ++ b ++ "())")

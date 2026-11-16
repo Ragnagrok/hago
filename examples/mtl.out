@@ -1,0 +1,7 @@
+50000005000000
+[(1,'a'),(2,'b'),(3,'c')]
+15
+Right ((),7)
+Left "over the limit by 2"
+42
+Right "no, recovered"

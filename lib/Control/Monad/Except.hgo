@@ -1,0 +1,74 @@
+-- Errors over any monad, and the MonadError class, as in mtl.
+module Control.Monad.Except
+  ( ExceptT (..), runExceptT, Except, runExcept
+  , MonadError (..), liftEither
+  , module Control.Monad.Trans
+  ) where
+
+import Control.Monad.Trans
+import Control.Monad.State
+import Data.Functor.Identity
+
+newtype ExceptT e m a = ExceptT (m (Either e a))
+
+runExceptT :: ExceptT e m a -> m (Either e a)
+runExceptT (ExceptT m) = m
+
+type Except e = ExceptT e Identity
+
+runExcept :: Except e a -> Either e a
+runExcept m = runIdentity (runExceptT m)
+
+instance Functor m => Functor (ExceptT e m) where
+  fmap f (ExceptT m) = ExceptT (fmap (fmap f) m)
+
+instance Monad m => Applicative (ExceptT e m) where
+  pure a = ExceptT (pure (Right a))
+  mf <*> mx = mf >>= \f -> fmap f mx
+  m *> k = m >>= \_ -> k
+
+instance Monad m => Monad (ExceptT e m) where
+  ExceptT m >>= k = ExceptT (m >>= \r -> case r of
+    Left e -> pure (Left e)
+    Right a -> runExceptT (k a))
+
+instance MonadTrans (ExceptT e) where
+  lift m = ExceptT (fmap Right m)
+
+instance MonadIO m => MonadIO (ExceptT e m) where
+  liftIO m = lift (liftIO m)
+
+instance MonadRec m => MonadRec (ExceptT e m) where
+  tailRecM f a = ExceptT (tailRecM (\x -> fmap next (runExceptT (f x))) a)
+    where
+      next (Left e) = Right (Left e)
+      next (Right (Left x')) = Left x'
+      next (Right (Right b)) = Right (Right b)
+
+class Monad m => MonadError e m | m -> e where
+  throwError :: e -> m a
+  catchError :: m a -> (e -> m a) -> m a
+
+instance Monad m => MonadError e (ExceptT e m) where
+  throwError e = ExceptT (pure (Left e))
+  catchError (ExceptT m) h = ExceptT (m >>= \r -> case r of
+    Left e -> runExceptT (h e)
+    Right a -> pure (Right a))
+
+instance MonadError e (Either e) where
+  throwError e = Left e
+  catchError (Left e) h = h e
+  catchError r _ = r
+
+liftEither :: MonadError e m => Either e a -> m a
+liftEither (Left e) = throwError e
+liftEither (Right a) = pure a
+
+-- each transformer passes the other's operations through
+instance MonadState s m => MonadState s (ExceptT e m) where
+  get = lift get
+  put s = lift (put s)
+
+instance MonadError e m => MonadError e (StateT s m) where
+  throwError e = lift (throwError e)
+  catchError m h = StateT (\s -> catchError (runStateT m s) (\e -> runStateT (h e) s))

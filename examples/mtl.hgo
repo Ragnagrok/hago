@@ -1,0 +1,45 @@
+-- The standard library's monads, as in mtl: State, Reader and Except, and
+-- their classes. State s is StateT s Identity, and Identity is trampolined,
+-- so a loop in State runs in constant stack however long it is.
+import Control.Monad.State
+import Control.Monad.Reader
+import Control.Monad.Except
+
+-- ten million steps, in constant stack
+sumTo :: Int -> State Int ()
+sumTo 0 = pure ()
+sumTo n = do
+  modify (+ n)
+  sumTo (n - 1)
+
+-- numbers the elements, counting in the state
+label :: [a] -> State Int [(Int, a)]
+label xs = mapM step xs
+  where
+    step x = do
+      n <- get
+      put (n + 1)
+      pure (n, x)
+
+-- a configuration, a state and errors, asked for through their classes
+data Config = Config { limit :: Int }
+
+spend :: (MonadReader Config m, MonadState Int m, MonadError String m) => Int -> m ()
+spend n = do
+  cap <- asks (.limit)
+  used <- get
+  when (used + n > cap) $ throwError ("over the limit by " ++ show (used + n - cap))
+  put (used + n)
+
+budget :: [Int] -> Either String ((), Int)
+budget costs = runExcept (runStateT (runReaderT (mapM_ spend costs) (Config 10)) 0)
+
+main :: IO ()
+main = do
+  print (execState (sumTo 10000000) 0)
+  print (evalState (label ['a', 'b', 'c']) 1)
+  print (execState (tailRecM (\i -> if i == 0 then pure (Right ()) else modify (+ i) >> pure (Left (i - 1))) 5) 0)
+  print (budget [3, 4])
+  print (budget [3, 4, 5])
+  print (runReader (local (+ 1) (asks (* 2))) 20)
+  print (runExcept (throwError "no" `catchError` \e -> pure (e ++ ", recovered")))

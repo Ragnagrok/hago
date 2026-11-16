@@ -1,0 +1,29 @@
+-- The identity monad, trampolined: it runs on the same machinery as IO, so
+-- a long chain of binds runs in constant stack, and so does every
+-- transformer over it (State s is StateT s Identity). Its constructor is not
+-- exported, so no IO action can be run as a pure value.
+module Data.Functor.Identity (Identity, runIdentity) where
+
+newtype Identity a = Identity (IO a)
+
+unIdentity :: Identity a -> IO a
+unIdentity (Identity m) = m
+
+runIdentity :: Identity a -> a
+runIdentity (Identity m) = primRunIO m
+
+instance Functor Identity where
+  fmap f (Identity m) = Identity (primBindIO m (\a -> primReturnIO (f a)))
+
+instance Applicative Identity where
+  pure a = Identity (primReturnIO a)
+  Identity mf <*> Identity mx = Identity (primBindIO mf (\f -> primBindIO mx (\x -> primReturnIO (f x))))
+  Identity a *> b = Identity (primThenIO a (unIdentity b))
+
+instance Monad Identity where
+  Identity m >>= k = Identity (primBindIO m (\a -> unIdentity (k a)))
+
+instance MonadRec Identity where
+  tailRecM f a = f a >>= \r -> case r of
+    Left a' -> tailRecM f a'
+    Right b -> pure b

@@ -1,0 +1,69 @@
+-- An environment over any monad, and the MonadReader class, as in mtl.
+module Control.Monad.Reader
+  ( ReaderT (..), runReaderT, Reader, runReader
+  , MonadReader (..), asks
+  , module Control.Monad.Trans
+  ) where
+
+import Control.Monad.Trans
+import Control.Monad.State
+import Control.Monad.Except
+import Data.Functor.Identity
+
+newtype ReaderT r m a = ReaderT (r -> m a)
+
+runReaderT :: ReaderT r m a -> r -> m a
+runReaderT (ReaderT f) r = f r
+
+type Reader r = ReaderT r Identity
+
+runReader :: Reader r a -> r -> a
+runReader m r = runIdentity (runReaderT m r)
+
+instance Functor m => Functor (ReaderT r m) where
+  fmap f m = ReaderT (\r -> fmap f (runReaderT m r))
+
+instance Monad m => Applicative (ReaderT r m) where
+  pure a = ReaderT (\_ -> pure a)
+  mf <*> mx = mf >>= \f -> fmap f mx
+  m *> k = m >>= \_ -> k
+
+instance Monad m => Monad (ReaderT r m) where
+  m >>= k = ReaderT (\r -> runReaderT m r >>= \a -> runReaderT (k a) r)
+
+instance MonadTrans (ReaderT r) where
+  lift m = ReaderT (\_ -> m)
+
+instance MonadIO m => MonadIO (ReaderT r m) where
+  liftIO m = lift (liftIO m)
+
+instance MonadRec m => MonadRec (ReaderT r m) where
+  tailRecM f a = ReaderT (\r -> tailRecM (\x -> runReaderT (f x) r) a)
+
+class Monad m => MonadReader r m | m -> r where
+  ask :: m r
+  local :: (r -> r) -> m a -> m a
+
+instance Monad m => MonadReader r (ReaderT r m) where
+  ask = ReaderT (\r -> pure r)
+  local f m = ReaderT (\r -> runReaderT m (f r))
+
+asks :: MonadReader r m => (r -> a) -> m a
+asks f = fmap f ask
+
+-- each transformer passes the other's operations through
+instance MonadReader r m => MonadReader r (StateT s m) where
+  ask = lift ask
+  local f m = StateT (\s -> local f (runStateT m s))
+
+instance MonadReader r m => MonadReader r (ExceptT e m) where
+  ask = lift ask
+  local f m = ExceptT (local f (runExceptT m))
+
+instance MonadState s m => MonadState s (ReaderT r m) where
+  get = lift get
+  put s = lift (put s)
+
+instance MonadError e m => MonadError e (ReaderT r m) where
+  throwError e = lift (throwError e)
+  catchError m h = ReaderT (\r -> catchError (runReaderT m r) (\e -> runReaderT (h e) r))

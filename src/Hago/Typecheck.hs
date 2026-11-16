@@ -43,6 +43,9 @@ primSchemes = M.fromList $
        , ("primReturnIO", Forall ["a"] [] (a ~> tIO a))
        , ("primBindIO", Forall ["a", "b"] [] (tIO a ~> (a ~> tIO b) ~> tIO b))
        , ("primThenIO", Forall ["a", "b"] [] (tIO a ~> tLazy (tIO b) ~> tIO b))
+       -- runs an action as a pure value: only for Identity, which is
+       -- trampolined IO without effects
+       , ("primRunIO", Forall ["a"] [] (tIO a ~> a))
        , ("error", Forall ["a"] [] (tString ~> a))
        , ("++", Forall ["a"] [] (a ~> tLazy a ~> a))
        , ("pack", mono (tList tChar ~> tString))

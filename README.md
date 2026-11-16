@@ -153,15 +153,20 @@ still lives with:
 ### Loops and the stack
 
 A strict language cannot rely on laziness to keep monadic recursion flat, and Go has no tail
-calls. Hago handles this in two ways, following PureScript:
+calls. Hago handles this in three ways, following PureScript and Scala's Cats:
 
 - **IO is trampolined.** Running an action yields its result or the next action, and the runtime
   loops over them. A `do` block that ends in another action, `>>=` and `*>` therefore use no
   stack: `loop n = do { ...; loop (n + 1) }` runs forever, and `mapM_` over a million elements
   runs in constant memory, in IO and in transformers over IO such as `StateT s IO`.
-- **`MonadRec` and `tailRecM`** run loops in constant stack in other monads. `IO`, `Maybe` and
-  `Either e` have instances, you can write one for your own monad (see `examples/monads.hgo`),
-  and `forever` is built on it.
+- **So is `Identity`,** the library's pure monad, and with it every transformer over it: the
+  library's `State s` is `StateT s Identity`, as are `Reader` and `Except`. Ten million steps of
+  `loop n = do { modify (+ n); loop (n - 1) }` run in 10 MB, and a million run faster than in a
+  hand-written `s -> (a, s)` monad, which grows the Go stack by a frame per step and dies near
+  ten million, at Go's 1 GB limit.
+- **`MonadRec` and `tailRecM`** run loops in constant stack in a monad of your own. `IO`,
+  `Maybe`, `Either e` and the library's transformers have instances, you can write one (see
+  `examples/monads.hgo`), and `forever` is built on it.
 
 ## Modules
 
@@ -175,7 +180,8 @@ import Geometry.Shapes hiding (perimeter)
 module Geometry (module Geometry.Shapes, scale) where   -- re-exports Geometry.Shapes
 ```
 
-- **A module `A.B` lives in `A/B.hgo`,** next to the main file, which is `Main`.
+- **A module `A.B` lives in `A/B.hgo`,** next to the main file, which is `Main`, or in the
+  standard library.
 - **Export and import lists, `qualified`, `as` and `hiding`** work as in Haskell. A type
   exported without `(..)` is abstract.
 - **A module can re-export** names it imports, one by one or a whole module with `module M`.
@@ -183,6 +189,23 @@ module Geometry (module Geometry.Shapes, scale) where   -- re-exports Geometry.S
 - **Your own definitions shadow imported ones,** so a module can define its own `toList`. Two
   imports giving the same name a different meaning are ambiguous only where the name is used.
 - **Instances are global,** as in Haskell.
+
+### The standard library
+
+Some modules come with the compiler, and a program imports them like its own (a module of the
+program with the same name comes first):
+
+| Module | What it has |
+| --- | --- |
+| `Control.Monad.State` | `StateT`, `State`, `MonadState` (`get`, `put`), `modify`, `gets`, `runState`, `evalState`, `execState` |
+| `Control.Monad.Reader` | `ReaderT`, `Reader`, `MonadReader` (`ask`, `local`), `asks` |
+| `Control.Monad.Except` | `ExceptT`, `Except`, `MonadError` (`throwError`, `catchError`), `liftEither` |
+| `Control.Monad.Trans` | `MonadTrans` (`lift`), `MonadIO` (`liftIO`) |
+| `Data.Functor.Identity` | `Identity`, trampolined |
+
+Each class passes through the other transformers, as in mtl, so a function can ask for
+`(MonadReader Config m, MonadState Int m, MonadError String m)` and run on any stack that has
+them. `examples/mtl.hgo` uses all of them.
 
 A renaming pass resolves every name to an internal one qualified by its module
 (`Geometry.Shapes.area`). After it, the compiler works on one flat program, and the Go output
@@ -385,8 +408,9 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 - **`String` is Go's `string`, not `[Char]`.** Convert with `pack` and `unpack`.
 - **Modules compile together with the program,** with no separate compilation or package
   manager.
-- **Long loops in pure monads like `State` use stack,** because their `>>=` is a chain of Go
-  calls. Write those loops with `tailRecM`. In IO and transformers over IO they are flat.
+- **A monad you write as a function, like `newtype State s a = State (s -> (a, s))`, uses a Go
+  stack frame per `>>=`,** because Go has no tail calls. Write long loops in it with `tailRecM`,
+  or build it on the library's transformers, whose loops are flat.
 - **A class with several parameters needs one functional dependency,** from one of them to all
   the others, which chooses the instance. `class Convert a b`, without one, is rejected.
 - **Some local definitions stay monomorphic:** values (as with Haskell's monomorphism
@@ -417,6 +441,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `src/Hago/CodeGen.hs` | Go generation |
 | `runtime/runtime.go` | lists, thunks and trampolined IO, copied into every program |
 | `prelude/Prelude.hgo` | the prelude, written in Hago |
+| `lib/` | the standard library (`Control.Monad.State` and friends), written in Hago |
 
 ## License
 

@@ -39,8 +39,10 @@ From easiest to hardest, which is the order we take them in.
       stack without `lift`; `examples/transformers.hgo` runs one machine on two stacks. One
       dependency, from one parameter to all the others, is required. On the way: code generation
       lost its run-time dictionaries, which specialisation had made unreachable.
-- [ ] **Stack-safe pure monads.** Long loops in `State` grow the Go stack and need `tailRecM`; IO and
-      transformers over IO are already trampolined.
+- [x] **Stack-safe pure monads.** A standard library compiled into hago: `Control.Monad.State`,
+      `Reader`, `Except` and `Trans`, mtl style, over `Data.Functor.Identity`, which is
+      trampolined like IO. Ten million steps in `State` run in 10 MB; a hand-written
+      `s -> (a, s)` monad still needs `tailRecM` (Go has no tail calls).
 - [ ] **Separate compilation.** Today every module is compiled together with the program.
 
 ## Out of scope, on purpose

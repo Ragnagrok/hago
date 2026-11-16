@@ -25,6 +25,16 @@ import System.FilePath (takeDirectory, (<.>), (</>))
 preludeSource :: String
 preludeSource = $(embedFile "prelude/Prelude.hgo")
 
+-- | The standard library, compiled into hago: a program's own module of the
+-- same name comes first.
+libraryModules :: M.Map Name String
+libraryModules = M.fromList
+  [ ("Data.Functor.Identity", $(embedFile "lib/Data/Functor/Identity.hgo"))
+  , ("Control.Monad.Trans", $(embedFile "lib/Control/Monad/Trans.hgo"))
+  , ("Control.Monad.State", $(embedFile "lib/Control/Monad/State.hgo"))
+  , ("Control.Monad.Except", $(embedFile "lib/Control/Monad/Except.hgo"))
+  , ("Control.Monad.Reader", $(embedFile "lib/Control/Monad/Reader.hgo")) ]
+
 runtimeSource :: String
 runtimeSource = unlines (drop 1 (dropWhile (not . ("// --- runtime ---" `isPrefixOf`)) (lines raw)))
   where raw = $(embedFile "runtime/runtime.go")
@@ -119,7 +129,7 @@ quoteSource err = case location err of
       _ -> Nothing
 
 -- | The main module and everything it imports, dependencies first. A module
--- A.B lives in A/B.hgo, next to the main file.
+-- A.B lives in A/B.hgo, next to the main file, or in the standard library.
 loadAll :: FilePath -> IO (Either String [Module])
 loadAll mainFile = do
   r <- load [] (Right (M.empty, [])) ("Main", mainFile, Nothing)
@@ -133,15 +143,18 @@ loadAll mainFile = do
         | name `elem` stack -> pure (Left ("import cycle: " ++ intercalate " -> " (reverse (name : stack))))
         | otherwise -> do
             exists <- doesFileExist path
-            if not exists
-              then pure (Left (maybe "" ((++ ": ") . showLoc) from ++ "cannot find module " ++ name ++ " (looked for " ++ path ++ ")"))
-              else do
-                src <- readFile path
-                case parseModule path src of
+            found <- case (exists, M.lookup name libraryModules) of
+              (True, _) -> Just . (,) path <$> readFile path
+              (False, Just src) -> pure (Just ("lib" </> moduleFile name, src))
+              (False, Nothing) -> pure Nothing
+            case found of
+              Nothing -> pure (Left (maybe "" ((++ ": ") . showLoc) from ++ "cannot find module " ++ name ++ " (looked for " ++ path ++ ")"))
+              Just (path', src) ->
+                case parseModule path' src of
                   Left e -> pure (Left e)
                   Right m
                     | modName m /= name ->
-                        pure (Left (path ++ ": declares module " ++ modName m ++ ", but should be " ++ name))
+                        pure (Left (path' ++ ": declares module " ++ modName m ++ ", but should be " ++ name))
                     | otherwise -> do
                         let deps = [(impModule i, root </> moduleFile (impModule i), Just (impLoc i)) | i <- modImports m, impModule i /= "Prelude"]
                         r <- foldM (load (name : stack)) (Right (seen, done)) deps

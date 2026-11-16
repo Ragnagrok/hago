@@ -161,16 +161,22 @@ deshacer o con las que todavía convive:
 ### Loops y la pila
 
 Un lenguaje estricto no puede contar con la pereza para que la recursión monádica no crezca, y
-Go no elimina llamadas de cola. Hago lo resuelve de dos maneras, siguiendo a PureScript:
+Go no elimina llamadas de cola. Hago lo resuelve de tres maneras, siguiendo a PureScript y a
+Cats de Scala:
 
 - **IO usa un trampolín.** Ejecutar una acción devuelve su resultado o la acción siguiente, y el
   runtime itera sobre ellas. Un bloque `do` que termina en otra acción, `>>=` y `*>` no consumen
   pila: `loop n = do { ...; loop (n + 1) }` corre para siempre, y `mapM_` sobre un millón de
   elementos corre en memoria constante, en IO y en transformadores sobre IO como
   `StateT s IO`.
-- **`MonadRec` y `tailRecM`** corren loops con pila constante en otras mónadas. `IO`, `Maybe` y
-  `Either e` tienen instancia, se puede escribir una para una mónada propia (ver
-  `examples/monads.hgo`), y `forever` está construido encima.
+- **`Identity` también,** la mónada pura de la biblioteca, y con ella todo transformador encima:
+  el `State s` de la biblioteca es `StateT s Identity`, igual que `Reader` y `Except`. Diez
+  millones de pasos de `loop n = do { modify (+ n); loop (n - 1) }` corren en 10 MB, y un millón
+  corre más rápido que en una mónada `s -> (a, s)` escrita a mano, que suma un marco a la pila de
+  Go por paso y muere cerca de los diez millones, en el límite de 1 GB de Go.
+- **`MonadRec` y `tailRecM`** corren loops con pila constante en una mónada propia. `IO`,
+  `Maybe`, `Either e` y los transformadores de la biblioteca tienen instancia, se puede escribir
+  una (ver `examples/monads.hgo`), y `forever` está construido encima.
 
 ## Módulos
 
@@ -184,7 +190,8 @@ import Geometry.Shapes hiding (perimeter)
 module Geometry (module Geometry.Shapes, scale) where   -- reexporta Geometry.Shapes
 ```
 
-- **Un módulo `A.B` vive en `A/B.hgo`,** junto al archivo principal, que es `Main`.
+- **Un módulo `A.B` vive en `A/B.hgo`,** junto al archivo principal, que es `Main`, o en la
+  biblioteca estándar.
 - **Las listas de exportación e importación, `qualified`, `as` y `hiding`** funcionan como en
   Haskell. Un tipo exportado sin `(..)` es abstracto.
 - **Un módulo puede reexportar** lo que importa, nombre por nombre o un módulo entero con
@@ -193,6 +200,23 @@ module Geometry (module Geometry.Shapes, scale) where   -- reexporta Geometry.Sh
   `toList`. Dos importaciones que le dan significados distintos a un mismo nombre son ambiguas
   sólo donde ese nombre se usa.
 - **Las instancias son globales,** como en Haskell.
+
+### La biblioteca estándar
+
+Algunos módulos vienen con el compilador, y un programa los importa como a los suyos (un módulo
+del programa con el mismo nombre tiene prioridad):
+
+| Módulo | Qué tiene |
+| --- | --- |
+| `Control.Monad.State` | `StateT`, `State`, `MonadState` (`get`, `put`), `modify`, `gets`, `runState`, `evalState`, `execState` |
+| `Control.Monad.Reader` | `ReaderT`, `Reader`, `MonadReader` (`ask`, `local`), `asks` |
+| `Control.Monad.Except` | `ExceptT`, `Except`, `MonadError` (`throwError`, `catchError`), `liftEither` |
+| `Control.Monad.Trans` | `MonadTrans` (`lift`), `MonadIO` (`liftIO`) |
+| `Data.Functor.Identity` | `Identity`, con trampolín |
+
+Cada clase pasa a través de los otros transformadores, como en mtl, así que una función puede
+pedir `(MonadReader Config m, MonadState Int m, MonadError String m)` y correr sobre cualquier
+pila que los tenga. `examples/mtl.hgo` los usa a todos.
 
 Un paso de renombrado resuelve cada nombre a uno interno, calificado por su módulo
 (`Geometry.Shapes.area`). Después de ese paso el compilador trabaja sobre un programa plano, y la
@@ -403,9 +427,10 @@ Haskell 98.
 - **`String` es el `string` de Go, no `[Char]`.** Se convierte con `pack` y `unpack`.
 - **Los módulos se compilan junto con el programa,** sin compilación separada ni gestor de
   paquetes.
-- **Los loops largos en mónadas puras como `State` consumen pila,** porque su `>>=` es una
-  cadena de llamadas de Go. Esos loops se escriben con `tailRecM`. En IO y en transformadores
-  sobre IO no consumen pila.
+- **Una mónada que se escribe como función, como `newtype State s a = State (s -> (a, s))`,
+  suma un marco a la pila de Go por cada `>>=`,** porque Go no tiene llamadas de cola. Los loops
+  largos en ella se escriben con `tailRecM`, o se la construye sobre los transformadores de la
+  biblioteca, cuyos loops no consumen pila.
 - **Una clase de varios parámetros necesita una dependencia funcional,** de uno de ellos a todos
   los demás, que es el que elige la instancia. `class Convert a b`, sin ninguna, se rechaza.
 - **Algunas definiciones locales siguen siendo monomórficas:** los valores (como con la
@@ -437,6 +462,7 @@ Haskell 98.
 | `src/Hago/CodeGen.hs` | generación de Go |
 | `runtime/runtime.go` | listas, thunks e IO con trampolín; se copia en cada programa |
 | `prelude/Prelude.hgo` | el prelude, escrito en Hago |
+| `lib/` | la biblioteca estándar (`Control.Monad.State` y compañía), escrita en Hago |
 
 ## Licencia
 

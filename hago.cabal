@@ -8,6 +8,7 @@ author:          Federico Sawady
 build-type:      Simple
 extra-source-files:
   prelude/Prelude.hgo
+  lib/**/*.hgo
   runtime/runtime.go
 
 common comun
