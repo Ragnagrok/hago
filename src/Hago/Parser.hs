@@ -543,9 +543,17 @@ listExpr = (ECon "[]" <$ special "]") <|> do
          special "]"
          pure (comprehension e qs)
     , do es <- many (special "," *> expr)
-         special "]"
-         pure (foldr (\x acc -> EApp (EApp (ECon ":") x) acc) (ECon "[]") (e : es))
+         let items = foldr (\x acc -> EApp (EApp (ECon ":") x) acc) (ECon "[]") (e : es)
+         case es of
+           [next] -> (items <$ special "]") <|> do
+             key ".."
+             hi <- optionMaybe expr
+             special "]"
+             pure $ maybe (app2 "Prelude.enumFromThen" e next) (EApp (app2 "Prelude.enumFromThenTo" e next)) hi
+           _ -> items <$ special "]"
     ]
+  where
+    app2 f a b = EApp (EApp (EVar f) a) b
 
 data Qualifier = QGen Pat Expr | QLet [Decl] | QGuard Expr
 

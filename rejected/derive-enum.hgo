@@ -1,0 +1,6 @@
+-- expects: rejected/derive-enum.hgo:3:1: cannot derive Enum for Shape: its constructor Circle has fields
+-- Only enumerations, whose constructors have no fields, can be counted.
+data Shape = Point | Circle Double deriving (Enum)
+
+main :: IO ()
+main = print 1

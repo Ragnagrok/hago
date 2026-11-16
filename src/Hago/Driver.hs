@@ -29,7 +29,8 @@ runtimeSource :: String
 runtimeSource = unlines (drop 1 (dropWhile (not . ("// --- runtime ---" `isPrefixOf`)) (lines raw)))
   where raw = $(embedFile "runtime/runtime.go")
 
--- | Eq, Ord and Show for every size of tuple, written out as Prelude source.
+-- | Eq, Ord, Show and Bounded for every size of tuple, written out as Prelude
+-- source.
 tupleInstances :: String
 tupleInstances = unlines (concatMap instances [2 .. maxTuple])
   where
@@ -49,6 +50,10 @@ tupleInstances = unlines (concatMap instances [2 .. maxTuple])
           , ""
           , "instance " ++ ctx "Show" ++ " => Show " ++ tuple ts ++ " where"
           , "  show " ++ tuple xs ++ " = \"(\" ++ " ++ intercalate " ++ \",\" ++ " ["show " ++ x | x <- xs] ++ " ++ \")\""
+          , ""
+          , "instance " ++ ctx "Bounded" ++ " => Bounded " ++ tuple ts ++ " where"
+          , "  minBound = " ++ tuple (map (const "minBound") ts)
+          , "  maxBound = " ++ tuple (map (const "maxBound") ts)
           ]
 
 compileFile :: FilePath -> IO (Either String String)

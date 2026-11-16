@@ -127,6 +127,11 @@ still lives with:
 - **No partial functions in the Prelude.** `head`, `tail`, `!!`, `maximum` and `minimum` return
   `Maybe`.
 - **No `Foldable` instance for tuples,** so `length (1, 2)` is a type error, not `1`.
+- **`Enum` is total.** `toEnum`, `succ` and `pred` return `Maybe`, so `succ maxBound` is
+  `Nothing` instead of a crash, and `[x ..]` on a bounded type stops at its last value.
+- **No `Enum Double`.** `[0.1, 0.2 .. 1.0]` goes past `1.0` in Haskell, because a range of
+  floating-point numbers cannot be exact. Hago refuses it and suggests mapping over a range of
+  `Int`.
 - **`foldl` is strict,** because the language is, so there is no `foldl'`.
 - **`String` is not `[Char]`.**
 
@@ -242,8 +247,9 @@ data Tree a = Leaf | Node (Tree a) a (Tree a)
   arguments, and a synonym that refers to itself is an error.
 - **List comprehensions** have generators, guards and `let`, and they are lazy, like the lists
   they build.
-- **`deriving`** covers `Eq`, `Ord`, `Show`, `Functor`, `Foldable` and `Traversable`. The last
-  three map over the last type parameter. `Show` prints records with their fields, as Haskell
+- **`deriving`** covers `Eq`, `Ord`, `Show`, `Enum`, `Bounded`, `Functor`, `Foldable` and
+  `Traversable`. `Enum` needs constructors without fields; `[minBound .. maxBound]` lists every
+  value of such a type. The last three map over the last type parameter. `Show` prints records with their fields, as Haskell
   does.
 
 ## What the Go looks like
@@ -324,7 +330,7 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # just compile
 
 The `examples/` folder has lazy lists, ADTs with pattern matching and guards, type classes,
 monads (State, Maybe, Either, lists, reader, writer, Traversable), monad transformers, modules,
-records, newtypes, tuples, list comprehensions, calls to Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
+records, newtypes, tuples, ranges, list comprehensions, calls to Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
 programs the type checker must refuse, each with the error it expects.
 
 An error says where it is, quotes the line and marks the place:
@@ -349,14 +355,14 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 - `class` with superclasses, default methods and constrained methods, `instance` with contexts,
   classes over types and over type constructors. `Int`, `Double`, `Char`, `String`, `Bool`.
 - Operators with `infixl`/`infixr`/`infix` declarations, sections, backquotes, tuples of up to
-  fifteen elements (as Haskell 98 asks; past that, a record), list literals, `[a..]` and `[a..b]`.
+  fifteen elements (as Haskell 98 asks; past that, a record), list literals, and ranges (`[a ..]`, `[a, b ..]`, `[a .. c]`, `[a, b .. c]`) over any `Enum`.
 - Let-polymorphism at the top level, with dependency analysis of unsigned bindings.
 - `foreign import go`.
 
 **Missing**
 - **Polymorphic recursion through a constraint** (a function that calls itself at a bigger
   type) cannot be specialised, and is rejected.
-- **`Read` and `Enum`.** `[a..b]` only works on `Int`.
+- **`Read`.**
 - **`String` is Go's `string`, not `[Char]`.** Convert with `pack` and `unpack`.
 - Updates that change a record's type.
 - **Modules compile together with the program,** with no separate compilation or package
@@ -381,7 +387,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `src/Hago/Parser.hs` | Parsec over tokens, fixity resolution |
 | `src/Hago/Rename.hs` | modules: imports, exports and scopes, into one flat program |
 | `src/Hago/Expand.hs` | `type` synonyms, expanded away |
-| `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show, Functor, Foldable, Traversable)` |
+| `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show, Enum, Bounded, Functor, Foldable, Traversable)` |
 | `src/Hago/TcMonad.hs` | unification and the constraint solver (instances, defaulting) |
 | `src/Hago/Typecheck.hs` | inference and elaboration, where `Lazy` and dictionaries are inserted |
 | `src/Hago/Core.hs` | the typed core |

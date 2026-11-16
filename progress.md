@@ -12,8 +12,9 @@ From easiest to hardest, which is the order we take them in.
 - [x] **Tuples up to fifteen.** Eq, Ord and Show for every size, `(,,)` as a function, `zip3`
       family; a bigger tuple is an error that suggests a record. Fixed on the way: a chain of `++`
       on strings took exponential time to compile.
-- [ ] **`Enum`.** `[a..b]`, `[a,b..c]`, `succ`/`pred` for `Char`, `Double` and derived enumerations
-      (`deriving Enum` for types whose constructors have no fields). Today ranges only work on `Int`.
+- [x] **`Enum` and `Bounded`.** Total (`toEnum`, `succ`, `pred` return `Maybe`), all four range
+      forms, instances for `Int`, `Char`, `Bool`, `Ordering`, `()`, `Bounded` tuples, `deriving
+      (Enum, Bounded)`. No `Enum Double`, on purpose.
 - [ ] **Type-changing record updates.** `b { item = "x" }` from `Box Int` to `Box String`.
 - [ ] **`Read`** (at least for `Int`, `Double` and derived types).
 - [ ] **Share polymorphic top-level values.** `xs = []` becomes a generic Go function and is
@@ -37,6 +38,7 @@ From easiest to hardest, which is the order we take them in.
 - **Polymorphic recursion through a constraint.** It cannot be specialised and is rejected; allowing
   it would bring back run-time dictionaries.
 - **Record fields as functions.** `p.name` and `(.name)` instead; see the README.
+- **`Enum Double`.** Floating-point ranges cannot be exact; map over a range of `Int`.
 - **Partial Prelude functions** (`head`, `tail`, `fromJust`, ...) and Haskell's old class hierarchy.
 
 ## Done

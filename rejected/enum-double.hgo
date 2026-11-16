@@ -1,0 +1,5 @@
+-- expects: rejected/enum-double.hgo:5:14: in main: no instance for Enum Double: a range of floating-point numbers is not exact
+-- In Haskell, [0.1, 0.2 .. 1.0] goes past 1.0. Hago has no Enum Double.
+
+main :: IO ()
+main = print [0.1, 0.2 .. 1.0]

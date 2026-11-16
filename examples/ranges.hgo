@@ -1,0 +1,26 @@
+-- Enum and Bounded: ranges over any type that can be counted, with total
+-- succ, pred and toEnum.
+data Suit = Clubs | Diamonds | Hearts | Spades deriving (Eq, Ord, Show, Enum, Bounded)
+
+data Rank = Two | Three | Four | Jack | Queen | King | Ace deriving (Eq, Ord, Show, Enum, Bounded)
+
+data Card = Card Rank Suit deriving (Eq, Ord, Show, Bounded)
+
+deck :: [Card]
+deck = [Card r s | s <- [minBound .. maxBound], r <- [minBound .. maxBound]]
+
+main :: IO ()
+main = do
+  print [1 .. 5]
+  print [1, 3 .. 10]
+  print [10, 8 .. 1]
+  print (take 4 [0, 25 ..])
+  print ['a' .. 'f']
+  print [Diamonds ..]
+  print [Spades, Hearts ..]
+  print (length deck, minBound :: Card, maxBound :: Card)
+  print (succ Clubs, succ Spades, pred Clubs)
+  print (map fromEnum [Two, Ace], toEnum 3 :: Maybe Suit, toEnum 9 :: Maybe Suit)
+  print [maxBound - 1 .. maxBound :: Int]
+  print (minBound :: (Bool, Suit))
+  print (map (\i -> fromIntegral i / 4) [0 .. 4])

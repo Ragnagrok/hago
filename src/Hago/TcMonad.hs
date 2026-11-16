@@ -172,6 +172,8 @@ solve env gen = nub <$> loop []
             solved h (DInst (ihId ih) ts subs)
             pure []
           TVar v -> throw ("no instance for (" ++ c ++ " " ++ v ++ "): add it to the type signature")
+          TCon "Double" [] | c == "Enum" ->
+            throw "no instance for Enum Double: a range of floating-point numbers is not exact; map over a range of Int instead, as in map (\\i -> fromIntegral i / 10) [0 .. 10]"
           _ -> throw ("no instance for " ++ c ++ " " ++ prettyAtom t')
     finish deferred = do
       deferred' <- forM deferred $ \(h, c, m, l) -> do

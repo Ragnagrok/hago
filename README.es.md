@@ -131,6 +131,12 @@ deshacer o con las que todavía convive:
   devuelven `Maybe`.
 - **Sin instancia de `Foldable` para tuplas,** así que `length (1, 2)` es un error de tipos, no
   `1`.
+- **`Enum` es total.** `toEnum`, `succ` y `pred` devuelven `Maybe`, así que `succ maxBound` es
+  `Nothing` en lugar de un error en tiempo de ejecución, y `[x ..]` sobre un tipo acotado
+  termina en su último valor.
+- **Sin `Enum Double`.** En Haskell, `[0.1, 0.2 .. 1.0]` se pasa de `1.0`, porque un rango de
+  números de punto flotante no puede ser exacto. Hago lo rechaza y sugiere mapear sobre un rango
+  de `Int`.
 - **`foldl` es estricto,** porque el lenguaje lo es, así que no hace falta `foldl'`.
 - **`String` no es `[Char]`.**
 
@@ -251,8 +257,9 @@ data Tree a = Leaf | Node (Tree a) a (Tree a)
   argumentos, y un sinónimo que se refiere a sí mismo es un error.
 - **Las listas por comprensión** tienen generadores, guardas y `let`, y son perezosas, como las
   listas que construyen.
-- **`deriving`** cubre `Eq`, `Ord`, `Show`, `Functor`, `Foldable` y `Traversable`. Los tres
-  últimos mapean sobre el último parámetro de tipo. `Show` muestra los records con sus campos,
+- **`deriving`** cubre `Eq`, `Ord`, `Show`, `Enum`, `Bounded`, `Functor`, `Foldable` y
+  `Traversable`. `Enum` pide constructores sin campos; `[minBound .. maxBound]` lista todos los
+  valores de un tipo así. Los tres últimos mapean sobre el último parámetro de tipo. `Show` muestra los records con sus campos,
   como Haskell.
 
 ## Cómo queda el Go
@@ -335,7 +342,7 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # sólo compilar
 
 En `examples/` hay listas perezosas, ADTs con pattern matching y guardas, type classes, mónadas
 (State, Maybe, Either, listas, reader, writer, Traversable), transformadores de mónadas, módulos,
-records, newtypes, tuplas, listas por comprensión, llamadas a Go y loops.
+records, newtypes, tuplas, rangos, listas por comprensión, llamadas a Go y loops.
 Cada ejemplo tiene un `.out` con la salida esperada. En `rejected/` hay programas que el type
 checker tiene que rechazar, cada uno con el error que espera.
 
@@ -363,7 +370,7 @@ Haskell 98.
   contextos, clases sobre tipos y sobre constructores de tipos. `Int`, `Double`, `Char`,
   `String`, `Bool`.
 - Operadores con declaraciones `infixl`/`infixr`/`infix`, secciones, backquotes, tuplas de hasta
-  quince elementos (lo que pide Haskell 98; para más, un record), listas literales, `[a..]` y `[a..b]`.
+  quince elementos (lo que pide Haskell 98; para más, un record), listas literales, y rangos (`[a ..]`, `[a, b ..]`, `[a .. c]`, `[a, b .. c]`) sobre cualquier `Enum`.
 - Polimorfismo de let en el nivel superior, con análisis de dependencias de las definiciones sin
   firma.
 - `foreign import go`.
@@ -371,7 +378,7 @@ Haskell 98.
 **Falta**
 - **La recursión polimórfica a través de una restricción** (una función que se llama a sí misma
   en un tipo más grande) no se puede especializar, y se rechaza.
-- **`Read` y `Enum`.** `[a..b]` sólo funciona con `Int`.
+- **`Read`.**
 - **`String` es el `string` de Go, no `[Char]`.** Se convierte con `pack` y `unpack`.
 - Actualizaciones que cambien el tipo de un record.
 - **Los módulos se compilan junto con el programa,** sin compilación separada ni gestor de
@@ -399,7 +406,7 @@ Haskell 98.
 | `src/Hago/Parser.hs` | Parsec sobre tokens, resolución de fixity |
 | `src/Hago/Rename.hs` | módulos: importaciones, exportaciones y alcances, a un programa plano |
 | `src/Hago/Expand.hs` | sinónimos con `type`, que se expanden y desaparecen |
-| `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show, Functor, Foldable, Traversable)` |
+| `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show, Enum, Bounded, Functor, Foldable, Traversable)` |
 | `src/Hago/TcMonad.hs` | unificación y el solver de restricciones (instancias, defaulting) |
 | `src/Hago/Typecheck.hs` | inferencia y elaboración, donde se insertan `Lazy` y los diccionarios |
 | `src/Hago/Core.hs` | el core tipado |
