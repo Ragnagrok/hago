@@ -56,11 +56,26 @@ lexer src = fieldDots <$> go 1 1 src
            in if isUpper ch then qualified w rest else emit t (length w) rest
       | isDigit ch =
           let (d, rest) = span isDigit s
+              -- e10, e+10, e-10
+              expo r = case r of
+                e : r1 | e `elem` "eE" ->
+                  let (sign, r2) = case r1 of
+                        x : r' | x `elem` "+-" -> ([x], r')
+                        _ -> ("", r1)
+                      (ds, r3) = span isDigit r2
+                   in if null ds then Nothing else Just ("e" ++ filter (/= '+') sign ++ ds, r3)
+                _ -> Nothing
+              float text n r = emit (TFloat (read text)) n r
            in case rest of
                 '.' : r@(x : _) | isDigit x ->
                   let (frac, rest') = span isDigit r
-                   in emit (TFloat (read (d ++ "." ++ frac))) (length d + 1 + length frac) rest'
-                _ -> emit (TInt (read d)) (length d) rest
+                      mant = d ++ "." ++ frac
+                   in case expo rest' of
+                        Just (ex, rest'') -> float (mant ++ ex) (length s - length rest'') rest''
+                        Nothing -> float mant (length mant) rest'
+                _ -> case expo rest of
+                  Just (ex, rest'') -> float (d ++ ".0" ++ ex) (length s - length rest'') rest''
+                  Nothing -> emit (TInt (read d)) (length d) rest
       | ch == '\'' = case lexChar cs of
           Just (v, n, '\'' : rest) -> emit (TChar v) (n + 2) rest
           _ -> Left (pos ++ ": bad character literal")

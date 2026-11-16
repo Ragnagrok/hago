@@ -17,7 +17,10 @@ From easiest to hardest, which is the order we take them in.
       (Enum, Bounded)`. No `Enum Double`, on purpose.
 - [x] **Type-changing record updates.** `b { item = "x" }` from `Box Int` to `Box String`, with
       Haskell 98's rule. Fixed on the way: `case` on a constructor application made invalid Go.
-- [ ] **`Read`** (at least for `Int`, `Double` and derived types).
+- [x] **`Read`.** `read :: Read a => String -> Maybe a`; instances for numbers, `Char`, `String`,
+      `Bool`, `()`, lists, tuples, `Maybe`, `Either`, `Ordering`, and `deriving Read` (records too).
+      On the way: pattern bindings (`let (a, b) = e`), literals with exponents, `span`, `break`,
+      `isSpace` and friends.
 - [ ] **Share polymorphic top-level values.** `xs = []` becomes a generic Go function and is
       re-evaluated on each use; cache one value per instantiation.
 - [ ] **Polymorphic local definitions.** `let`/`where` bindings are monomorphic because Go function

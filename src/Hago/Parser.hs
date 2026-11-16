@@ -257,9 +257,9 @@ foreignDecl = do
   DForeign sym name <$> pType
 
 -- | Declarations allowed in let/where and at the top: signatures, fixity
--- declarations and function clauses.
+-- declarations, function clauses and pattern bindings.
 decl :: Parser [Decl]
-decl = fixity <|> try sig <|> (pure <$> binding)
+decl = fixity <|> try sig <|> patBinding <|> (pure <$> binding)
   where
     sig = do
       names <- var `sepBy1` special ","
@@ -272,6 +272,30 @@ decl = fixity <|> try sig <|> (pure <$> binding)
       prec <- option 9 (satisfyT (\t -> case t of TInt n -> Just (fromInteger n); _ -> Nothing))
       ops <- operator `sepBy1` special ","
       pure [DFixity assoc prec ops]
+
+-- | (a, b) = e, or Just x = e: one hidden binding for the value, and one per
+-- variable that takes it out with a case.
+patBinding :: Parser [Decl]
+patBinding = do
+  (_, line, col) <- here
+  p <- try $ do
+    _ <- lookAhead (special "(" <|> special "[" <|> (() <$ conId))
+    p <- pat
+    _ <- lookAhead (key "=" <|> key "|")
+    pure p
+  r <- rhs (key "=")
+  let n = "_pb" ++ show line ++ "_" ++ show col
+      takeOut v = Rhs [(Nothing, ECase (EVar n) [Alt p (Rhs [(Nothing, EVar v)] [])])] []
+  pure (DBind n [Clause [] r] : [DBind v [Clause [] (takeOut v)] | v <- patVars p])
+
+patVars :: Pat -> [Name]
+patVars = \case
+  PVar v -> [v]
+  PAs v q -> v : patVars q
+  PCon _ qs -> concatMap patVars qs
+  PRec _ fs -> concatMap (patVars . snd) fs
+  PLoc _ q -> patVars q
+  _ -> []
 
 binding :: Parser Decl
 binding = try infixDef <|> prefixDef

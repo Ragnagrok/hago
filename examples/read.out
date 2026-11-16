@@ -1,0 +1,7 @@
+(Just 42,Just (-7),Nothing)
+Just [(1,'a',"b")]
+Just (Circle (Point {x = 1.0, y = -2.5}) 3.0)
+Just (Just (Left 0.0025))
+(Just 6,Nothing)
+(True,True)
+(3,2,3.0)

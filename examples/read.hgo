@@ -1,0 +1,23 @@
+-- Read: read gives back what show prints, or Nothing when the text is not
+-- a value of the type. Also pattern bindings and exponents in literals.
+data Point = Point { x :: Double, y :: Double } deriving (Show, Read, Eq)
+
+data Shape = Circle Point Double | Polygon [Point] deriving (Show, Read, Eq)
+
+roundTrip :: (Show a, Read a, Eq a) => a -> Bool
+roundTrip v = read (show v) == Just v
+
+total :: String -> Maybe Int
+total s = fmap sum (read s :: Maybe [Int])
+
+main :: IO ()
+main = do
+  print (read "42" :: Maybe Int, read " -7 " :: Maybe Int, read "4x" :: Maybe Int)
+  print (read "[(1,'a',\"b\")]" :: Maybe [(Int, Char, String)])
+  print (read "Circle (Point {x = 1.0, y = -2.5}) 3.0" :: Maybe Shape)
+  print (read "Just (Left 2.5e-3)" :: Maybe (Maybe (Either Double Bool)))
+  print (total "[1, 2, 3]", total "[1, 2,")
+  print (roundTrip (Polygon [Point 0.0 1.5e10, Point (-1.0) 2.0]), roundTrip ("tab\there", 'é', [LT, GT]))
+  let (q, r) = (17 `div` 5, 17 `mod` 5)
+      Point px py = Point 1.0 2.0
+  print (q, r, px + py)

@@ -125,7 +125,7 @@ still lives with:
   sense with an order, so they are functions on `(Ord a, Num a)`. `Num` does not require `Eq`
   or `Show`. `Integral` requires `Ord`, and `Floating` has `sqrt`, `pi` and the rest.
 - **No partial functions in the Prelude.** `head`, `tail`, `!!`, `maximum` and `minimum` return
-  `Maybe`.
+  `Maybe`, and so does `read`: `read "4x" :: Maybe Int` is `Nothing`, not a crash.
 - **No `Foldable` instance for tuples,** so `length (1, 2)` is a type error, not `1`.
 - **`Enum` is total.** `toEnum`, `succ` and `pred` return `Maybe`, so `succ maxBound` is
   `Nothing` instead of a crash, and `[x ..]` on a bounded type stops at its last value.
@@ -248,7 +248,7 @@ data Tree a = Leaf | Node (Tree a) a (Tree a)
   arguments, and a synonym that refers to itself is an error.
 - **List comprehensions** have generators, guards and `let`, and they are lazy, like the lists
   they build.
-- **`deriving`** covers `Eq`, `Ord`, `Show`, `Enum`, `Bounded`, `Functor`, `Foldable` and
+- **`deriving`** covers `Eq`, `Ord`, `Show`, `Read`, `Enum`, `Bounded`, `Functor`, `Foldable` and
   `Traversable`. `Enum` needs constructors without fields; `[minBound .. maxBound]` lists every
   value of such a type. The last three map over the last type parameter. `Show` prints records with their fields, as Haskell
   does.
@@ -352,7 +352,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 - `data` with lazy fields (`~`) and `deriving`, records, `newtype`, `type` synonyms, list
   comprehensions, type signatures with contexts, multi-clause
   functions, guards, `where`, `let`, `case`, `if`, lambdas, `do` in any monad, as-patterns,
-  `e :: t` annotations.
+  pattern bindings (`let (q, r) = ...`), `e :: t` annotations, literals with exponents.
 - `class` with superclasses, default methods and constrained methods, `instance` with contexts,
   classes over types and over type constructors. `Int`, `Double`, `Char`, `String`, `Bool`.
 - Operators with `infixl`/`infixr`/`infix` declarations, sections, backquotes, tuples of up to
@@ -363,7 +363,6 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 **Missing**
 - **Polymorphic recursion through a constraint** (a function that calls itself at a bigger
   type) cannot be specialised, and is rejected.
-- **`Read`.**
 - **`String` is Go's `string`, not `[Char]`.** Convert with `pack` and `unpack`.
 - **Modules compile together with the program,** with no separate compilation or package
   manager.
@@ -387,7 +386,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `src/Hago/Parser.hs` | Parsec over tokens, fixity resolution |
 | `src/Hago/Rename.hs` | modules: imports, exports and scopes, into one flat program |
 | `src/Hago/Expand.hs` | `type` synonyms, expanded away |
-| `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show, Enum, Bounded, Functor, Foldable, Traversable)` |
+| `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show, Read, Enum, Bounded, Functor, Foldable, Traversable)` |
 | `src/Hago/TcMonad.hs` | unification and the constraint solver (instances, defaulting) |
 | `src/Hago/Typecheck.hs` | inference and elaboration, where `Lazy` and dictionaries are inserted |
 | `src/Hago/Core.hs` | the typed core |

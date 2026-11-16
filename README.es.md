@@ -128,7 +128,8 @@ deshacer o con las que todavía convive:
   sentido con un orden, así que son funciones sobre `(Ord a, Num a)`. `Num` no exige `Eq` ni
   `Show`. `Integral` exige `Ord`, y `Floating` tiene `sqrt`, `pi` y el resto.
 - **Sin funciones parciales en el Prelude.** `head`, `tail`, `!!`, `maximum` y `minimum`
-  devuelven `Maybe`.
+  devuelven `Maybe`, y `read` también: `read "4x" :: Maybe Int` es `Nothing`, no un error en
+  tiempo de ejecución.
 - **Sin instancia de `Foldable` para tuplas,** así que `length (1, 2)` es un error de tipos, no
   `1`.
 - **`Enum` es total.** `toEnum`, `succ` y `pred` devuelven `Maybe`, así que `succ maxBound` es
@@ -258,7 +259,7 @@ data Tree a = Leaf | Node (Tree a) a (Tree a)
   argumentos, y un sinónimo que se refiere a sí mismo es un error.
 - **Las listas por comprensión** tienen generadores, guardas y `let`, y son perezosas, como las
   listas que construyen.
-- **`deriving`** cubre `Eq`, `Ord`, `Show`, `Enum`, `Bounded`, `Functor`, `Foldable` y
+- **`deriving`** cubre `Eq`, `Ord`, `Show`, `Read`, `Enum`, `Bounded`, `Functor`, `Foldable` y
   `Traversable`. `Enum` pide constructores sin campos; `[minBound .. maxBound]` lista todos los
   valores de un tipo así. Los tres últimos mapean sobre el último parámetro de tipo. `Show` muestra los records con sus campos,
   como Haskell.
@@ -366,7 +367,8 @@ Haskell 98.
 - `data` con campos perezosos (`~`) y `deriving`, records, `newtype`, sinónimos con `type`,
   listas por comprensión, firmas de tipos con contextos, funciones con
   varias cláusulas, guardas, `where`, `let`, `case`, `if`, lambdas, `do` en cualquier mónada,
-  as-patterns, anotaciones `e :: t`.
+  as-patterns, bindings con patrón (`let (q, r) = ...`), anotaciones `e :: t`, literales con
+  exponente.
 - `class` con superclases, métodos por defecto y métodos con restricciones, `instance` con
   contextos, clases sobre tipos y sobre constructores de tipos. `Int`, `Double`, `Char`,
   `String`, `Bool`.
@@ -379,7 +381,6 @@ Haskell 98.
 **Falta**
 - **La recursión polimórfica a través de una restricción** (una función que se llama a sí misma
   en un tipo más grande) no se puede especializar, y se rechaza.
-- **`Read`.**
 - **`String` es el `string` de Go, no `[Char]`.** Se convierte con `pack` y `unpack`.
 - **Los módulos se compilan junto con el programa,** sin compilación separada ni gestor de
   paquetes.
@@ -406,7 +407,7 @@ Haskell 98.
 | `src/Hago/Parser.hs` | Parsec sobre tokens, resolución de fixity |
 | `src/Hago/Rename.hs` | módulos: importaciones, exportaciones y alcances, a un programa plano |
 | `src/Hago/Expand.hs` | sinónimos con `type`, que se expanden y desaparecen |
-| `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show, Enum, Bounded, Functor, Foldable, Traversable)` |
+| `src/Hago/Derive.hs` | `deriving (Eq, Ord, Show, Read, Enum, Bounded, Functor, Foldable, Traversable)` |
 | `src/Hago/TcMonad.hs` | unificación y el solver de restricciones (instancias, defaulting) |
 | `src/Hago/Typecheck.hs` | inferencia y elaboración, donde se insertan `Lazy` y los diccionarios |
 | `src/Hago/Core.hs` | el core tipado |

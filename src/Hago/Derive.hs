@@ -23,6 +23,7 @@ instanceFor d cls = either (Left . ((showLoc (ddLoc d) ++ ": cannot derive " ++ 
     "Functor" -> overLast "fmap" functorClause
     "Foldable" -> overLast "foldr" foldableClause
     "Traversable" -> overLast "traverse" traversableClause
+    "Read" -> plainInstance [DBind "readsPrec" [Clause [] (plain (EApp (EVar "readParens") (ELam [PVar "d", PVar "s"] (foldr1 (op "<|>") (map readAlt cons)))))]]
     "Enum"
       | (k : _) <- [conName c | c <- cons, not (null (conFields c))] ->
           Left ("its constructor " ++ unqual k ++ " has fields, and only types whose constructors have none can be counted")
@@ -40,7 +41,7 @@ instanceFor d cls = either (Left . ((showLoc (ddLoc d) ++ ": cannot derive " ++ 
       first : more -> Right (DInstance Nothing [] cls (STCon n (map STVar ps))
             [ DBind "minBound" [Clause [] (plain (ECon (conName first)))]
             , DBind "maxBound" [Clause [] (plain (ECon (conName (last (first : more)))))] ])
-    _ -> Left "only Eq, Ord, Show, Enum, Bounded, Functor, Foldable and Traversable can be derived"
+    _ -> Left "only Eq, Ord, Show, Read, Enum, Bounded, Functor, Foldable and Traversable can be derived"
   where
     n = ddName d
     ps = ddParams d
@@ -136,6 +137,23 @@ showClause (ConDecl k fs labels) =
    in if m == 0
         then Clause [PWild, PCon k []] (plain (str name))
         else Clause [PVar "d", conPat k as] (plain (app (EVar "showParenString") [op ">" (EVar "d") (ELit (LInt 10)), body]))
+
+-- | How one constructor reads, the way showClause prints it: K, K a b, or
+-- K {x = a, y = b}.
+readAlt :: ConDecl -> Expr
+readAlt (ConDecl k fs labels)
+  | null fs = app (EVar "readConstant") [str name, ECon k, s]
+  | null labels = iterate (EApp (EVar "readArg")) (app (EVar "readApply") [str name, ECon k, d, s]) !! length fs
+  | otherwise =
+      EApp (EVar "readClose") $
+        foldl (\acc (i, l) -> app (EVar "readField") [str l, ECon (if i == (0 :: Int) then "True" else "False"), acc])
+          (app (EVar "readRecord") [str name, ECon k, d, s]) (zip [0 ..] labels)
+  where
+    name = case unqual k of
+      k'@(ch : _) | isAlpha ch -> k'
+      k' -> "(" ++ k' ++ ")"
+    d = EVar "d"
+    s = EVar "s"
 
 -- Functor, Foldable, Traversable ---------------------------------------------------
 
