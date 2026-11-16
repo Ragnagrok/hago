@@ -72,6 +72,11 @@ From easiest to hardest, which is the order we take them in.
       `Integral`. Also `last` and `init` (with `Maybe`), `words`, `lines`, `notElem`, `scanl`,
       `scanr`, `scanl1`, `scanr1`, `until`, `lcm`, `logBase`.
 
+- [x] **`++` has an honest type.** It was a built-in `a -> Lazy a -> a` that failed at run time
+      on anything but lists and Strings (`1 ++ 2` compiled); now it is
+      `Semigroup a => a -> Lazy a -> a`. Using a `String` as a list says that it is not one, and
+      how to convert.
+
 Next, found by the JSON program:
 
 - [ ] **Small sum types without allocation.** A non-recursive sum type (`Maybe`, `Either`, a

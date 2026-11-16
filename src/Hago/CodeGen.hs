@@ -513,7 +513,7 @@ genExpr ctx e = case e of
     -- s ++ t on strings, with t suspended, needs no suspension: Go's + is
     -- strict, and t is generated once (generating the suspension too would
     -- make a chain of ++ exponential)
-    CVar "++" (Inst [targ] _) _
+    CVar "primAppend" (Inst [targ] _) _
       | [a, CDelay _ inner] <- args
       , TCon "String" [] <- zonk (progSubst (cxProg ctx)) targ -> do
           a' <- genExpr ctx a
@@ -636,10 +636,10 @@ genPrim ctx x targs as = case (x, as) of
   ("primThenIO", [a, b]) -> pure ("rt_then" ++ typeArgs ctx targs ++ "(" ++ a ++ ", " ++ b ++ ")")
   ("primRunIO", [a]) -> pure ("rt_run" ++ typeArgs ctx targs ++ "(" ++ a ++ ")")
   ("error", [a]) -> pure ("rt_error" ++ typeArgs ctx targs ++ "(" ++ a ++ ")")
-  ("++", [a, b]) -> case targs of
+  ("primAppend", [a, b]) -> case targs of
     [TCon "String" []] -> pure ("(" ++ a ++ " + " ++ b ++ "())")
     [TCon "[]" [el]] -> pure (mangle "append" ++ typeArgs ctx [el] ++ "(" ++ a ++ ", " ++ b ++ ")")
-    _ -> pure ("rt_error[" ++ goTy ctx (case targs of (t : _) -> t; [] -> tUnit) ++ "](\"++ needs a String or a list\")")
+    _ -> pure ("rt_error[" ++ goTy ctx (case targs of (t : _) -> t; [] -> tUnit) ++ "](\"primAppend needs a String or a list\")")
   ("pack", [a]) -> pure ("rt_pack(" ++ a ++ ")")
   ("unpack", [a]) -> pure ("rt_unpack(" ++ a ++ ")")
   ("ord", [a]) -> pure ("int(" ++ a ++ ")")

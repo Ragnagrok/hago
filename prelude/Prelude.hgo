@@ -144,6 +144,11 @@ class Semigroup a where
 class Semigroup a => Monoid a where
   mempty :: a
 
+-- One after the other: two lists, two Strings, or two values of any other
+-- Semigroup. The second is only computed when it is needed.
+(++) :: Semigroup a => a -> Lazy a -> a
+a ++ b = a <> b
+
 mconcat :: Monoid a => [a] -> a
 mconcat xs = foldr (<>) mempty xs
 
@@ -165,13 +170,13 @@ getAny :: Any -> Bool
 getAny (Any b) = b
 
 instance Semigroup [a] where
-  xs <> ys = xs ++ ys
+  xs <> ys = primAppend xs ys
 
 instance Monoid [a] where
   mempty = []
 
 instance Semigroup String where
-  a <> b = a ++ b
+  a <> b = primAppend a b
 
 instance Monoid String where
   mempty = ""

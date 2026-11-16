@@ -1,0 +1,3 @@
+-- expects: a String is not a list: unpack turns it into a [Char]
+main :: IO ()
+main = print (reverse "abc")

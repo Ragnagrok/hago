@@ -119,7 +119,17 @@ unify x y = do
     go _ _ = do
       x' <- zonkT x
       y' <- zonkT y
-      throw ("type mismatch: expected " ++ pretty y' ++ ", got " ++ pretty x')
+      throw ("type mismatch: expected " ++ pretty y' ++ ", got " ++ pretty x' ++ stringHint x' y')
+    -- a String where a list or a Foldable is expected, or the other way round
+    stringHint a b
+      | isString a && listLike b || isString b && listLike a =
+          "\na String is not a list: unpack turns it into a [Char], and pack turns one back"
+      | otherwise = ""
+    isString t = t == TCon "String" []
+    listLike = \case
+      TCon "[]" [_] -> True
+      TApp _ _ -> True
+      _ -> False
     bindVar m t
       | m `elem` metas t = throw ("infinite type: ?" ++ show m ++ " ~ " ++ pretty t)
       | otherwise = bindMeta m t

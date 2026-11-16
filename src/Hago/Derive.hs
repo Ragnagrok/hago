@@ -130,9 +130,9 @@ showClause (ConDecl k fs labels) =
         k' -> "(" ++ k' ++ ")"
       shown p a = app (EVar "showsPrec") [ELit (LInt p), EVar a]
       body
-        | null labels = foldl (\acc a -> op "++" acc (op "++" (str " ") (shown 11 a))) (str name) as
+        | null labels = foldl (\acc a -> op "primAppend" acc (op "primAppend" (str " ") (shown 11 a))) (str name) as
         | otherwise =
-            foldr (op "++") (str "}")
+            foldr (op "primAppend") (str "}")
               (str (name ++ " {") : intercalate [str ", "] [[str (l ++ " = "), shown 0 a] | (l, a) <- zip labels as])
    in if m == 0
         then Clause [PWild, PCon k []] (plain (str name))

@@ -50,7 +50,9 @@ primSchemes = M.fromList $
        -- trampolined IO without effects
        , ("primRunIO", Forall ["a"] [] (tIO a ~> a))
        , ("error", Forall ["a"] [] (tString ~> a))
-       , ("++", Forall ["a"] [] (a ~> tLazy a ~> a))
+       -- joins two Strings or two lists; anything else fails at run time, so
+       -- only the Prelude's instances of Semigroup and deriving use it
+       , ("primAppend", Forall ["a"] [] (a ~> tLazy a ~> a))
        , ("pack", mono (tList tChar ~> tString))
        , ("unpack", mono (tString ~> tList tChar))
        , ("ord", mono (tChar ~> tInt))
