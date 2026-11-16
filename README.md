@@ -81,6 +81,13 @@ label t = traverse step t
 ```
 
 - **`do` works in any monad.** It compiles to straight-line Go in IO, and to `>>=` elsewhere.
+  `p <- e` can bind a pattern.
+- **Data types can take a type constructor,** so monad transformers can be written:
+  `data StateT s m a = StateT (s -> m (a, s))`. Go has no such type parameters, so each use gets
+  its own Go type: `StateT s IO a` becomes `StateT__IO[S, A]`, generated only for the
+  combinations the program uses. `examples/transformers.hgo` defines `StateT`, `ExceptT`,
+  `MonadTrans` and `MonadIO`, and runs a stack machine on
+  `StateT [Int] (ExceptT String IO)`.
 - **Instances can be partial applications,** as in `Functor (Either e)`, `Monad ((->) r)` (a
   reader) and `Monoid w => Monad ((,) w)` (a writer).
 - **`deriving (Eq, Ord, Show)`** expands into ordinary instances before type checking.
@@ -111,8 +118,9 @@ still lives with:
 - **`Semigroup => Monoid`.** `<>` is the only way to combine, and there is no `mappend`.
 - **`fail` lives in `MonadFail`,** not in `Monad`.
 - **Folding and traversing go through `Foldable` and `Traversable`.** `sum`, `elem`, `length`,
-  `mapM_` and friends work on any `Foldable`. `mapM_`, `traverse_` and `sequence_` only ask for
-  `Applicative`, and `mapM` is just `traverse`.
+  `mapM_` and friends work on any `Foldable`. `traverse_` only asks for `Applicative`, and
+  `mapM` is just `traverse`. `mapM_` and `forM_` use `>>=`, as in base, which keeps the rest of
+  a loop suspended until it runs.
 - **`Num` is a ring:** `+`, `-`, `*`, `negate` and `fromInteger`. `abs` and `signum` only make
   sense with an order, so they are functions on `(Ord a, Num a)`. `Num` does not require `Eq`
   or `Show`. `Integral` requires `Ord`, and `Floating` has `sqrt`, `pi` and the rest.
@@ -130,7 +138,7 @@ calls. Hago handles this in two ways, following PureScript:
 - **IO is trampolined.** Running an action yields its result or the next action, and the runtime
   loops over them. A `do` block that ends in another action, `>>=` and `*>` therefore use no
   stack: `loop n = do { ...; loop (n + 1) }` runs forever, and `mapM_` over a million elements
-  runs in constant memory.
+  runs in constant memory, in IO and in transformers over IO such as `StateT s IO`.
 - **`MonadRec` and `tailRecM`** run loops in constant stack in other monads. `IO`, `Maybe` and
   `Either e` have instances, you can write one for your own monad (see `examples/monads.hgo`),
   and `forever` is built on it.
@@ -187,9 +195,10 @@ These numbers come from one machine, as a reference and not as a benchmark.
 | `nfib 40`, hand-written Go | 0.34 s | — |
 | `nfib 40 :: Int -> Int`, Hago | 0.34 s | — |
 | `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, at `Int` | 0.35 s | — |
-| sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.42 s | ~8 MB |
-| `mapM_` over a million elements in IO | 0.17 s | ~9 MB |
+| sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.45 s | ~10 MB |
+| `mapM_` over a million elements in IO | 0.19 s | ~8 MB |
 | a recursive IO loop of five million iterations | 0.31 s | ~8 MB |
+| `mapM_` over a million elements in `StateT Int IO` | 0.26 s | ~8 MB |
 
 - **Strict code at concrete types** compiles to the Go you would write by hand, and runs like it.
 - **Constrained and constructor-polymorphic code** (`Num a =>`, `Monad m =>`) costs nothing
@@ -209,7 +218,8 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # just compile
 ```
 
 The `examples/` folder has lazy lists, ADTs with pattern matching and guards, type classes,
-monads (State, Maybe, Either, lists, reader, writer, Traversable), calls to Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
+monads (State, Maybe, Either, lists, reader, writer, Traversable), monad transformers, calls to
+Go, and loops. Each example has an `.out` file with its expected output. The `rejected/` folder has
 programs the type checker must refuse, each with the error it expects.
 
 ## What is there and what isn't
@@ -229,8 +239,6 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 - `foreign import go`.
 
 **Missing**
-- **Type parameters of a higher kind in data types,** so no monad transformers like
-  `StateT s m a` yet. Their Go types would have to be specialised as well.
 - Multi-parameter classes, `deriving Functor`.
 - **Polymorphic recursion through a constraint** (a function that calls itself at a bigger
   type) cannot be specialised, and is rejected.
@@ -238,8 +246,10 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 - **`String` is Go's `string`, not `[Char]`.** Convert with `pack` and `unpack`.
 - Modules and imports, records, `newtype` semantics, list comprehensions, `type` synonyms, tuples
   beyond three.
-- **`traverse_` over long lists in a monad other than IO uses stack.** Write those loops with
-  `tailRecM`.
+- **Long loops in pure monads like `State` use stack,** because their `>>=` is a chain of Go
+  calls. Write those loops with `tailRecM`. In IO and transformers over IO they are flat.
+- **No multi-parameter classes,** so no mtl-style `MonadState s m`: transformers come with
+  explicit `lift`.
 - **Local bindings are monomorphic.** Go function literals cannot be generic.
 - **Polymorphic top-level values are not shared.** `xs = []` becomes a generic function and is
   re-evaluated at each use.

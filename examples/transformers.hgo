@@ -1,0 +1,117 @@
+-- Monad transformers: data types whose parameter is a type constructor.
+-- StateT s m a is compiled to one Go type per m it is used with.
+
+class MonadTrans t where
+  lift :: Monad m => m a -> t m a
+
+class Monad m => MonadIO m where
+  liftIO :: IO a -> m a
+
+instance MonadIO IO where
+  liftIO m = m
+
+-- State over any monad.
+data StateT s m a = StateT (s -> m (a, s))
+
+runStateT :: StateT s m a -> s -> m (a, s)
+runStateT (StateT f) s = f s
+
+instance Functor m => Functor (StateT s m) where
+  fmap f m = StateT (\s -> fmap (\(a, s') -> (f a, s')) (runStateT m s))
+
+instance Monad m => Applicative (StateT s m) where
+  pure a = StateT (\s -> pure (a, s))
+  mf <*> mx = mf >>= \f -> fmap f mx
+
+instance Monad m => Monad (StateT s m) where
+  m >>= k = StateT (\s -> runStateT m s >>= \(a, s') -> runStateT (k a) s')
+
+instance MonadTrans (StateT s) where
+  lift m = StateT (\s -> fmap (\a -> (a, s)) m)
+
+instance MonadIO m => MonadIO (StateT s m) where
+  liftIO m = lift (liftIO m)
+
+getS :: Monad m => StateT s m s
+getS = StateT (\s -> pure (s, s))
+
+putS :: Monad m => s -> StateT s m ()
+putS s = StateT (\_ -> pure ((), s))
+
+modifyS :: Monad m => (s -> s) -> StateT s m ()
+modifyS f = StateT (\s -> pure ((), f s))
+
+-- Errors over any monad.
+data ExceptT e m a = ExceptT (m (Either e a))
+
+runExceptT :: ExceptT e m a -> m (Either e a)
+runExceptT (ExceptT m) = m
+
+instance Functor m => Functor (ExceptT e m) where
+  fmap f (ExceptT m) = ExceptT (fmap (fmap f) m)
+
+instance Monad m => Applicative (ExceptT e m) where
+  pure a = ExceptT (pure (Right a))
+  mf <*> mx = mf >>= \f -> fmap f mx
+
+instance Monad m => Monad (ExceptT e m) where
+  ExceptT m >>= k = ExceptT (m >>= \r -> case r of
+    Left e -> pure (Left e)
+    Right a -> runExceptT (k a))
+
+instance MonadTrans (ExceptT e) where
+  lift m = ExceptT (fmap Right m)
+
+instance MonadIO m => MonadIO (ExceptT e m) where
+  liftIO m = lift (liftIO m)
+
+throwE :: Monad m => e -> ExceptT e m a
+throwE e = ExceptT (pure (Left e))
+
+-- A stack machine: a stack in StateT, failure in ExceptT, output in IO.
+data Instr = Push Int | Add | Mul | Print
+
+pop :: StateT [Int] (ExceptT String IO) Int
+pop = do
+  st <- getS
+  case st of
+    [] -> lift (throwE "stack underflow")
+    (x:rest) -> do
+      putS rest
+      pure x
+
+push :: Int -> StateT [Int] (ExceptT String IO) ()
+push x = modifyS (\st -> x : st)
+
+step :: Instr -> StateT [Int] (ExceptT String IO) ()
+step (Push n) = push n
+step Add = do
+  a <- pop
+  b <- pop
+  push (a + b)
+step Mul = do
+  a <- pop
+  b <- pop
+  push (a * b)
+step Print = do
+  x <- pop
+  liftIO (putStrLn ("top: " ++ show x))
+  push x
+
+run :: [Instr] -> IO ()
+run program = do
+  r <- runExceptT (runStateT (mapM_ step program) [])
+  case r of
+    Left err -> putStrLn ("error: " ++ err)
+    Right (_, st) -> putStrLn ("final stack: " ++ show st)
+
+-- A million steps of StateT over IO stay flat, because IO is trampolined.
+countUp :: Int -> StateT Int IO ()
+countUp n = mapM_ (\i -> modifyS (\s -> s + i)) [1..n]
+
+main :: IO ()
+main = do
+  run [Push 2, Push 3, Add, Print, Push 4, Mul, Print]
+  run [Push 1, Add]
+  (_, total) <- runStateT (countUp 1000000) 0
+  print total

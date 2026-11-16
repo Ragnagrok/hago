@@ -13,7 +13,7 @@ import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
 import Hago.Core
 import Hago.Syntax (Lit (..), Name)
-import Hago.Specialize (instMethodName)
+import Hago.Specialize (instMethodName, typeTag)
 import Hago.Typecheck (primSchemes)
 import Numeric (showHex)
 
@@ -38,7 +38,7 @@ data GS = GS {gsNext :: Int, gsLoop :: Bool}
 type Gen = State GS
 
 generate :: String -> Program -> String
-generate runtime prog = unlines (header ++ [runtime] ++ dataDecls ++ classDecls ++ instDecls ++ foreignUses ++ tops ++ initBlock ++ mainFn)
+generate runtime prog = unlines (header ++ [runtime] ++ dataDecls ++ hkDecls ++ classDecls ++ instDecls ++ foreignUses ++ tops ++ initBlock ++ mainFn)
   where
     foreignPkgs = nub [pkg | f <- M.elems (progForeign prog), let (pkg, _) = splitSymbol (fSymbol f), pkg /= ""]
     header =
@@ -65,7 +65,9 @@ generate runtime prog = unlines (header ++ [runtime] ++ dataDecls ++ classDecls 
       , cxDictParams = []
       , cxProg = prog
       }
-    dataDecls = concatMap (genData prog) [(n, d) | (n, d) <- M.toList (progData prog), n `notElem` ["[]", "Bool"]]
+    dataDecls = concatMap (genData prog)
+      [(n, d) | (n, d) <- M.toList (progData prog), n `notElem` ["[]", "Bool"], null (hkPositions prog n)]
+    hkDecls = concatMap (genHkData prog) (hkInstances prog)
     classDecls = concatMap (genClass ctx0)
       [c | c@(n, _) <- M.toList (progClasses prog), n `elem` map instClass (progInsts prog)]
     ((tops, inits), (instDecls, dictInits)) = flip evalState (GS 0 False) $ do
@@ -147,6 +149,10 @@ goTy ctx = render . zonk (progSubst (cxProg ctx))
       TCon "Lazy" [t] -> "func() " ++ render t
       TCon "(,)" ts -> "Tup2[" ++ commas (map render ts) ++ "]"
       TCon "(,,)" ts -> "Tup3[" ++ commas (map render ts) ++ "]"
+      TCon c ts
+        | not (null (hkPositions (cxProg ctx) c)) ->
+            let (n, args) = dataInst (cxProg ctx) c ts
+             in n ++ (if null args then "" else "[" ++ commas (map render args) ++ "]")
       TCon c [] -> typeName c
       TCon c ts -> typeName c ++ "[" ++ commas (map render ts) ++ "]"
       TFun a b -> "func(" ++ render a ++ ") " ++ render b
@@ -165,8 +171,85 @@ commas = intercalate ", "
 
 -- Data types ----------------------------------------------------------------------
 
+-- | Parameters of a data type that take a type constructor (the m of StateT s m a).
+hkPositions :: Program -> Name -> [Int]
+hkPositions prog c = maybe [] (\di -> [i | (i, k) <- zip [0 ..] (diKinds di), k > 0]) (M.lookup c (progData prog))
+
+-- | Go has no type parameters of a higher kind, so a data type applied to a
+-- type constructor gets one Go type per constructor: StateT s IO a becomes
+-- StateT__IO[S, A]. Variables inside the constructor become extra type
+-- parameters. Returns the Go name and its type arguments.
+dataInst :: Program -> Name -> [Type] -> (String, [Type])
+dataInst prog c ts =
+  let pos = hkPositions prog c
+      hk = [t | (i, t) <- zip [0 :: Int ..] ts, i `elem` pos]
+      rest = [t | (i, t) <- zip [0 :: Int ..] ts, i `notElem` pos]
+      (canon, extras) = canonVars hk
+   in (instName c canon, rest ++ map TVar extras)
+
+canonVars :: [Type] -> ([Type], [Name])
+canonVars hk =
+  let vs = nub (concatMap tyVarsOf hk)
+      s = M.fromList [(v, TVar ("_hk" ++ show i)) | (i, v) <- zip [0 :: Int ..] vs]
+   in (map (substTV s) hk, vs)
+
+instName :: Name -> [Type] -> String
+instName c canon = typeName c ++ "__" ++ intercalate "_" (map typeTag canon)
+
+-- | A constructor as a Go struct, with its type arguments.
+conRef :: Ctx -> Name -> [Type] -> String
+conRef ctx k targs = case M.lookup k (progCons prog) of
+  Just ci | not (null (hkPositions prog (ciType ci))) ->
+    let (n, args) = dataInst prog (ciType ci) (map (zonk (progSubst prog)) targs)
+     in n ++ "_" ++ (if isSymbolic k then mangle k else k) ++ typeArgs ctx args
+  _ -> conStruct prog k ++ typeArgs ctx targs
+  where prog = cxProg ctx
+
+-- | Every instantiation of a data type over type constructors that the
+-- program uses, including those that only appear inside other ones' fields.
+hkInstances :: Program -> [(Name, [Type])]
+hkInstances prog = go [] (concatMap found allTypes)
+  where
+    sub = progSubst prog
+    allTypes = concat [tbType b : [t | (_, IsIn _ t) <- tbDicts b] ++ exprTypes (tbBody b) | b <- progBinds prog]
+    found t = case zonk sub t of
+      TCon c ts
+        | not (null (hkPositions prog c)), Just di <- M.lookup c (progData prog), length ts == length (diParams di) ->
+            (c, fst (canonVars [x | (i, x) <- zip [0 :: Int ..] ts, i `elem` hkPositions prog c])) : concatMap found ts
+        | otherwise -> concatMap found ts
+      TFun a b -> found a ++ found b
+      TApp f x -> found f ++ found x
+      _ -> []
+    go _ [] = []
+    go seen (x : xs)
+      | x `elem` seen = go seen xs
+      | otherwise = x : go (x : seen) (xs ++ concatMap found (fieldTypes x))
+    fieldTypes (c, canon) =
+      let di = progData prog M.! c
+          s = M.fromList (zip [p | (p, k) <- zip (diParams di) (diKinds di), k > 0] canon)
+       in [substTV s t | k <- diCons di, (_, t) <- ciFields (progCons prog M.! k)]
+
+genHkData :: Program -> (Name, [Type]) -> [String]
+genHkData prog (c, canon) =
+  ["type " ++ name ++ tparamList params ++ " interface{ " ++ marker ++ "() }"] ++ concatMap con (diCons di)
+  where
+    di = progData prog M.! c
+    hkParams = [p | (p, k) <- zip (diParams di) (diKinds di), k > 0]
+    params = [p | (p, k) <- zip (diParams di) (diKinds di), k == 0] ++ nub (concatMap tyVarsOf canon)
+    s = M.fromList (zip hkParams canon)
+    name = instName c canon
+    marker = "is" ++ name
+    ctx = Ctx M.empty Nothing params [] prog
+    recv k = name ++ "_" ++ suffix k ++ (if null params then "" else "[" ++ commas (map tyVar params) ++ "]")
+    suffix k = if isSymbolic k then mangle k else k
+    con k =
+      let ci = progCons prog M.! k
+          fields = ["F" ++ show i ++ " " ++ goTy ctx (substTV s (if lz then tLazy t else t)) | (i, (lz, t)) <- zip [0 :: Int ..] (ciFields ci)]
+       in [ "type " ++ name ++ "_" ++ suffix k ++ tparamList params ++ " struct{ " ++ intercalate "; " fields ++ " }"
+          , "func (" ++ recv k ++ ") " ++ marker ++ "() {}" ]
+
 genData :: Program -> (Name, DataInfo) -> [String]
-genData prog (n, DataInfo ps ks)
+genData prog (n, DataInfo ps _ ks)
   | n `elem` ["()", "(,)", "(,,)"] = []
   | otherwise =
       ["type " ++ typeName n ++ tparamList ps ++ " interface{ " ++ marker ++ "() }"]
@@ -322,7 +405,7 @@ genPats ctx ((s, p) : rest) k = case p of
   CPCon k' _ subs | k' `elem` ["(,)", "(,,)"] ->
     genPats ctx ([(s ++ ".F" ++ show i, q) | (i, q) <- zip [0 :: Int ..] subs] ++ rest) k
   CPCon k' targs subs -> do
-    let struct = conStruct (cxProg ctx) k' ++ typeArgs ctx targs
+    let struct = conRef ctx k' targs
     if all isWild subs
       then do
         body <- genPats ctx rest k
@@ -654,7 +737,7 @@ conValue ctx k targs as = case k of
   "True" -> "true"
   "False" -> "false"
   "()" -> "struct{}{}"
-  _ -> conStruct (cxProg ctx) k ++ typeArgs ctx targs ++ "{" ++ commas as ++ "}"
+  _ -> conRef ctx k targs ++ "{" ++ commas as ++ "}"
 
 genLam :: Ctx -> [(Name, Type)] -> Type -> CExpr -> Gen String
 genLam ctx ps r body = go ps

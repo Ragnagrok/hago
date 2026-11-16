@@ -331,6 +331,7 @@ doStmts env m = \case
     c <- check env e (tApp m r)
     pure (r, [CSExpr r c])
   [_] -> throw "the last statement of a do block must be an expression"
+  SBindPat _ _ : _ -> throw "internal: pattern bind not desugared"
   SExpr e : rest -> do
     a <- fresh
     c <- check env e (tApp m a)
@@ -436,8 +437,10 @@ tcModule ds = do
       pure (k, ConInfo n ps fts i)
   let cons = M.union builtinCons (M.fromList userCons)
       dataInfos = M.fromList $
-        [("[]", DataInfo ["a"] ["[]", ":"]), ("Bool", DataInfo [] ["False", "True"])]
-          ++ [(n, DataInfo ps [k | ConDecl k _ <- cs]) | (n, ps, cs) <- datas]
+        [("[]", DataInfo ["a"] [0] ["[]", ":"]), ("Bool", DataInfo [] [] ["False", "True"])]
+          ++ [ (n, DataInfo ps [M.findWithDefault 0 p ar | p <- ps] [k | ConDecl k _ <- cs])
+             | (n, ps, cs) <- datas
+             , let ar = M.unionsWith max [stypeArities st | ConDecl _ fs <- cs, (_, st) <- fs] ]
       envC = envD {envCons = cons}
   -- classes
   let classDecls = [(sup, c, v, body) | DClass sup c v body <- ds]
@@ -630,5 +633,6 @@ exprRefs = \case
   _ -> []
   where
     stmtRefs (SBind _ e) = exprRefs e
+    stmtRefs (SBindPat _ e) = exprRefs e
     stmtRefs (SLet ds) = declsRefs ds
     stmtRefs (SExpr e) = exprRefs e

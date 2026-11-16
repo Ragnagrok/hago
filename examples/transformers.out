@@ -1,0 +1,5 @@
+top: 5
+top: 20
+final stack: [20]
+error: stack underflow
+500000500000

@@ -47,6 +47,7 @@ data Rhs = Rhs [(Maybe Expr, Expr)] [Decl]
 
 data Stmt
   = SBind Name Expr
+  | SBindPat Pat Expr   -- ^ removed by the parser: @p <- e@ becomes a bind and a case
   | SLet [Decl]
   | SExpr Expr
   deriving (Eq, Show)

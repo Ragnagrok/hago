@@ -82,6 +82,50 @@ tyVarsOf = \case
   TApp f x -> tyVarsOf f ++ tyVarsOf x
   TMeta _ -> []
 
+-- | Type variables passed where a data type takes a type constructor, like
+-- the m of StateT s m a: they are of a higher kind too.
+dataHkVars :: M.Map Name DataInfo -> Type -> [Name]
+dataHkVars datas = go
+  where
+    go = \case
+      TCon c ts -> [v | (k, TVar v) <- zip (maybe [] diKinds (M.lookup c datas)) ts, k > 0] ++ concatMap go ts
+      TFun a b -> go a ++ go b
+      TApp f x -> go f ++ go x
+      _ -> []
+
+-- | Every type that appears in an expression, for passes that need to see them all.
+exprTypes :: CExpr -> [Type]
+exprTypes = \case
+  CVar _ ref t -> t : refTypes ref
+  CCon _ ts t -> t : ts
+  CLit _ -> []
+  CNum _ t _ -> [t]
+  CFrac _ t _ -> [t]
+  CApp f as -> exprTypes f ++ concatMap exprTypes as
+  CLam ps r b -> r : map snd ps ++ exprTypes b
+  CLet bs b t -> t : concatMap bindTypes bs ++ exprTypes b
+  CMatch ss rows t -> t : concatMap exprTypes ss ++ concatMap rowTypes rows
+  CIf a b c t -> t : concatMap exprTypes [a, b, c]
+  CDelay t e -> t : exprTypes e
+  CForce e -> exprTypes e
+  CDo m _ r ss -> m : r : concatMap stmtTypes ss
+  where
+    refTypes (Inst ts _) = ts
+    refTypes SelfGroup = []
+    bindTypes (CBind _ t _ b) = t : exprTypes b
+    rowTypes (CRow ps bs gs) = concatMap patTypes ps ++ concatMap bindTypes bs ++ concat [maybe [] exprTypes g ++ exprTypes e | (g, e) <- gs]
+    stmtTypes (CSBind _ t e) = t : exprTypes e
+    stmtTypes (CSExpr t e) = t : exprTypes e
+    stmtTypes (CSLet bs) = concatMap bindTypes bs
+    patTypes = \case
+      CPVar _ t -> [t]
+      CPNum _ t _ _ -> [t]
+      CPCon _ ts ps -> ts ++ concatMap patTypes ps
+      CPForce p -> patTypes p
+      CPAs _ t p -> t : patTypes p
+      CPEq f v -> exprTypes f ++ exprTypes v
+      _ -> []
+
 -- | Type variables used as the head of an application: those of a higher kind.
 headVars :: Type -> [Name]
 headVars = \case
@@ -156,7 +200,9 @@ data ConInfo = ConInfo
   }
   deriving (Show)
 
-data DataInfo = DataInfo {diParams :: [Name], diCons :: [Name]}
+-- | A data type: its parameters, how many arguments each takes (0 for a
+-- plain type, 1 for the m of StateT s m a), and its constructors.
+data DataInfo = DataInfo {diParams :: [Name], diKinds :: [Int], diCons :: [Name]}
   deriving (Show)
 
 data Foreign = Foreign {fSymbol :: String, fType :: Type, fArity :: Int}

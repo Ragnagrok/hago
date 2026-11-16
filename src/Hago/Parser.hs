@@ -1,3 +1,5 @@
+{-# LANGUAGE LambdaCase #-}
+
 -- | Parser from tokens (after layout) to the surface syntax, plus fixity
 -- resolution of operator sequences.
 module Hago.Parser (parseModule, resolveFixity) where
@@ -309,7 +311,7 @@ expr10 = choice
   , letIn
   , ifThen
   , caseOf
-  , EDo <$> (key "do" *> block stmt)
+  , EDo . patBinds <$> (key "do" *> block stmt)
   , fexpr
   ]
   where
@@ -339,17 +341,29 @@ expr10 = choice
       ECase s <$> block (Alt <$> pat <*> rhs (key "->"))
 
 stmt :: Parser Stmt
-stmt = try bind <|> try letStmt <|> (SExpr <$> expr)
+stmt = try bind <|> try patBind <|> try letStmt <|> (SExpr <$> expr)
   where
     bind = do
       x <- (var <|> ("_" <$ key "_"))
       key "<-"
       SBind x <$> expr
+    patBind = do
+      p <- pat
+      key "<-"
+      SBindPat p <$> expr
     letStmt = do
       key "let"
       ds <- localDecls
       notFollowedBy (key "in")
       pure (SLet ds)
+
+-- | @p <- e; rest@ binds a variable and matches it: @x <- e; case x of p -> do rest@.
+patBinds :: [Stmt] -> [Stmt]
+patBinds = \case
+  SBindPat p e : rest@(_ : _) ->
+    [SBind "_pat" e, SExpr (ECase (EVar "_pat") [Alt p (Rhs [(Nothing, EDo (patBinds rest))] [])])]
+  s : rest -> s : patBinds rest
+  [] -> []
 
 fexpr :: Parser Expr
 fexpr = foldl1 EApp <$> many1 aExpr
@@ -444,6 +458,7 @@ rExpr fx = go
       EAnn x t -> EAnn (go x) t
       _ -> e
     stmtR (SBind x e) = SBind x (go e)
+    stmtR (SBindPat p e) = SBindPat p (go e)
     stmtR (SLet ds) = SLet (map (rDecl fx) ds)
     stmtR (SExpr e) = SExpr (go e)
     fixOf op = fromMaybe (AssocL, 9) (M.lookup op fx)

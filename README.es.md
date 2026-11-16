@@ -81,7 +81,13 @@ label t = traverse step t
 ```
 
 - **`do` funciona en cualquier mónada.** En IO se compila a Go secuencial, y en el resto a
-  `>>=`.
+  `>>=`. `p <- e` puede ligar un patrón.
+- **Los tipos de datos pueden tomar un constructor de tipos,** así que se pueden escribir
+  transformadores de mónadas: `data StateT s m a = StateT (s -> m (a, s))`. Go no tiene ese
+  tipo de parámetros, así que cada uso tiene su propio tipo de Go: `StateT s IO a` se vuelve
+  `StateT__IO[S, A]`, generado sólo para las combinaciones que el programa usa.
+  `examples/transformers.hgo` define `StateT`, `ExceptT`, `MonadTrans` y `MonadIO`, y corre una
+  máquina de pila sobre `StateT [Int] (ExceptT String IO)`.
 - **Las instancias pueden ser aplicaciones parciales,** como `Functor (Either e)`,
   `Monad ((->) r)` (un *reader*) y `Monoid w => Monad ((,) w)` (un *writer*).
 - **`deriving (Eq, Ord, Show)`** se expande a instancias comunes antes del type checking.
@@ -115,8 +121,9 @@ deshacer o con las que todavía convive:
 - **`Semigroup => Monoid`.** `<>` es la única forma de combinar, y no existe `mappend`.
 - **`fail` está en `MonadFail`,** no en `Monad`.
 - **Plegar y recorrer pasa por `Foldable` y `Traversable`.** `sum`, `elem`, `length`, `mapM_` y
-  compañía funcionan con cualquier `Foldable`. `mapM_`, `traverse_` y `sequence_` sólo piden
-  `Applicative`, y `mapM` es simplemente `traverse`.
+  compañía funcionan con cualquier `Foldable`. `traverse_` sólo pide `Applicative`, y `mapM` es
+  simplemente `traverse`. `mapM_` y `forM_` usan `>>=`, como en base, lo que deja el resto de un
+  loop suspendido hasta que se ejecuta.
 - **`Num` es un anillo:** `+`, `-`, `*`, `negate` y `fromInteger`. `abs` y `signum` sólo tienen
   sentido con un orden, así que son funciones sobre `(Ord a, Num a)`. `Num` no exige `Eq` ni
   `Show`. `Integral` exige `Ord`, y `Floating` tiene `sqrt`, `pi` y el resto.
@@ -135,7 +142,8 @@ Go no elimina llamadas de cola. Hago lo resuelve de dos maneras, siguiendo a Pur
 - **IO usa un trampolín.** Ejecutar una acción devuelve su resultado o la acción siguiente, y el
   runtime itera sobre ellas. Un bloque `do` que termina en otra acción, `>>=` y `*>` no consumen
   pila: `loop n = do { ...; loop (n + 1) }` corre para siempre, y `mapM_` sobre un millón de
-  elementos corre en memoria constante.
+  elementos corre en memoria constante, en IO y en transformadores sobre IO como
+  `StateT s IO`.
 - **`MonadRec` y `tailRecM`** corren loops con pila constante en otras mónadas. `IO`, `Maybe` y
   `Either e` tienen instancia, se puede escribir una para una mónada propia (ver
   `examples/monads.hgo`), y `forever` está construido encima.
@@ -192,9 +200,10 @@ Son números de una sola máquina, como referencia y no como benchmark.
 | `nfib 40`, Go escrito a mano | 0,34 s | — |
 | `nfib 40 :: Int -> Int`, Hago | 0,34 s | — |
 | `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, en `Int` | 0,35 s | — |
-| suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | 0,42 s | ~8 MB |
-| `mapM_` sobre un millón de elementos en IO | 0,17 s | ~9 MB |
+| suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | 0,45 s | ~10 MB |
+| `mapM_` sobre un millón de elementos en IO | 0,19 s | ~8 MB |
 | un loop recursivo en IO de cinco millones de iteraciones | 0,31 s | ~8 MB |
+| `mapM_` sobre un millón de elementos en `StateT Int IO` | 0,26 s | ~8 MB |
 
 - **El código estricto en tipos concretos** se compila al Go que escribirías a mano, y rinde
   igual.
@@ -216,7 +225,8 @@ cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # sólo compilar
 ```
 
 En `examples/` hay listas perezosas, ADTs con pattern matching y guardas, type classes, mónadas
-(State, Maybe, Either, listas, reader, writer, Traversable), llamadas a Go y loops.
+(State, Maybe, Either, listas, reader, writer, Traversable), transformadores de mónadas, llamadas
+a Go y loops.
 Cada ejemplo tiene un `.out` con la salida esperada. En `rejected/` hay programas que el type
 checker tiene que rechazar, cada uno con el error que espera.
 
@@ -240,8 +250,6 @@ Haskell 98.
 - `foreign import go`.
 
 **Falta**
-- **Parámetros de orden superior en tipos de datos,** así que todavía no hay transformadores de
-  mónadas como `StateT s m a`. Sus tipos de Go también tendrían que especializarse.
 - Clases de varios parámetros, `deriving Functor`.
 - **La recursión polimórfica a través de una restricción** (una función que se llama a sí misma
   en un tipo más grande) no se puede especializar, y se rechaza.
@@ -249,8 +257,11 @@ Haskell 98.
 - **`String` es el `string` de Go, no `[Char]`.** Se convierte con `pack` y `unpack`.
 - Módulos e imports, records, la semántica de `newtype`, listas por comprensión, sinónimos con
   `type`, tuplas de más de tres.
-- **`traverse_` sobre listas largas en una mónada que no sea IO consume pila.** Esos loops se
-  escriben con `tailRecM`.
+- **Los loops largos en mónadas puras como `State` consumen pila,** porque su `>>=` es una
+  cadena de llamadas de Go. Esos loops se escriben con `tailRecM`. En IO y en transformadores
+  sobre IO no consumen pila.
+- **No hay clases de varios parámetros,** así que no hay `MonadState s m` al estilo mtl: los
+  transformadores se usan con `lift` explícito.
 - **Las definiciones locales son monomórficas.** Las funciones literales de Go no pueden ser
   genéricas.
 - **Los valores polimórficos del nivel superior no se comparten.** `xs = []` se vuelve una

@@ -4,8 +4,8 @@
 --   * Functor => Applicative => Monad, and return is just pure.
 --   * Semigroup => Monoid, and <> is the only way to combine.
 --   * fail lives in MonadFail, not in Monad.
---   * Folding and traversing work on any Foldable or Traversable, and
---     mapM_/traverse_ only ask for Applicative.
+--   * Folding and traversing work on any Foldable or Traversable;
+--     traverse_ only asks for Applicative, and mapM is traverse.
 --   * Num is a ring: abs and signum need an order, so they are functions
 --     on (Ord a, Num a). Decimal literals are overloaded through Fractional.
 --   * No partial functions: head, tail, !!, maximum and minimum return Maybe.
@@ -675,14 +675,20 @@ traverse_ g xs = foldr (\x rest -> g x *> rest) (pure ()) xs
 for_ :: (Foldable t, Applicative f) => t a -> (a -> f b) -> f ()
 for_ xs g = traverse_ g xs
 
-mapM_ :: (Foldable t, Applicative f) => (a -> f b) -> t a -> f ()
-mapM_ g xs = traverse_ g xs
+sequenceA_ :: (Foldable t, Applicative f) => t (f a) -> f ()
+sequenceA_ xs = foldr (\m rest -> m *> rest) (pure ()) xs
 
-forM_ :: (Foldable t, Applicative f) => t a -> (a -> f b) -> f ()
-forM_ xs g = traverse_ g xs
+-- The monadic versions keep the rest of the loop inside a continuation,
+-- so it is only built as it runs: long loops stay flat in any monad whose
+-- >>= is (IO, and transformers over it).
+mapM_ :: (Foldable t, Monad m) => (a -> m b) -> t a -> m ()
+mapM_ g xs = foldr (\x rest -> g x >>= \_ -> rest) (pure ()) xs
 
-sequence_ :: (Foldable t, Applicative f) => t (f a) -> f ()
-sequence_ xs = foldr (\m rest -> m *> rest) (pure ()) xs
+forM_ :: (Foldable t, Monad m) => t a -> (a -> m b) -> m ()
+forM_ xs g = mapM_ g xs
+
+sequence_ :: (Foldable t, Monad m) => t (m a) -> m ()
+sequence_ xs = mapM_ id xs
 
 sequenceA :: (Traversable t, Applicative f) => t (f a) -> f (t a)
 sequenceA xs = traverse id xs

@@ -15,7 +15,7 @@
 -- The pass also turns instance methods into ordinary top-level functions,
 -- resolves every method call whose instance is known into a direct call,
 -- fills in solved constraints, and turns do blocks outside IO into (>>=).
-module Hago.Specialize (specialize, instMethodName) where
+module Hago.Specialize (specialize, instMethodName, typeTag) where
 
 import Control.Monad
 import Control.Monad.State
@@ -81,7 +81,10 @@ specialize prog = do
         , let mpreds = drop 1 ps
         , let t = norm (substTV (M.singleton (clsVar ci) (instHead inst)) (zonk sub mt)) ]
       ents = M.fromList [(eName e, e) | e <- topEnts ++ instEnts]
-      hkParams e = [v | v <- eTParams e, v `elem` headVars (eType e) || or [w == v | (_, IsIn _ (TVar w)) <- eDicts e]]
+      hkParams e =
+        [ v | v <- eTParams e
+        , v `elem` headVars (eType e) || v `elem` dataHkVars (progData prog) (eType e)
+            || or [w == v | (_, IsIn _ (TVar w)) <- eDicts e] ]
       isTemplate e = not (null (hkParams e))
 
       ty rc t = norm (substTV (rcTy rc) (zonk sub t))
