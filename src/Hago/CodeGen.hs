@@ -84,7 +84,7 @@ generate runtime prog = unlines (header ++ [runtime] ++ tupleDecls ++ dataDecls 
       [(n, d) | (n, d) <- M.toList (progData prog), n `notElem` ["[]", "Bool"], null (hkPositions prog n)]
     hkDecls = concatMap (genHkData prog) (hkInstances prog)
     (tops, inits) = flip evalState (GS 0 False) (unzip <$> mapM (\b -> genTop ctx0 (S.member (tbName b) deferred) b) initOrder)
-    initBlock = ["func init() {"] ++ concat inits ++ ["}"]
+    initBlock = ["func init() {", "defer rt_failed()"] ++ concat inits ++ ["}"]
     -- values are initialised in order, so each comes after everything its
     -- computation reaches, functions included; copies made by specialisation
     -- would otherwise come after their users
@@ -107,7 +107,7 @@ generate runtime prog = unlines (header ++ [runtime] ++ tupleDecls ++ dataDecls 
       TCon "IO" [_] -> True
       _ -> False
     -- drop the global reference first, so actions already run can be collected
-    mainFn = ["func main() {", "m := " ++ mangle "main", mangle "main" ++ " = nil", "rt_run(m)", "}"]
+    mainFn = ["func main() {", "defer rt_failed()", "m := " ++ mangle "main", mangle "main" ++ " = nil", "rt_run(m)", "}"]
 
 -- Names -------------------------------------------------------------------------
 

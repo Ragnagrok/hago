@@ -22,7 +22,7 @@ import Hago.Typecheck (Checked (..))
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removeDirectoryRecursive)
 import System.FilePath (takeBaseName, (</>))
 import System.IO
-import System.Process (getCurrentPid, rawSystem)
+import System.Process (CreateProcess (..), StdStream (..), createProcess, getCurrentPid, proc, waitForProcess)
 
 -- | What a line typed at the prompt defined, kept as its text.
 data Chunk = Chunk {chText :: String, chValues :: [Name], chTypes :: [Name]}
@@ -319,8 +319,22 @@ evaluate s input = do
               let path = sDir s </> "main.go"
               writeFile path go
               hFlush stdout
-              _ <- rawSystem "go" ["run", path]
-              pure ()
+              runGo path
+
+-- | Runs the program with what it prints going straight out, and what Go
+-- says about a failure cut to its first line: a stack overflow comes with a
+-- trace of millions of frames.
+runGo :: FilePath -> IO ()
+runGo path = do
+  (_, _, Just err, ph) <- createProcess (proc "go" ["run", path]) {std_err = CreatePipe}
+  said <- hGetContents err
+  let kept = case [rest | l <- lines said, Just rest <- [stripPrefix "fatal error: " l]] of
+        reason : _ -> ["error: " ++ reason]
+        [] -> takeWhile (not . trace) [l | l <- lines said, not ("exit status " `isPrefixOf` l)]
+      trace l = "goroutine " `isPrefixOf` l || "runtime stack:" `isPrefixOf` l
+  mapM_ (hPutStrLn stdout) (reverse (dropWhile null (reverse kept)))
+  _ <- waitForProcess ph
+  pure ()
 
 schemeOf :: Checked -> Maybe Scheme
 schemeOf ck = M.lookup "Interactive.it" (ckVars ck)

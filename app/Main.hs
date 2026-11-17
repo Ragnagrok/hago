@@ -14,19 +14,25 @@ import System.Process (getCurrentPid, rawSystem, readProcessWithExitCode)
 usage :: String
 usage = unlines
   [ "usage: hago build FILE.hgo [-o OUT.go]   compile to Go"
-  , "       hago run FILE.hgo                 compile and run with `go run`"
+  , "       hago run FILE.hgo [ARGS...]       compile and run, with the arguments given"
   , "       hago repl [FILE.hgo]              evaluate expressions as they are typed" ]
 
 main :: IO ()
 main = getArgs >>= \args -> case args of
   ["build", file] -> build file (takeBaseName file ++ ".go") >> pure ()
   ["build", file, "-o", out] -> build file out >> pure ()
-  ["run", file] -> do
+  "run" : file : progArgs -> do
     tmp <- getTemporaryDirectory
     pid <- getCurrentPid
     let dir = tmp </> ("hago-run-" ++ show pid)
+        exe = dir </> takeBaseName file
     createDirectoryIfMissing True dir
-    code <- (build file (dir </> takeBaseName file <.> "go") >>= \out -> rawSystem "go" ["run", out])
+    code <- (do
+        out <- build file (exe <.> "go")
+        built <- rawSystem "go" ["build", "-o", exe, out]
+        case built of
+          ExitSuccess -> rawSystem exe progArgs
+          failure -> pure failure)
       `finally` removeDirectoryRecursive dir
     exitWith code
   ["repl"] -> repl Nothing

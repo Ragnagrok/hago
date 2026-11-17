@@ -60,6 +60,15 @@ var _ = rt_sync.OnceValue[int]
 var _ = rt_big.NewInt
 func rt_error[T any](msg string) T       { panic(msg) }
 
+// A program that fails (error, a division by zero) says why on standard
+// error and exits with status 1, without Go's trace of the goroutines.
+func rt_failed() {
+	if r := recover(); r != nil {
+		rt_fmt.Fprintln(rt_os.Stderr, "error:", r)
+		rt_os.Exit(1)
+	}
+}
+
 // IO is trampolined: running an action yields either its result or the
 // next action to run, and rt_run loops over them. A do block that ends in
 // another action, a bind, and *> therefore run in constant stack, so

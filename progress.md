@@ -89,6 +89,10 @@ From easiest to hardest, which is the order we take them in.
       branches moves into them, and an unused one is dropped (`Hago/Sink.hs`), so a `where`
       under guards does not fail before the guard that protects it. Also from chapter 4.
 
+- [x] **Failures without Go's traces.** A program that fails (`error`, a division by zero, a
+      stack overflow at the prompt) prints `error: ...` and exits with 1, instead of a panic
+      with the trace of every goroutine. `hago run FILE ARGS...` passes arguments.
+
 Next, found by the JSON program:
 
 - [ ] **Small sum types without allocation.** A non-recursive sum type (`Maybe`, `Either`, a
