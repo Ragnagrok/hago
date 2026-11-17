@@ -1,0 +1,82 @@
+-- Pseudo-random numbers. A generator is a value: randomR gives a number and
+-- the next generator, and the same generator always gives the same number,
+-- which keeps it pure. In IO, newStdGen and randomRIO draw from a generator
+-- seeded by the clock, or by the variable HAGO_RANDOM_SEED, so that a run
+-- can be repeated. The generator is SplitMix64 (Steele, Lea and Flood,
+-- "Fast splittable pseudorandom number generators", 2014).
+module System.Random
+  ( StdGen, mkStdGen, next, split, Random (..), randoms, randomRs
+  , newStdGen, getStdGen, randomIO, randomRIO
+  ) where
+
+newtype StdGen = StdGen Int
+
+instance Show StdGen where
+  show (StdGen s) = "StdGen " ++ show s
+
+foreign import go "rt_splitmixStep" step :: Int -> Int
+foreign import go "rt_splitmixMix" mix :: Int -> Int
+foreign import go "rt_unsignedMod" unsignedMod :: Int -> Int -> Int
+foreign import go "rt_unitDouble" unitDouble :: Int -> Double
+foreign import go "rt_nextGlobalSeed" nextGlobalSeed :: IO Int
+
+-- A generator from a seed; the same seed gives the same numbers.
+mkStdGen :: Int -> StdGen
+mkStdGen seed = StdGen (mix seed)
+
+-- A number with 64 random bits, and the next generator.
+next :: StdGen -> (Int, StdGen)
+next (StdGen s) = let s' = step s in (mix s', StdGen s')
+
+-- Two generators that give unrelated numbers.
+split :: StdGen -> (StdGen, StdGen)
+split g = let (a, g1) = next g
+              (b, _) = next g1
+           in (StdGen (mix a), StdGen (mix b))
+
+class Random a where
+  -- A value from lo to hi, both included.
+  randomR :: (a, a) -> StdGen -> (a, StdGen)
+  random :: StdGen -> (a, StdGen)
+
+instance Random Int where
+  randomR (lo, hi) g
+    | lo > hi = randomR (hi, lo) g
+    | otherwise = let (x, g') = next g in (lo + unsignedMod x (hi - lo + 1), g')
+  random g = next g
+
+instance Random Integer where
+  randomR (lo, hi) g = let (x, g') = randomR (toInt lo, toInt hi) g in (toInteger x, g')
+  random g = let (x, g') = next g in (toInteger x, g')
+
+instance Random Double where
+  randomR (lo, hi) g = let (x, g') = next g in (lo + unitDouble x * (hi - lo), g')
+  random g = randomR (0, 1) g
+
+instance Random Bool where
+  randomR (lo, hi) g = let (x, g') = randomR (fromEnum lo, fromEnum hi) g in (x == 1, g')
+  random g = randomR (False, True) g
+
+instance Random Char where
+  randomR (lo, hi) g = let (x, g') = randomR (ord lo, ord hi) g in (chr x, g')
+  random g = randomR ('a', 'z') g
+
+-- Infinitely many, from one generator.
+randoms :: Random a => StdGen -> [a]
+randoms g = let (x, g') = random g in x : randoms g'
+
+randomRs :: Random a => (a, a) -> StdGen -> [a]
+randomRs range g = let (x, g') = randomR range g in x : randomRs range g'
+
+-- A new generator, from the program's.
+newStdGen :: IO StdGen
+newStdGen = fmap StdGen nextGlobalSeed
+
+getStdGen :: IO StdGen
+getStdGen = newStdGen
+
+randomIO :: Random a => IO a
+randomIO = fmap (\g -> fst (random g)) newStdGen
+
+randomRIO :: Random a => (a, a) -> IO a
+randomRIO range = fmap (\g -> fst (randomR range g)) newStdGen

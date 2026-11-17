@@ -1250,3 +1250,9 @@ foreign import go "rt_getContents" getContents :: IO String
 -- Reading or writing a file can fail, so the error comes back as a value.
 foreign import go "rt_readFile" readFile :: String -> IO (Either String String)
 foreign import go "rt_writeFile" writeFile :: String -> String -> IO (Either String ())
+foreign import go "rt_appendFile" appendFile :: String -> String -> IO (Either String ())
+
+-- The whole of standard input, given to f, and what f gives printed. The
+-- input is read in full first: Hago is strict.
+interact :: (String -> String) -> IO ()
+interact f = getContents >>= \s -> putStr (f s)

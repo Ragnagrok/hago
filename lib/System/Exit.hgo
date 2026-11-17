@@ -1,0 +1,18 @@
+-- Ending the program with a status: 0 for success, anything else for a
+-- failure, which the shell sees in $?.
+module System.Exit (ExitCode (..), exitWith, exitSuccess, exitFailure) where
+
+data ExitCode = ExitSuccess | ExitFailure Int
+  deriving (Eq, Show)
+
+foreign import go "os.Exit" goExit :: Int -> IO ()
+
+exitWith :: ExitCode -> IO ()
+exitWith ExitSuccess = goExit 0
+exitWith (ExitFailure n) = goExit n
+
+exitSuccess :: IO ()
+exitSuccess = exitWith ExitSuccess
+
+exitFailure :: IO ()
+exitFailure = exitWith (ExitFailure 1)

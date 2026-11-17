@@ -7,6 +7,8 @@ import (
 	rt_bufio "bufio"
 	rt_fmt "fmt"
 	rt_big "math/big"
+	rt_filepath "path/filepath"
+	rt_time "time"
 	rt_os "os"
 	rt_strconv "strconv"
 	rt_strings "strings"
@@ -58,6 +60,8 @@ func rt_lazy[T any](f func() T) func() T { return (&rt_thunk[T]{f: f}).force }
 
 var _ = rt_sync.OnceValue[int]
 var _ = rt_big.NewInt
+var _ = rt_filepath.Base
+var _ = rt_time.Now
 func rt_error[T any](msg string) T       { panic(msg) }
 
 // A program that fails (error, a division by zero) says why on standard
@@ -120,7 +124,61 @@ func rt_readFile(path string) (string, error) {
 func rt_writeFile(path string, s string) (struct{}, error) {
 	return struct{}{}, rt_os.WriteFile(path, []byte(s), 0o644)
 }
+func rt_appendFile(path string, s string) (struct{}, error) {
+	f, err := rt_os.OpenFile(path, rt_os.O_APPEND|rt_os.O_CREATE|rt_os.O_WRONLY, 0o644)
+	if err != nil {
+		return struct{}{}, err
+	}
+	defer f.Close()
+	_, err = f.WriteString(s)
+	return struct{}{}, err
+}
+
+// Whether standard input has nothing more to read.
+func rt_isEOF() bool {
+	_, err := rt_stdin.Peek(1)
+	return err != nil
+}
+
+func rt_putErr(s string) { rt_fmt.Fprint(rt_os.Stderr, s) }
+
 func rt_getArgs() List[string] { return rt_stringList(rt_os.Args[1:]) }
+
+func rt_getProgName() string { return rt_filepath.Base(rt_os.Args[0]) }
+
+// SplitMix64 (Steele, Lea and Flood, 2014), for System.Random: a generator
+// is its state, the next state adds a constant, and a value is the state
+// mixed. Ints are used as the 64 bits they hold.
+func rt_splitmixStep(s int) int { return int(uint64(s) + 0x9e3779b97f4a7c15) }
+
+func rt_splitmixMix(s int) int {
+	z := uint64(s)
+	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
+	z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+	return int(z ^ (z >> 31))
+}
+
+// x mod n, with x read as unsigned, for n > 0.
+func rt_unsignedMod(x, n int) int { return int(uint64(x) % uint64(n)) }
+
+// A Double in [0, 1) from the top 53 bits.
+func rt_unitDouble(x int) float64 { return float64(uint64(x)>>11) / (1 << 53) }
+
+// The generator randomRIO and newStdGen draw from: seeded by the clock, or
+// by HAGO_RANDOM_SEED, which makes a run repeatable.
+var rt_globalSeed = func() int {
+	if s := rt_os.Getenv("HAGO_RANDOM_SEED"); s != "" {
+		if n, err := rt_strconv.Atoi(s); err == nil {
+			return rt_splitmixMix(n)
+		}
+	}
+	return rt_splitmixMix(int(rt_time.Now().UnixNano()))
+}()
+
+func rt_nextGlobalSeed() int {
+	rt_globalSeed = rt_splitmixStep(rt_globalSeed)
+	return rt_splitmixMix(rt_globalSeed)
+}
 
 func rt_stringList(ss []string) List[string] {
 	var l List[string] = Nil[string]{}

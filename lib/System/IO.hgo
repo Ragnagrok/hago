@@ -1,0 +1,51 @@
+-- The standard handles, for writing to standard error and testing for the
+-- end of standard input. Files are read and written whole, with readFile,
+-- writeFile and appendFile in the Prelude.
+module System.IO
+  ( Handle, stdin, stdout, stderr, hPutStr, hPutStrLn, hPrint, hGetLine, hGetContents
+  , hIsEOF, isEOF, hFlush, hClose, BufferMode (..), hSetBuffering
+  ) where
+
+data Handle = Stdin | Stdout | Stderr
+  deriving (Eq, Show)
+
+-- Output is not buffered, so there is never anything to flush.
+data BufferMode = NoBuffering | LineBuffering | BlockBuffering (Maybe Int)
+  deriving (Eq, Show)
+
+stdin, stdout, stderr :: Handle
+stdin = Stdin
+stdout = Stdout
+stderr = Stderr
+
+foreign import go "rt_putErr" putErr :: String -> IO ()
+foreign import go "rt_isEOF" isEOF :: IO Bool
+
+hPutStr :: Handle -> String -> IO ()
+hPutStr Stderr s = putErr s
+hPutStr _ s = putStr s
+
+hPutStrLn :: Handle -> String -> IO ()
+hPutStrLn h s = hPutStr h (s ++ "\n")
+
+hPrint :: Show a => Handle -> a -> IO ()
+hPrint h x = hPutStrLn h (show x)
+
+-- A line of standard input; "" at its end, which hIsEOF tells apart.
+hGetLine :: Handle -> IO String
+hGetLine _ = getLine
+
+hGetContents :: Handle -> IO String
+hGetContents _ = getContents
+
+hIsEOF :: Handle -> IO Bool
+hIsEOF _ = isEOF
+
+hFlush :: Handle -> IO ()
+hFlush _ = pure ()
+
+hClose :: Handle -> IO ()
+hClose _ = pure ()
+
+hSetBuffering :: Handle -> BufferMode -> IO ()
+hSetBuffering _ _ = pure ()

@@ -1,5 +1,8 @@
 -- The command line.
-module System.Environment (getArgs) where
+module System.Environment (getArgs, getProgName) where
 
 -- The arguments, without the program's name.
 foreign import go "rt_getArgs" getArgs :: IO [String]
+
+-- The name the program was run with, without its directory.
+foreign import go "rt_getProgName" getProgName :: IO String

@@ -57,7 +57,9 @@ generate runtime prog = unlines (header ++ [runtime] ++ tupleDecls ++ dataDecls 
       , "rt_strconv \"strconv\""
       , "rt_strings \"strings\""
       , "rt_sync \"sync\""
-      , "rt_big \"math/big\"" ]
+      , "rt_big \"math/big\""
+      , "rt_filepath \"path/filepath\""
+      , "rt_time \"time\"" ]
         ++ [show p | p <- foreignPkgs]
         ++ [")"]
     foreignUses = ["var _ = " ++ snd (splitSymbol (fSymbol f)) | f <- M.elems (progForeign prog), fArity f > 0]

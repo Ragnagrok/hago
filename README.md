@@ -225,10 +225,15 @@ program with the same name comes first):
 | `Data.Ord` | `comparing`, `Down`, `clamp` |
 | `Data.Map` | balanced search trees from keys to values, as in containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (no `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` and `Foldable`; import it qualified |
 | `Data.Set` | the same for sets: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; import it qualified |
-| `System.Environment` | `getArgs` |
+| `System.Environment` | `getArgs`, `getProgName` |
+| `System.IO` | `stdin`, `stdout`, `stderr`, `hPutStrLn`, `hPrint`, `isEOF`, and the rest of Haskell's names for the three standard handles |
+| `System.Exit` | `exitWith`, `exitSuccess`, `exitFailure` |
+| `System.Random` | `StdGen` (SplitMix64), `mkStdGen`, `randomR`, `random`, `randomRs`, `randoms`, `split`; in IO `newStdGen`, `randomRIO`, seeded by the clock or by `HAGO_RANDOM_SEED` |
 
-The Prelude reads and writes files and standard input: `getContents`, and `readFile` and
-`writeFile`, which return an `Either String` since they can fail.
+The Prelude reads and writes files and standard input: `getContents` and `interact` (which
+read the whole input first), and `readFile`, `writeFile` and `appendFile`, which return an
+`Either String` since they can fail. `getLine` gives `""` at the end of the input, which
+`System.IO.isEOF` tells apart from an empty line.
 
 Each class passes through the other transformers, as in mtl, so a function can ask for
 `(MonadReader Config m, MonadState Int m, MonadError String m)` and run on any stack that has

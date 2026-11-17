@@ -237,10 +237,15 @@ del programa con el mismo nombre tiene prioridad):
 | `Data.Ord` | `comparing`, `Down`, `clamp` |
 | `Data.Map` | árboles de búsqueda balanceados de claves a valores, como en containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (sin `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` y `Foldable`; conviene importarlo calificado |
 | `Data.Set` | lo mismo para conjuntos: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; conviene importarlo calificado |
-| `System.Environment` | `getArgs` |
+| `System.Environment` | `getArgs`, `getProgName` |
+| `System.IO` | `stdin`, `stdout`, `stderr`, `hPutStrLn`, `hPrint`, `isEOF`, y el resto de los nombres de Haskell para los tres handles estándar |
+| `System.Exit` | `exitWith`, `exitSuccess`, `exitFailure` |
+| `System.Random` | `StdGen` (SplitMix64), `mkStdGen`, `randomR`, `random`, `randomRs`, `randoms`, `split`; en IO `newStdGen` y `randomRIO`, con semilla del reloj o de `HAGO_RANDOM_SEED` |
 
-El Prelude lee y escribe archivos y la entrada estándar: `getContents`, y `readFile` y
-`writeFile`, que devuelven un `Either String` porque pueden fallar.
+El Prelude lee y escribe archivos y la entrada estándar: `getContents` e `interact` (que leen
+toda la entrada primero), y `readFile`, `writeFile` y `appendFile`, que devuelven un
+`Either String` porque pueden fallar. `getLine` da `""` al final de la entrada, que
+`System.IO.isEOF` distingue de una línea vacía.
 
 Cada clase pasa a través de los otros transformadores, como en mtl, así que una función puede
 pedir `(MonadReader Config m, MonadState Int m, MonadError String m)` y correr sobre cualquier

@@ -1,0 +1,20 @@
+-- Pseudo-random numbers from a seed: the same seed gives the same numbers.
+import System.Random
+import System.IO
+
+rollDice :: Int -> StdGen -> ([Int], StdGen)
+rollDice 0 g = ([], g)
+rollDice n g =
+  let (x, g1) = randomR (1, 6) g
+      (rest, g2) = rollDice (n - 1) g1
+   in (x : rest, g2)
+
+main :: IO ()
+main = do
+  let (rolls, g) = rollDice 5 (mkStdGen 2026)
+  print rolls
+  print (take 5 (randomRs (1, 6) g) :: [Int])
+  print (take 3 (randomRs (0, 1) (mkStdGen 1)) :: [Double])
+  print (take 8 (randomRs ('a', 'z') (mkStdGen 7)))
+  print (take 6 (randoms (mkStdGen 3)) :: [Bool])
+  hPutStrLn stderr "this goes to standard error"

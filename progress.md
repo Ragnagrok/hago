@@ -103,6 +103,11 @@ From easiest to hardest, which is the order we take them in.
       writes them between their operands, at their declared precedence; a file loaded at the
       prompt shadows the Prelude, as it does in the file itself.
 
+- [x] **Input and output for the book's chapter 9.** `interact`, `appendFile`, `System.IO` (the
+      three standard handles under Haskell's names, `isEOF`), `System.Exit`, `getProgName`, and
+      `System.Random` (SplitMix64; `HAGO_RANDOM_SEED` repeats a run). No handles on files yet:
+      files are read and written whole.
+
 Next, found by the JSON program:
 
 - [ ] **Small sum types without allocation.** A non-recursive sum type (`Maybe`, `Either`, a
