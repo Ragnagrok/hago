@@ -214,6 +214,7 @@ program with the same name comes first):
 
 | Module | What it has |
 | --- | --- |
+| `Control.Monad` | `foldM`, `replicateM`, `filterM`, `zipWithM`, `>=>`, `liftM2`, `ap`, `void`, and the Prelude's `when`, `unless`, `forM_`... |
 | `Control.Monad.State` | `StateT`, `State`, `MonadState` (`get`, `put`), `modify`, `gets`, `runState`, `evalState`, `execState` |
 | `Control.Monad.Reader` | `ReaderT`, `Reader`, `MonadReader` (`ask`, `local`), `asks` |
 | `Control.Monad.Except` | `ExceptT`, `Except`, `MonadError` (`throwError`, `catchError`), `liftEither` |

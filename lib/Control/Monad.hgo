@@ -1,0 +1,63 @@
+-- Functions on monads beyond the Prelude's (which has when, unless, join,
+-- guard, forever, mapM_, forM_ and sequence, and which this module also
+-- exports, so that importing it works as it does in Haskell).
+module Control.Monad
+  ( when, unless, join, guard, forever, mapM, mapM_, forM, forM_, sequence, sequence_
+  , foldM, foldM_, replicateM, replicateM_, filterM, zipWithM, zipWithM_
+  , (>=>), (<=<), liftM, liftM2, ap, void, mfilter
+  ) where
+
+infixr 1 >=>, <=<
+
+-- A fold whose step is an action: foldM step z [x1, x2] is
+-- step z x1 >>= \a -> step a x2.
+foldM :: Monad m => (b -> a -> m b) -> b -> [a] -> m b
+foldM _ z [] = pure z
+foldM f z (x : xs) = f z x >>= \z' -> foldM f z' xs
+
+foldM_ :: Monad m => (b -> a -> m b) -> b -> [a] -> m ()
+foldM_ f z xs = foldM f z xs >> pure ()
+
+-- n times, keeping the results.
+replicateM :: Applicative m => Int -> m a -> m [a]
+replicateM n m
+  | n <= 0 = pure []
+  | otherwise = liftA2 (:) m (replicateM (n - 1) m)
+
+replicateM_ :: Applicative m => Int -> m a -> m ()
+replicateM_ n m
+  | n <= 0 = pure ()
+  | otherwise = m *> replicateM_ (n - 1) m
+
+-- The elements for which the action gives True.
+filterM :: Applicative m => (a -> m Bool) -> [a] -> m [a]
+filterM _ [] = pure []
+filterM p (x : xs) = liftA2 (\keep rest -> if keep then x : rest else rest) (p x) (filterM p xs)
+
+zipWithM :: Applicative m => (a -> b -> m c) -> [a] -> [b] -> m [c]
+zipWithM f xs ys = sequenceA (zipWith f xs ys)
+
+zipWithM_ :: Applicative m => (a -> b -> m c) -> [a] -> [b] -> m ()
+zipWithM_ f xs ys = sequenceA (zipWith f xs ys) *> pure ()
+
+-- Composition of functions that give monadic results.
+(>=>) :: Monad m => (a -> m b) -> (b -> m c) -> a -> m c
+f >=> g = \x -> f x >>= g
+
+(<=<) :: Monad m => (b -> m c) -> (a -> m b) -> a -> m c
+g <=< f = \x -> f x >>= g
+
+liftM :: Monad m => (a -> b) -> m a -> m b
+liftM f m = m >>= \x -> pure (f x)
+
+liftM2 :: Monad m => (a -> b -> c) -> m a -> m b -> m c
+liftM2 f ma mb = ma >>= \a -> mb >>= \b -> pure (f a b)
+
+ap :: Monad m => m (a -> b) -> m a -> m b
+ap mf mx = mf >>= \f -> mx >>= \x -> pure (f x)
+
+void :: Functor f => f a -> f ()
+void m = fmap (\_ -> ()) m
+
+mfilter :: (Monad m, Alternative m) => (a -> Bool) -> m a -> m a
+mfilter p m = m >>= \x -> if p x then pure x else empty

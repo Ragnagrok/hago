@@ -1,0 +1,18 @@
+-- Control.Monad's functions, in Maybe, lists and IO.
+import Control.Monad
+
+safeDivide :: Int -> Int -> Maybe Int
+safeDivide _ 0 = Nothing
+safeDivide a b = Just (a `div` b)
+
+main :: IO ()
+main = do
+  print (foldM safeDivide 1000 [2, 5, 10], foldM safeDivide 1000 [2, 0, 10])
+  print (replicateM 2 [0, 1], filterM (const [True, False]) [1, 2])
+  print ((safeDivide 100 >=> safeDivide 1000) 5, liftM2 (+) (Just 1) (Just 2), void (Just 'x'))
+  total <- foldM (\acc x -> do
+    putStrLn ("adding " ++ show x)
+    pure (acc + x)) 0 [1, 2, 3]
+  print total
+  replicateM_ 2 (putStrLn "again")
+  zipWithM_ (\i s -> putStrLn (show i ++ ". " ++ s)) [1 ..] ["one", "two"]

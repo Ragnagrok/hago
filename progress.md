@@ -111,6 +111,9 @@ From easiest to hardest, which is the order we take them in.
 - [x] **`Control.Applicative` (`ZipList`) and `Data.Monoid` (`First`, `Last`, `Min`, `Max`),** for
       the book's chapter 11.
 
+- [x] **`Control.Monad`:** `foldM`, `replicateM`, `filterM`, `zipWithM`, `>=>`, `liftM2`, `ap`,
+      `void`, and the Prelude's `when`, `forM_` and the rest, for the book's chapter 12.
+
 Next, found by the JSON program:
 
 - [ ] **Small sum types without allocation.** A non-recursive sum type (`Maybe`, `Either`, a
@@ -130,6 +133,8 @@ Known rough edges, found on the way and not fixed yet:
 - [ ] **A binding a later guard uses is computed before the first guard,** even when the first
       guard holds and nothing uses it; guards could be split so that it is computed just
       before the first guard that needs it.
+- [ ] **`(f >=> g) x = ...` does not parse:** an operator defined in parentheses with more
+      arguments after them. `f >=> g = \x -> ...` does.
 - [ ] **Coverage does not look inside guards,** so complementary conditions need `otherwise`.
 - [ ] **A record update that changes a type parameter some other field fixes** is reported as the
       type mismatch it causes (`no instance for Num String`), not as the field that cannot change.

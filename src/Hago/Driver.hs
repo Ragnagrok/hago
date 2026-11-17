@@ -33,6 +33,7 @@ preludeSource = $(embedFile "prelude/Prelude.hgo")
 libraryModules :: M.Map Name String
 libraryModules = M.fromList
   [ ("Data.Functor.Identity", $(embedFile "lib/Data/Functor/Identity.hgo"))
+  , ("Control.Monad", $(embedFile "lib/Control/Monad.hgo"))
   , ("Control.Monad.Trans", $(embedFile "lib/Control/Monad/Trans.hgo"))
   , ("Control.Monad.State", $(embedFile "lib/Control/Monad/State.hgo"))
   , ("Control.Monad.Except", $(embedFile "lib/Control/Monad/Except.hgo"))
