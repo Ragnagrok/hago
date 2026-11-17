@@ -1,0 +1,40 @@
+-- Control.Monad.Writer, with State and Reader: a log, a stack, a name.
+import Control.Monad.Writer
+import Control.Monad.State
+import Control.Monad.Reader
+
+gcdLog :: Int -> Int -> Writer [String] Int
+gcdLog a 0 = do
+  tell ["done: " ++ show a]
+  pure a
+gcdLog a b = do
+  tell [show a ++ " mod " ++ show b ++ " = " ++ show (a `mod` b)]
+  gcdLog b (a `mod` b)
+
+push :: Int -> State [Int] ()
+push x = modify (x :)
+
+pop :: State [Int] (Maybe Int)
+pop = do
+  s <- get
+  case s of
+    [] -> pure Nothing
+    x : rest -> do
+      put rest
+      pure (Just x)
+
+greeting :: Reader String String
+greeting = do
+  name <- ask
+  pure ("hello, " ++ name)
+
+counter :: Int -> Writer (Sum Int) ()
+counter 0 = pure ()
+counter n = tell (Sum 1) >> counter (n - 1)
+
+main :: IO ()
+main = do
+  print (runWriter (gcdLog 48 18))
+  print (runState (push 1 >> push 2 >> pop) [])
+  print (runReader greeting "Ana")
+  print (execWriter (counter 100000))

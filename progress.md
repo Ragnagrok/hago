@@ -114,6 +114,8 @@ From easiest to hardest, which is the order we take them in.
 - [x] **`Control.Monad`:** `foldM`, `replicateM`, `filterM`, `zipWithM`, `>=>`, `liftM2`, `ap`,
       `void`, and the Prelude's `when`, `forM_` and the rest, for the book's chapter 12.
 
+- [x] **`Control.Monad.Writer`,** for the book's chapter 13.
+
 Next, found by the JSON program:
 
 - [ ] **Small sum types without allocation.** A non-recursive sum type (`Maybe`, `Either`, a

@@ -1,0 +1,57 @@
+-- A computation that also writes something on the side, such as a log:
+-- tell adds to it with <>, so what is written can be any Monoid.
+module Control.Monad.Writer
+  ( WriterT (..), runWriterT, execWriterT, Writer, runWriter, execWriter
+  , MonadWriter (..), module Control.Monad.Trans
+  ) where
+
+import Control.Monad.Trans
+import Control.Monad.State
+import Data.Functor.Identity
+
+newtype WriterT w m a = WriterT (m (a, w))
+
+runWriterT :: WriterT w m a -> m (a, w)
+runWriterT (WriterT m) = m
+
+execWriterT :: Monad m => WriterT w m a -> m w
+execWriterT m = fmap snd (runWriterT m)
+
+type Writer w = WriterT w Identity
+
+runWriter :: Writer w a -> (a, w)
+runWriter m = runIdentity (runWriterT m)
+
+execWriter :: Writer w a -> w
+execWriter m = snd (runWriter m)
+
+instance Functor m => Functor (WriterT w m) where
+  fmap f m = WriterT (fmap (\(a, w) -> (f a, w)) (runWriterT m))
+
+instance (Monoid w, Monad m) => Applicative (WriterT w m) where
+  pure a = WriterT (pure (a, mempty))
+  mf <*> mx = mf >>= \f -> fmap f mx
+  m *> k = m >>= \_ -> k
+
+instance (Monoid w, Monad m) => Monad (WriterT w m) where
+  m >>= k = WriterT (runWriterT m >>= \(a, w) -> fmap (\(b, w') -> (b, w <> w')) (runWriterT (k a)))
+
+instance Monoid w => MonadTrans (WriterT w) where
+  lift m = WriterT (fmap (\a -> (a, mempty)) m)
+
+instance (Monoid w, MonadIO m) => MonadIO (WriterT w m) where
+  liftIO m = lift (liftIO m)
+
+class (Monoid w, Monad m) => MonadWriter w m | m -> w where
+  -- Adds w to what has been written.
+  tell :: w -> m ()
+
+instance (Monoid w, Monad m) => MonadWriter w (WriterT w m) where
+  tell w = WriterT (pure ((), w))
+
+instance MonadWriter w m => MonadWriter w (StateT s m) where
+  tell w = lift (tell w)
+
+instance (Monoid w, MonadState s m) => MonadState s (WriterT w m) where
+  get = lift get
+  put s = lift (put s)
