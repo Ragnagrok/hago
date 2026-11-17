@@ -1,0 +1,11 @@
+-- Control.Applicative's ZipList and Data.Monoid's monoids.
+import Control.Applicative
+import Data.Monoid
+
+main :: IO ()
+main = do
+  print (getZipList ((+) <$> ZipList [1, 2, 3] <*> ZipList [10, 20, 30]))
+  print (getZipList (liftA3 (,,) (ZipList (unpack "ab")) (ZipList [1, 2, 3]) (pure True)))
+  print (getFirst (foldMap (First . Just) [3, 1, 2]), getLast (foldMap (Last . Just) [3, 1, 2]))
+  print (foldMap (\x -> Just (Max x)) [3, 9, 4], foldMap (\x -> Just (Min x)) ([] :: [Int]))
+  print (optional (Just 'x'), optional (Nothing :: Maybe Char))

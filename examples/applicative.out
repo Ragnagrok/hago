@@ -1,0 +1,5 @@
+[11,22,33]
+[('a',1,True),('b',2,True)]
+(Just 3,Just 2)
+(Just (Max 9),Nothing)
+(Just (Just 'x'),Just Nothing)

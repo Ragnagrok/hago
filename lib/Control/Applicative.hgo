@@ -1,0 +1,25 @@
+-- More applicative functors and functions on them. Applicative and
+-- Alternative themselves are in the Prelude.
+module Control.Applicative (ZipList (..), getZipList, liftA3, optional) where
+
+-- A list whose <*> pairs functions and values by position, as zipWith does,
+-- instead of trying every function on every value.
+newtype ZipList a = ZipList [a]
+  deriving (Eq, Show)
+
+getZipList :: ZipList a -> [a]
+getZipList (ZipList xs) = xs
+
+instance Functor ZipList where
+  fmap f (ZipList xs) = ZipList (map f xs)
+
+instance Applicative ZipList where
+  pure x = ZipList (repeat x)
+  liftA2 f (ZipList xs) (ZipList ys) = ZipList (zipWith f xs ys)
+
+liftA3 :: Applicative f => (a -> b -> c -> d) -> f a -> f b -> f c -> f d
+liftA3 f a b c = liftA2 f a b <*> c
+
+-- Just the result, or Nothing where p fails without it.
+optional :: Alternative f => f a -> f (Maybe a)
+optional p = fmap Just p <|> pure Nothing

@@ -43,6 +43,8 @@ libraryModules = M.fromList
   , ("System.Random", $(embedFile "lib/System/Random.hgo"))
   , ("Data.String", $(embedFile "lib/Data/String.hgo"))
   , ("Data.Char", $(embedFile "lib/Data/Char.hgo"))
+  , ("Data.Monoid", $(embedFile "lib/Data/Monoid.hgo"))
+  , ("Control.Applicative", $(embedFile "lib/Control/Applicative.hgo"))
   , ("Data.Ord", $(embedFile "lib/Data/Ord.hgo"))
   , ("Data.List", $(embedFile "lib/Data/List.hgo"))
   , ("Data.Map", $(embedFile "lib/Data/Map.hgo"))

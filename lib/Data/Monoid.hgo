@@ -1,0 +1,56 @@
+-- Monoids beyond the Prelude's Sum, Product, Any and All, which this
+-- module also exports: the first and the last value that is there, the
+-- smallest and the largest.
+module Data.Monoid
+  ( Sum (..), Product (..), Any (..), All (..), getSum, getProduct, getAny, getAll
+  , First (..), Last (..), getFirst, getLast, Min (..), Max (..), getMin, getMax
+  ) where
+
+-- The first Just.
+newtype First a = First (Maybe a)
+  deriving (Eq, Ord, Show)
+
+getFirst :: First a -> Maybe a
+getFirst (First m) = m
+
+instance Semigroup (First a) where
+  First (Just x) <> _ = First (Just x)
+  First Nothing <> b = b
+
+instance Monoid (First a) where
+  mempty = First Nothing
+
+-- The last Just.
+newtype Last a = Last (Maybe a)
+  deriving (Eq, Ord, Show)
+
+getLast :: Last a -> Maybe a
+getLast (Last m) = m
+
+instance Semigroup (Last a) where
+  a <> b = case b of
+    Last (Just y) -> Last (Just y)
+    Last Nothing -> a
+
+instance Monoid (Last a) where
+  mempty = Last Nothing
+
+-- The smaller and the larger; with no empty value, these are only
+-- semigroups (Maybe (Min a) is a monoid).
+newtype Min a = Min a
+  deriving (Eq, Ord, Show)
+
+getMin :: Min a -> a
+getMin (Min x) = x
+
+instance Ord a => Semigroup (Min a) where
+  Min a <> b = Min (min a (getMin b))
+
+newtype Max a = Max a
+  deriving (Eq, Ord, Show)
+
+getMax :: Max a -> a
+getMax (Max x) = x
+
+instance Ord a => Semigroup (Max a) where
+  Max a <> b = Max (max a (getMax b))

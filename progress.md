@@ -108,6 +108,9 @@ From easiest to hardest, which is the order we take them in.
       `System.Random` (SplitMix64; `HAGO_RANDOM_SEED` repeats a run). No handles on files yet:
       files are read and written whole.
 
+- [x] **`Control.Applicative` (`ZipList`) and `Data.Monoid` (`First`, `Last`, `Min`, `Max`),** for
+      the book's chapter 11.
+
 Next, found by the JSON program:
 
 - [ ] **Small sum types without allocation.** A non-recursive sum type (`Maybe`, `Either`, a

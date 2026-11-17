@@ -222,6 +222,8 @@ program with the same name comes first):
 | `Data.String` | `uncons` in constant time (a Go string is sliced, not copied), `length`, `elem`, `isPrefixOf`, `stripPrefix`, `concat` in one pass, `intercalate`, `replicate`; import it qualified |
 | `Data.List` | `sort` (a stable merge sort), `sortBy`, `sortOn`, `nub`, `group`, `partition`, `intercalate` (of any `Monoid`, so of `String`s too), `intersperse`, `transpose`, `isPrefixOf` and friends, `tails`, `inits`, `subsequences`, `permutations`, `delete`, `\\`, `union`, `intersect`, `elemIndex`, `findIndex`, `unfoldr`, `maximumBy` and `minimumBy` (with `Maybe`) |
 | `Data.Char` | `toUpper`, `toLower`, Unicode's tests (`isPunctuation`, `isSymbol`...), `digitToInt` and `intToDigit` (with `Maybe`) |
+| `Control.Applicative` | `ZipList`, `liftA3`, `optional` (`Applicative` and `Alternative` are in the Prelude) |
+| `Data.Monoid` | `First`, `Last`, `Min`, `Max`, and the Prelude's `Sum`, `Product`, `Any`, `All` |
 | `Data.Ord` | `comparing`, `Down`, `clamp` |
 | `Data.Map` | balanced search trees from keys to values, as in containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (no `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` and `Foldable`; import it qualified |
 | `Data.Set` | the same for sets: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; import it qualified |

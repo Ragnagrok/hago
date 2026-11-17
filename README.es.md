@@ -234,6 +234,8 @@ del programa con el mismo nombre tiene prioridad):
 | `Data.String` | `uncons` en tiempo constante (un string de Go se recorta, no se copia), `length`, `elem`, `isPrefixOf`, `stripPrefix`, `concat` en una pasada, `intercalate`, `replicate`; se importa calificado |
 | `Data.List` | `sort` (un merge sort estable), `sortBy`, `sortOn`, `nub`, `group`, `partition`, `intercalate` (de cualquier `Monoid`, así que también de `String`s), `intersperse`, `transpose`, `isPrefixOf` y parecidas, `tails`, `inits`, `subsequences`, `permutations`, `delete`, `\\`, `union`, `intersect`, `elemIndex`, `findIndex`, `unfoldr`, `maximumBy` y `minimumBy` (con `Maybe`) |
 | `Data.Char` | `toUpper`, `toLower`, las pruebas de Unicode (`isPunctuation`, `isSymbol`...), `digitToInt` e `intToDigit` (con `Maybe`) |
+| `Control.Applicative` | `ZipList`, `liftA3`, `optional` (`Applicative` y `Alternative` están en el Prelude) |
+| `Data.Monoid` | `First`, `Last`, `Min`, `Max`, y `Sum`, `Product`, `Any`, `All` del Prelude |
 | `Data.Ord` | `comparing`, `Down`, `clamp` |
 | `Data.Map` | árboles de búsqueda balanceados de claves a valores, como en containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (sin `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` y `Foldable`; conviene importarlo calificado |
 | `Data.Set` | lo mismo para conjuntos: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; conviene importarlo calificado |
