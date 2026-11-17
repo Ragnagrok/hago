@@ -15,11 +15,12 @@ import Control.Monad
 import Control.Monad.State
 import Data.Graph (SCC (..), flattenSCC, flattenSCCs, stronglyConnComp)
 import qualified Data.IntMap as IM
-import Data.List (intercalate, nub, sortOn, (\\))
+import Data.List (intercalate, isPrefixOf, nub, sortOn, (\\))
 import qualified Data.List as L
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Hago.Core
+import Hago.Exhaustive (Witness (..), showWitness, uncovered)
 import Hago.Syntax
 import Hago.TcMonad
 
@@ -436,6 +437,19 @@ check env e expected = do
         (cp, bs) <- checkPat env p ts
         (binds, guards) <- checkRhs (extend env bs) r ex
         pure (CRow [cp] binds guards)
+      -- a pattern binding and a pattern bound with <- are cases too
+      let what = case s of
+            EVar n
+              | "_pb" `isPrefixOf` n -> "the pattern on the left of = does not match every value"
+              | n == "_pat" -> "the pattern on the left of <- does not match every value"
+            _ -> "this case does not cover every value"
+          desugared = case s of
+            EVar n -> "_pb" `isPrefixOf` n || n == "_pat"
+            _ -> False
+      (if desugared then atLoc (firstLoc alts) else id) $
+        if desugared
+          then coveredOr env what "match it with case instead, to say what happens with the others" rows 1
+          else covered env what rows 1
       pure (CMatch [cs] rows ex)
     (ELet ds b, _) -> do
       (env', binds) <- localBinds env ds
@@ -525,9 +539,12 @@ checkLam :: Env -> [Pat] -> Expr -> Type -> TC CExpr
 checkLam env ps body ex = do
   (params, toMatch, bs, r) <- go (0 :: Int) ps ex
   cbody <- check (extend env bs) body r
-  let core = case toMatch of
+  let row = CRow [p | (_, _, p) <- toMatch] [] [(Nothing, cbody)]
+      core = case toMatch of
         [] -> cbody
-        _ -> CMatch [CVar n (Inst [] []) t | (n, t, _) <- toMatch] [CRow [p | (_, _, p) <- toMatch] [] [(Nothing, cbody)]] r
+        _ -> CMatch [CVar n (Inst [] []) t | (n, t, _) <- toMatch] [row] r
+  atLoc (firstLoc ps) $
+    coveredOr env "the lambda's patterns do not match every value" "match its argument with case instead, to say what happens with the others" [row] (length toMatch)
   pure (CLam params r core)
   where
     go _ [] t = pure ([], [], [], t)
@@ -712,6 +729,7 @@ tcClauses env cs t = do
     then case cs of
       [Clause [] r] -> do
         (bs, alts) <- checkRhs env r t
+        atLoc (firstLoc cs) (covered env "the guards do not cover every case" [CRow [] bs alts] 0)
         pure (0, simple bs alts)
       _ -> throw "defined more than once"
     else do
@@ -722,6 +740,7 @@ tcClauses env cs t = do
         (bs, alts) <- checkRhs (extend env (concatMap snd res)) rhs r
         pure (CRow (map fst res) bs alts)
       let scruts = zipWith (\n p -> CVar n (Inst [] []) p) names ps
+      atLoc (firstLoc cs) (covered env "the clauses do not cover every case" rows ar)
       pure (ar, CLam (zip names ps) r (CMatch scruts rows r))
   where
     simple [] [(Nothing, e)] = e
@@ -1127,10 +1146,49 @@ topBind n vs preds t ar body =
 defaultName :: Name -> Name -> Name
 defaultName c m = "_dm_" ++ c ++ "_" ++ m
 
+-- | Refuses a match that some value gets through: Hago has no partial
+-- functions, and a pattern match that fails is one.
+covered :: Env -> String -> [CRow] -> Int -> TC ()
+covered env what rows n = coveredOr env what "add a case for it, or one that matches anything (_) at the end" rows n
+
+-- | The same, with what to suggest when a value is missing.
+coveredOr :: Env -> String -> String -> [CRow] -> Int -> TC ()
+coveredOr env what suggestion rows n = case uncovered (siblingsIn env) n rows of
+  Nothing -> pure ()
+  Just ws ->
+    let guarded = or [not (any total gs) | CRow _ _ gs <- rows]
+        total (g, _) = maybe True trivial g
+        trivial = \case
+          CVar "otherwise" _ _ -> True
+          CCon "True" _ _ -> True
+          _ -> False
+        -- when only the guards can fail, the values do not matter
+        onlyGuards = guarded && all isAny ws
+        isAny = \case
+          WAny -> True
+          _ -> False
+        value
+          | null ws || onlyGuards = ""
+          | otherwise = ": nothing matches " ++ unwords (map (showWitness (length ws > 1)) ws)
+        what' = if onlyGuards then "the guards do not cover every case" else what
+        hint
+          | guarded = "\nguards are not known to cover anything unless the last one is otherwise"
+          | null ws = ""
+          | otherwise = "\n" ++ suggestion
+     in throw (what' ++ value ++ hint)
+
+-- | The constructors of a constructor's type, in order, with their arities.
+siblingsIn :: Env -> Name -> [(Name, Int)]
+siblingsIn env k = case M.lookup k (envCons env) of
+  Nothing -> []
+  Just ci ->
+    map snd (sortOn fst [(ciTag ci', (c, length (ciFields ci'))) | (c, ci') <- M.toList (envCons env), ciType ci' == ciType ci])
+
 -- | The first source location inside.
 firstLoc :: Data a => a -> Maybe Loc
-firstLoc x = case cast x of
-  Just (ELoc l _) -> Just l
+firstLoc x = case (cast x, cast x) of
+  (Just (ELoc l _), _) -> Just l
+  (_, Just (PLoc l _)) -> Just l
   _ -> listToMaybe (catMaybes (gmapQ firstLoc x))
 
 -- Approximate references (ignores shadowing), used only for dependency order.

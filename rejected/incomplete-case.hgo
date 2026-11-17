@@ -1,0 +1,4 @@
+-- expects: this case does not cover every value: nothing matches Nothing
+main :: IO ()
+main = case lookup 1 [(1, "one")] of
+  Just s -> putStrLn s

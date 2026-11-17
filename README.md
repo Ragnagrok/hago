@@ -47,6 +47,13 @@ each other (`x = y + 1`, `y = x + 1`) cannot be, and are rejected. Values that a
 refer to each other, as parsers built from combinators do: each starts as a function that
 computes the value on its first call.
 
+Local bindings, in a `let` or a `where`, are computed where they are needed: one that only some
+branches use (of an `if`, a `case` or guards) is computed in those branches, and one that nothing
+uses is not computed at all. So `safeDiv a b | b == 0 = Nothing | otherwise = Just q where
+q = a `div` b` does not divide by zero, as it would if `q` were computed before the guards. The
+code is pure, so computing a binding on fewer paths can only avoid failures, never change a
+result. What a guard, a condition or a scrutinee uses is computed before it.
+
 ## Type classes
 
 ```haskell
@@ -146,6 +153,11 @@ still lives with:
   or `Show`. `Integral` requires `Ord`, and `Floating` has `sqrt`, `pi` and the rest.
 - **No partial functions in the Prelude.** `head`, `tail`, `!!`, `maximum` and `minimum` return
   `Maybe`, and so does `read`: `read "4x" :: Maybe Int` is `Nothing`, not a crash.
+- **Pattern matches cover every value,** or the program is rejected: the clauses of a function,
+  a `case`, a lambda's patterns, `let Just x = ...` and `Just x <- ...` in `do`. The error shows
+  a value nothing matches (`nothing matches Nothing`, `nothing matches 0`). Guards count only if
+  the last one is `otherwise` (or `True`), since the compiler cannot know that `n > 0` and
+  `n <= 0` cover everything between them.
 - **No `Foldable` instance for tuples,** so `length (1, 2)` is a type error, not `1`.
 - **`Enum` is total.** `toEnum`, `succ` and `pred` return `Maybe`, so `succ maxBound` is
   `Nothing` instead of a crash, and `[x ..]` on a bounded type stops at its last value.

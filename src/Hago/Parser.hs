@@ -305,7 +305,7 @@ binding = try infixDef <|> prefixDef
   where
     prefixDef = do
       name <- var
-      ps <- many aPat
+      ps <- many (locP aPat)
       r <- rhs (key "=")
       pure (DBind name [Clause ps r])
     infixDef = do

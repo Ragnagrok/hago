@@ -18,6 +18,7 @@ import Hago.Newtype (eraseNewtypes)
 import Hago.Parser (fixitiesOf, parseModule, resolveFixity)
 import Hago.Cache
 import Hago.Rename (renameModule)
+import Hago.Sink (sinkLocals)
 import Hago.Specialize (specialize)
 import Hago.Syntax
 import Hago.Typecheck (Checked (..), programOf, typecheckModule)
@@ -120,7 +121,7 @@ generateProgram file modules = do
   case [(c, k) | ((c, k), n) <- M.toList (M.fromListWith (+) [(key, 1 :: Int) | ck <- checked, key <- M.keys (ckInsts ck)]), n > 1] of
     (c, k) : _ -> Left (file ++ ": two modules define the instance " ++ c ++ " " ++ k)
     [] -> pure ()
-  prog <- either (Left . ((file ++ ": ") ++)) Right (specialize (programOf (mconcat checked)))
+  prog <- either (Left . ((file ++ ": ") ++)) Right (specialize (sinkLocals (programOf (mconcat checked))))
   pure (generate runtimeSource (eraseNewtypes prog))
 
 -- | Compiles each module, dependencies first, reusing what the cache keeps

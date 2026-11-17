@@ -48,6 +48,13 @@ entre sí para calcularse (`x = y + 1`, `y = x + 1`) no se pueden calcular, y se
 son funciones sí pueden referirse entre sí, como hacen los parsers armados con combinadores: cada
 uno empieza siendo una función que calcula el valor la primera vez que se la llama.
 
+Las ligaduras locales, de un `let` o un `where`, se calculan donde hacen falta: una que sólo usan
+algunas ramas (de un `if`, un `case` o unas guardas) se calcula en esas ramas, y una que nada usa
+no se calcula. Así, `safeDiv a b | b == 0 = Nothing | otherwise = Just q where q = a `div` b`
+no divide por cero, como pasaría si `q` se calculara antes de las guardas. El código es puro, así
+que calcular una ligadura en menos caminos sólo puede evitar fallas, nunca cambiar un resultado.
+Lo que usa una guarda, una condición o lo que se analiza en un `case` se calcula antes.
+
 ## Type classes
 
 ```haskell
@@ -153,6 +160,11 @@ deshacer o con las que todavía convive:
 - **Sin funciones parciales en el Prelude.** `head`, `tail`, `!!`, `maximum` y `minimum`
   devuelven `Maybe`, y `read` también: `read "4x" :: Maybe Int` es `Nothing`, no un error en
   tiempo de ejecución.
+- **El pattern matching cubre todos los valores,** o el programa se rechaza: las cláusulas de
+  una función, un `case`, los patrones de una lambda, `let Just x = ...` y `Just x <- ...` en un
+  `do`. El error muestra un valor que nada cubre (`nothing matches Nothing`, `nothing matches 0`).
+  Las guardas cuentan sólo si la última es `otherwise` (o `True`), porque el compilador no puede
+  saber que `n > 0` y `n <= 0` cubren todo entre las dos.
 - **Sin instancia de `Foldable` para tuplas,** así que `length (1, 2)` es un error de tipos, no
   `1`.
 - **`Enum` es total.** `toEnum`, `succ` y `pred` devuelven `Maybe`, así que `succ maxBound` es

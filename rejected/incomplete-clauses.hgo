@@ -1,0 +1,7 @@
+-- expects: in describe: the clauses do not cover every case: nothing matches 0
+describe :: Int -> String
+describe 1 = "one"
+describe 2 = "two"
+
+main :: IO ()
+main = putStrLn (describe 1)

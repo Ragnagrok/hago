@@ -1,0 +1,30 @@
+-- Local bindings are computed where they are needed: on the paths that use
+-- them, and not at all if nothing does.
+
+safeDiv :: Int -> Int -> Maybe Int
+safeDiv a b
+  | b == 0 = Nothing
+  | otherwise = Just q
+  where q = a `div` b
+
+unusedLet :: Int
+unusedLet = let unused = error "never" in 5
+
+pick :: Bool -> Int -> Int
+pick c n = let big = 100 `div` n
+               small = n + 1
+           in if c then big else small
+
+classify :: [Int] -> String
+classify xs = case xs of
+  [] -> "empty"
+  _ -> "average " ++ show avg
+  where avg = sum xs `div` length xs
+
+main :: IO ()
+main = do
+  print (safeDiv 7 2, safeDiv 7 0)
+  print unusedLet
+  print (pick False 0, pick True 4)
+  putStrLn (classify [])
+  putStrLn (classify [2, 4])

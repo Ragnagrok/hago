@@ -10,6 +10,7 @@ primes :: [Int]
 primes = sieve [2..]
   where
     sieve (p:xs) = p : sieve (filter (\x -> x `mod` p /= 0) xs)
+    sieve [] = []
 
 -- A Lazy parameter is only evaluated if the function uses it.
 unless' :: Bool -> Lazy Int -> Int

@@ -81,6 +81,14 @@ From easiest to hardest, which is the order we take them in.
       constraint it raises (`Fractional Int` for `/`, `Eq` on functions for `==`) is reported
       there instead of at the start of the definition, or nowhere.
 
+- [x] **Pattern matches cover every value.** Clauses, `case`, lambdas, pattern bindings and
+      `p <- e` in `do` are checked (Maranget's usefulness, reduced to finding one uncovered
+      value), and the error shows it. Guards count only if the last is `otherwise` or `True`.
+      Found by the book's chapter 4: `describe 3` compiled and failed at run time.
+- [x] **Local bindings where they are needed.** A `let` or `where` binding used by some
+      branches moves into them, and an unused one is dropped (`Hago/Sink.hs`), so a `where`
+      under guards does not fail before the guard that protects it. Also from chapter 4.
+
 Next, found by the JSON program:
 
 - [ ] **Small sum types without allocation.** A non-recursive sum type (`Maybe`, `Either`, a
@@ -97,6 +105,10 @@ Known rough edges, found on the way and not fixed yet:
 - [ ] **The check for values defined in terms of each other counts every branch** of an `if` or
       `case` as evaluated, so it could reject a value whose cycle only goes through a branch
       that is never taken.
+- [ ] **A binding a later guard uses is computed before the first guard,** even when the first
+      guard holds and nothing uses it; guards could be split so that it is computed just
+      before the first guard that needs it.
+- [ ] **Coverage does not look inside guards,** so complementary conditions need `otherwise`.
 - [ ] **A record update that changes a type parameter some other field fixes** is reported as the
       type mismatch it causes (`no instance for Num String`), not as the field that cannot change.
 
