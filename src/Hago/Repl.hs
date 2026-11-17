@@ -30,6 +30,7 @@ data Chunk = Chunk {chText :: String, chValues :: [Name], chTypes :: [Name]}
 data Session = Session
   { sImports :: [String]
   , sLoaded :: Maybe FilePath
+  , sTarget :: Maybe FilePath   -- ^ the file :reload loads, even if it failed to load
   , sChunks :: [Chunk]   -- ^ oldest first
   , sDir :: FilePath     -- ^ where the programs are written
   }
@@ -42,7 +43,7 @@ repl file = do
   pid <- getCurrentPid
   let dir = tmp </> ("hago-repl-" ++ show pid)
   createDirectoryIfMissing True dir
-  let s0 = Session [] Nothing [] dir
+  let s0 = Session [] Nothing Nothing [] dir
   (maybe (pure s0) (load s0) file >>= loop tty) `finally` removeDirectoryRecursive dir
   where
     -- with a terminal the prompt is shown; without one, the line read follows it
@@ -75,7 +76,7 @@ step s input = case words input of
     | cmd `elem` [":q", ":quit"] -> pure Nothing
     | cmd `elem` [":t", ":type"] -> Just s <$ typeOf s (dropCommand input)
     | cmd `elem` [":l", ":load"], [f] <- args -> Just <$> load s f
-    | cmd `elem` [":r", ":reload"] -> Just <$> maybe (pure s) (load s) (sLoaded s)
+    | cmd `elem` [":r", ":reload"] -> Just <$> maybe (s <$ putStrLn "no file to reload") (load s) (sTarget s)
     | cmd `elem` [":?", ":help"] -> Just s <$ putStr help
     | ":" `isPrefixOf` cmd -> Just s <$ putStrLn ("unknown command " ++ cmd ++ ", :help lists them")
     | otherwise -> Just <$> entry s input
@@ -96,12 +97,12 @@ help = unlines
 -- may need the same names.
 load :: Session -> FilePath -> IO Session
 load s f = do
-  let s' = s {sLoaded = Just f, sChunks = []}
+  let s' = s {sLoaded = Just f, sTarget = Just f, sChunks = []}
   r <- checkSession s' []
   case r of
     Left err -> do
       putStrLn =<< report s' 0 0 "" err
-      pure s {sLoaded = Nothing, sChunks = []}
+      pure s {sLoaded = Nothing, sTarget = Just f, sChunks = []}
     Right _ -> s' <$ putStrLn ("loaded " ++ f)
 
 -- | The prompt's module: its imports, the loaded file's, an import of the

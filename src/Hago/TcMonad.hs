@@ -61,7 +61,10 @@ throw msg = do
   throwError (TcErr l [] msg)
 
 withCtx :: Name -> TC a -> TC a
-withCtx n act = act `catchError` \(TcErr l cs m) -> throwError (TcErr l (n : cs) m)
+withCtx n act
+  -- the name the parser gives a pattern binding is no help in a message
+  | take 3 (unqual n) == "_pb" = act
+  | otherwise = act `catchError` \(TcErr l cs m) -> throwError (TcErr l (n : cs) m)
 
 withLoc :: Loc -> TC a -> TC a
 withLoc l act = do
