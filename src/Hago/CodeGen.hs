@@ -476,12 +476,14 @@ genPats ctx ((s, p) : rest) k = case p of
       else do
         v <- freshName "v"
         body <- genPats ctx ([(v ++ ".F" ++ show i, q) | (i, q) <- zip [0 :: Int ..] subs] ++ rest) k
-        pure (["if " ++ v ++ ", hg_ok := " ++ s ++ ".(" ++ struct ++ "); hg_ok {"] ++ body ++ ["}"])
+        -- a field matched by a pattern that looks at nothing, as (), leaves v unused
+        pure (["if " ++ v ++ ", hg_ok := " ++ s ++ ".(" ++ struct ++ "); hg_ok {", "_ = " ++ v] ++ body ++ ["}"])
   where
     cond c = do
       body <- genPats ctx rest k
       pure (["if " ++ c ++ " {"] ++ body ++ ["}"])
     isWild CPWild = True
+    isWild (CPCon "()" _ _) = True
     isWild _ = False
 
 -- | Local bindings, declared first so they can refer to each other, then

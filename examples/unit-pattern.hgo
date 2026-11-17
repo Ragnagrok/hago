@@ -1,0 +1,7 @@
+-- A constructor whose field is matched by (): Right () -> ...
+main :: IO ()
+main = do
+  r <- writeFile "/dev/null" "x"
+  case r of
+    Right () -> putStrLn "written"
+    Left err -> putStrLn err
