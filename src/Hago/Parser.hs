@@ -432,7 +432,7 @@ expr = do
   neg <- optionMaybe (tokEq (TVarSym "-"))
   e0 <- expr10
   let first = maybe e0 (const (EApp (EVar "Prelude.negate") e0)) neg
-  rest <- many (try ((,) <$> operator <*> expr10))
+  rest <- many (try ((,) <$> (here >>= \l -> operator >>= \op -> pure (op, l)) <*> expr10))
   let e = if null rest then first else EOpSeq first rest
   option e (EAnn e <$> (key "::" *> pType))
 
@@ -697,7 +697,7 @@ rExpr fx = go
     stmtR (SBindPat p e) = SBindPat p (go e)
     stmtR (SLet ds) = SLet (map (rDecl fx) ds)
     stmtR (SExpr e) = SExpr (go e)
-    fixOf op = fromMaybe (AssocL, 9) (M.lookup op fx)
+    fixOf (op, _) = fromMaybe (AssocL, 9) (M.lookup op fx)
     prec = snd . fixOf
     climb lhs rest = fst (loop 0 lhs rest)
     -- precedence climbing over e0 op1 e1 op2 e2 ...
@@ -711,7 +711,9 @@ rExpr fx = go
           let (r', rest') = loop (if prec op2 > prec op then prec op + 1 else prec op) r rest
            in inner op r' rest'
     inner _ r rest = (r, rest)
-    bin op a b = EApp (EApp (opExpr op) a) b
+    -- an operator's application is where the operator is, so that what
+    -- it asks of its operands' types is reported there
+    bin (op, l) a b = ELoc l (EApp (EApp (opExpr op) a) b)
 
 localDecls :: Parser [Decl]
 localDecls = groupClauses . concat <$> block decl

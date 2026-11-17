@@ -1152,7 +1152,7 @@ exprRefs = \case
   EIf a b c -> concatMap exprRefs [a, b, c]
   ECase s alts -> exprRefs s ++ concat [rhsRefs r | Alt _ r <- alts]
   EDo ss -> concatMap stmtRefs ss
-  EOpSeq e0 rest -> exprRefs e0 ++ concat [op : exprRefs x | (op, x) <- rest]
+  EOpSeq e0 rest -> exprRefs e0 ++ concat [op : exprRefs x | ((op, _), x) <- rest]
   EAnn x _ -> exprRefs x
   EField x _ _ -> exprRefs x
   ERecCon _ fs -> concatMap (exprRefs . snd) fs

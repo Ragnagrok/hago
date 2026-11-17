@@ -73,7 +73,7 @@ data Expr
   | ERecCon Name [(Name, Expr)]   -- ^ @C { x = e, y }@: every field must be given
   | ERecUpd Expr [(Name, Expr)] [Name]   -- ^ @e { x = v }@, and the visible record types with those fields
   | ELoc Loc Expr
-  | EOpSeq Expr [(Name, Expr)]   -- ^ unresolved operators, removed by 'resolveFixity'
+  | EOpSeq Expr [((Name, Loc), Expr)]   -- ^ unresolved operators, with where each is, removed by 'resolveFixity'
   deriving (Eq, Show, Data)
 
 -- | An expression without its location.

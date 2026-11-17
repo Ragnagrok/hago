@@ -77,6 +77,10 @@ From easiest to hardest, which is the order we take them in.
       `Semigroup a => a -> Lazy a -> a`. Using a `String` as a list says that it is not one, and
       how to convert.
 
+- [x] **Errors at the operator.** An operator's application is located at the operator, so a
+      constraint it raises (`Fractional Int` for `/`, `Eq` on functions for `==`) is reported
+      there instead of at the start of the definition, or nowhere.
+
 Next, found by the JSON program:
 
 - [ ] **Small sum types without allocation.** A non-recursive sum type (`Maybe`, `Either`, a

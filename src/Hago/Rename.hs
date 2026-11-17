@@ -328,7 +328,7 @@ rnExpr sc = \case
   EIf a b c -> EIf <$> rnExpr sc a <*> rnExpr sc b <*> rnExpr sc c
   ECase s alts -> ECase <$> rnExpr sc s <*> forM alts (\(Alt p r) -> Alt <$> rnPat sc p <*> rnRhs (bind sc (patVars p)) r)
   EDo ss -> EDo <$> rnStmts sc ss
-  EOpSeq e0 rest -> EOpSeq <$> rnExpr sc e0 <*> forM rest (\(op, x) -> (,) <$> resolveVal sc op <*> rnExpr sc x)
+  EOpSeq e0 rest -> EOpSeq <$> rnExpr sc e0 <*> forM rest (\((op, l), x) -> (,) <$> ((\op' -> (op', l)) <$> resolveVal sc op) <*> rnExpr sc x)
   EAnn x t -> EAnn <$> rnExpr sc x <*> rnType sc t
   EField x f _ -> EField <$> rnExpr sc x <*> pure f <*> pure (M.findWithDefault [] f (scFields sc))
   ERecCon k fs -> ERecCon <$> resolveVal sc k <*> mapM (\(l, v) -> (,) l <$> rnExpr sc v) fs

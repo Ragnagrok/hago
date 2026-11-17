@@ -274,6 +274,34 @@ evaluate s input = do
     reportExpr err = do
       line0 <- endLine s
       report s line0 5 input err
+    -- An error in the program that runs it is about the whole expression,
+    -- since it is generalised; the same use written in the prompt's module,
+    -- where nothing is generalised, finds the place in what was typed.
+    locate (m : helpers) err
+      | [_] <- lines input
+      , Just body <- stripPrefix "main = " m
+      , (before, ' ' : 'i' : 't' : after) <- breakOnIt body = do
+          let use = "hagoMain = " ++ before ++ " (" ++ input ++ ")" ++ after
+          line0 <- endLine s
+          r <- checkSession s (use : helpers)
+          let before' = length use - length input - length after - 1
+          pure $ case r of
+            Left err' | atLine line0 err', Just c <- column err', c > before', c <= before' + length input ->
+              shift before' err'
+            _ -> err
+    locate _ err = pure err
+    breakOnIt body = case [i | i <- [0 .. length body - 3], take 3 (drop i body) == " it", take 1 (drop (i + 3) body) `elem` ["", " "]] of
+      i : _ -> splitAt i body
+      [] -> (body, "")
+    column e = case break (== ':') e of
+      (_, ':' : more) | (_, ':' : more') <- span isDigit more, (c, _) <- span isDigit more', not (null c) -> Just (read c :: Int)
+      _ -> Nothing
+    atLine l e = (":" ++ show l ++ ":") `isPrefixOf` dropWhile (/= ':') e && "<interactive>" `isPrefixOf` e
+    -- report takes off the 5 columns of "it = "; this line has more before the input
+    shift n e = case break (== ':') e of
+      (path, ':' : more) | (l, ':' : more') <- span isDigit more, (c, rest) <- span isDigit more', not (null c) ->
+        path ++ ":" ++ l ++ ":" ++ show (read c - n + 5) ++ rest
+      _ -> e
     -- the first main that type checks; one that prints, if the value can be shown
     tryMains [] = pure ()
     tryMains (m : ms) = do
@@ -281,7 +309,7 @@ evaluate s input = do
       case r of
         Left err
           | not (null ms) -> tryMains ms
-          | otherwise -> putStrLn =<< reportExpr err
+          | otherwise -> putStrLn =<< (locate m err >>= reportExpr)
         Right (_, _, virtual) -> do
           checked <- checkProgram virtual "<main>"
           case checked >>= generateProgram "<main>" of
