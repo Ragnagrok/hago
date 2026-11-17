@@ -121,7 +121,8 @@ goReserved = words
 
 mangle :: Name -> String
 mangle n
-  | isSymbolic n = "op_" ++ concatMap symWord n
+  -- a specialised operator keeps the letters of its types: ++__Int
+  | isSymbolic n = "op_" ++ concatMap (\c -> if isAlphaNum c || c == '_' then [c] else symWord c) n
   | s `elem` goReserved = s ++ "_"
   | any (`isPrefixOf` s) ["rt_", "hg_"] = "u_" ++ s
   | otherwise = s
@@ -131,7 +132,8 @@ mangle n
     n' = case splitQual n of
       (Just q, base) | isSymbolic base -> q ++ ".op_" ++ concatMap symWord base
       _ -> n
-    symWord c = fromMaybe "x" (lookup c symNames)
+    -- any other character by its code, so that two names never meet
+    symWord c = fromMaybe ("x" ++ show (fromEnum c)) (lookup c symNames)
     symNames =
       [ ('+', "plus"), ('-', "minus"), ('*', "star"), ('/', "slash"), ('.', "dot"), ('<', "lt")
       , ('>', "gt"), ('=', "eq"), ('!', "bang"), ('$', "dollar"), ('&', "amp"), ('|', "bar")

@@ -1,0 +1,15 @@
+-- An operator used at several types gets one Go function per type, and
+-- their names must differ: ++ on [Int], on [a] and on String once had the
+-- same one.
+quicksort :: Ord a => [a] -> [a]
+quicksort [] = []
+quicksort (pivot : rest) = quicksort smaller ++ [pivot] ++ quicksort larger
+  where
+    smaller = [x | x <- rest, x < pivot]
+    larger = [x | x <- rest, x >= pivot]
+
+main :: IO ()
+main = do
+  print (quicksort [10, 2, 5, 3, 1, 6, 7, 4 :: Int])
+  print (quicksort (words "the quick brown fox"))
+  putStrLn ("sorted" ++ ": " ++ pack (quicksort (unpack "hello")))
