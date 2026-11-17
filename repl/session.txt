@@ -48,6 +48,12 @@ hago> area (Circle 1.0)
 0.0
 hago> :t Circle
 Circle :: Double -> Shape
+hago> :k Shape
+Shape :: *
+hago> :k Either String
+Either String :: * -> *
+hago> :k Functor
+Functor :: (* -> *) -> Constraint
 hago> 1 +
 <interactive>:1:3: syntax error
   |

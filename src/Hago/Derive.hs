@@ -12,14 +12,18 @@ import Hago.Syntax
 expandDeriving :: [Decl] -> Either String [Decl]
 expandDeriving ds = (ds ++) . concat <$> mapM derive [d | DData d <- ds]
   where
-    derive d = mapM (instanceFor d) (ddDeriving d)
+    derive d = mapM (instanceFor precedenceOf d) (ddDeriving d)
+    -- an infix constructor is shown at the precedence it was declared with
+    precedenceOf k = case [p | DFixity _ p ks <- ds, k `elem` ks] of
+      p : _ -> p
+      [] -> 9
 
-instanceFor :: DataDecl -> Name -> Either String Decl
-instanceFor d cls = either (Left . ((showLoc (ddLoc d) ++ ": cannot derive " ++ unqual cls ++ " for " ++ unqual n ++ ": ") ++)) Right $
+instanceFor :: (Name -> Int) -> DataDecl -> Name -> Either String Decl
+instanceFor precedenceOf d cls = either (Left . ((showLoc (ddLoc d) ++ ": cannot derive " ++ unqual cls ++ " for " ++ unqual n ++ ": ") ++)) Right $
   case cls of
     "Eq" -> plainInstance [DBind "==" (eqClauses cons)]
     "Ord" -> plainInstance [DBind "compare" (ordClauses cons)]
-    "Show" -> plainInstance [DBind "showsPrec" (map showClause cons)]
+    "Show" -> plainInstance [DBind "showsPrec" (map (showClause precedenceOf) cons)]
     "Functor" -> overLast "fmap" functorClause
     "Foldable" -> overLast "foldr" foldableClause
     "Traversable" -> overLast "traverse" traversableClause
@@ -121,8 +125,16 @@ ordClauses cons =
     lexi xs = foldr1 (op "thenCmp") xs
 
 -- | Like Haskell's: @Circle 1.0@, and @Person {name = "Ana", age = 30}@ for records.
-showClause :: ConDecl -> Clause
-showClause (ConDecl k fs labels) =
+showClause :: (Name -> Int) -> ConDecl -> Clause
+-- a :+: b, as it is written, with each side in parentheses when it binds
+-- less tightly than the operator
+showClause precedenceOf (ConDecl k [_, _] [])
+  | (c : _) <- unqual k, not (isAlpha c) =
+      let p = precedenceOf k
+          shown a = app (EVar "showsPrec") [ELit (LInt (toInteger p + 1)), EVar a]
+          body = op "primAppend" (shown "a1") (op "primAppend" (str (" " ++ unqual k ++ " ")) (shown "a2"))
+       in Clause [PVar "d", conPat k ["a1", "a2"]] (plain (app (EVar "showParenString") [op ">" (EVar "d") (ELit (LInt (toInteger p))), body]))
+showClause _ (ConDecl k fs labels) =
   let m = length fs
       as = vars "a" m
       name = case unqual k of

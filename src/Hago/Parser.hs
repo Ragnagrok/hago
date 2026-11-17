@@ -229,11 +229,14 @@ conDecl :: Parser ConDecl
 conDecl = try infixCon <|> try recordCon <|> prefixCon
   where
     prefixCon = ConDecl <$> (conId <|> try (parens conSym)) <*> many field <*> pure []
+    -- a :+: Chain a: each side is a type applied to arguments
     infixCon = do
-      l <- field
+      l <- infixField
       op <- conSym
-      r <- field
+      r <- infixField
       pure (ConDecl op [l, r] [])
+    infixField = ((,) True <$> (key "~" *> aType))
+        <|> ((,) False <$> (optional (tokEq (TVarSym "!")) *> bType))
     field = ((,) True <$> (key "~" *> aType))
         <|> ((,) False <$> (optional (tokEq (TVarSym "!")) *> aType))
     -- C { x, y :: Int, next :: ~(Stream a) }

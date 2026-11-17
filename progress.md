@@ -98,6 +98,11 @@ From easiest to hardest, which is the order we take them in.
       (`!?` instead of `!`, `maximumBy` returns `Maybe`). `intercalate` joins any `Monoid`.
       A million inserts, half a million deletes and lookups take 2.6 s and 590 MB.
 
+- [x] **What the book's chapter on types needed.** `:kind` at the prompt; constructors that
+      are operators take applied types on both sides (`a :+: Chain a`), and a derived `Show`
+      writes them between their operands, at their declared precedence; a file loaded at the
+      prompt shadows the Prelude, as it does in the file itself.
+
 Next, found by the JSON program:
 
 - [ ] **Small sum types without allocation.** A non-recursive sum type (`Maybe`, `Either`, a

@@ -1,0 +1,20 @@
+-- Constructors that are operators, with applied types on both sides, and
+-- a derived Show that writes them between their operands.
+infixr 5 :+:
+
+data Chain a = End | a :+: Chain a
+  deriving (Show, Eq)
+
+data Pair = Int :& Int
+  deriving (Show)
+
+total :: Chain Int -> Int
+total End = 0
+total (x :+: rest) = x + total rest
+
+main :: IO ()
+main = do
+  let c = 1 :+: 2 :+: 3 :+: End
+  print c
+  print (total c, c == (1 :+: 2 :+: 3 :+: End))
+  print (Just (4 :& (-5)))

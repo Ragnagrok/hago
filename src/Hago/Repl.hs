@@ -13,7 +13,7 @@ import Data.Char (isAlphaNum, isDigit, isSpace, toUpper)
 import Data.List (intercalate, isPrefixOf, nub, sortOn, stripPrefix)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
-import Hago.Core (ClassInfo (..), Pred (..), Scheme (..), Type (..))
+import Hago.Core (ClassInfo (..), DataInfo (..), Pred (..), Scheme (..), Type (..))
 import Hago.Driver (Virtual, checkProgram, generateProgram, quoteIn, quoteSource)
 import Hago.Parser (parseModule)
 import Hago.Syntax
@@ -75,6 +75,7 @@ step s input = case words input of
   (cmd : args)
     | cmd `elem` [":q", ":quit"] -> pure Nothing
     | cmd `elem` [":t", ":type"] -> Just s <$ typeOf s (dropCommand input)
+    | cmd `elem` [":k", ":kind"] -> Just s <$ kindOf s (dropCommand input)
     | cmd `elem` [":l", ":load"], [f] <- args -> Just <$> load s f
     | cmd `elem` [":r", ":reload"] -> Just <$> maybe (s <$ putStrLn "no file to reload") (load s) (sTarget s)
     | cmd `elem` [":?", ":help"] -> Just s <$ putStr help
@@ -88,6 +89,7 @@ help = unlines
   [ "  EXPR            evaluate and print EXPR (an IO action is run)"
   , "  NAME = EXPR     define (also data, class, instance, import...)"
   , "  :type EXPR      the type of EXPR"
+  , "  :kind TYPE      the kind of a type, or of a class"
   , "  :load FILE      load the definitions in FILE, forgetting those typed here"
   , "  :reload         load the same file again"
   , "  :{ ... :}       a definition or expression on several lines"
@@ -117,7 +119,12 @@ sessionSource s loaded extra =
       Nothing -> []
       Just (name, m) ->
         map renderImport (modImports m)
-          ++ ["import " ++ name ++ hiding [n | n <- "it" : defined, n `elem` topValues m]]
+          ++ ["import " ++ name ++ hiding [n | n <- "it" : defined, n `elem` values]]
+          -- the file's own names come before the Prelude's, as they do in the file
+          ++ ["import Prelude" ++ hiding values | not (null values)]
+        where
+          -- constructors are hidden with their types, which a file rarely shares
+          values = filter (not . isConName) (topValues m)
     hiding [] = ""
     hiding ns = " hiding (" ++ intercalate ", " (map item ns) ++ ")"
     item n = if isOperatorName n then "(" ++ n ++ ")" else n
@@ -349,6 +356,70 @@ typeOf s input = do
     Right (ck, everything, _) -> case schemeOf ck of
       Nothing -> putStrLn "hago: the expression's type was lost (a bug in hago)"
       Just sc -> putStrLn (trim input ++ " :: " ++ prettyScheme (ckClasses everything) sc)
+
+-- | The kind of a type constructor applied to some arguments, or of a class:
+-- Maybe :: * -> *, Either String :: * -> *, Functor :: (* -> *) -> Constraint.
+kindOf :: Session -> String -> IO ()
+kindOf s input = do
+  r <- checkSession s []
+  case r of
+    Left err -> putStrLn =<< report s 0 0 "" err
+    Right (_, everything, _) -> case typeHead (trim input) of
+      Nothing -> putStrLn ("<interactive>: :kind takes a type, as in :kind Maybe")
+      Just (name, args) -> case paramKinds everything name of
+        Nothing -> putStrLn ("<interactive>: not in scope: the type " ++ name)
+        Just (ks, isClass)
+          | args > length ks -> putStrLn ("<interactive>: " ++ name ++ " takes " ++ count (length ks) ++ ", not " ++ show args)
+          | otherwise -> putStrLn (trim input ++ " :: " ++ intercalate " -> " (map star (drop args ks) ++ [if isClass then "Constraint" else "*"]))
+  where
+    count n = if n == 1 then "1 argument" else show n ++ " arguments"
+    star k = if k == 0 then "*" else "(" ++ intercalate " -> " (replicate (k + 1) "*") ++ ")"
+
+-- | The constructor at the head of a type and how many arguments it is
+-- given there, counting a parenthesised argument as one.
+typeHead :: String -> Maybe (Name, Int)
+typeHead t = case atoms t of
+  [] -> Nothing
+  h : rest -> Just (h, length rest)
+  where
+    atoms str = case dropWhile isSpace str of
+      "" -> []
+      str'@('(' : _) -> let (a, more) = group 0 "" str' in a : atoms more
+      str'@('[' : ']' : more) -> take 2 str' : atoms more
+      str'@('[' : _) -> let (a, more) = bracket 0 "" str' in a : atoms more
+      str' -> let (a, more) = break isSpace str' in a : atoms more
+    group :: Int -> String -> String -> (String, String)
+    group _ acc "" = (reverse acc, "")
+    group d acc (c : cs)
+      | c == '(' = group (d + 1) (c : acc) cs
+      | c == ')' && d == 1 = (reverse (c : acc), cs)
+      | c == ')' = group (d - 1) (c : acc) cs
+      | otherwise = group d (c : acc) cs
+    bracket :: Int -> String -> String -> (String, String)
+    bracket _ acc "" = (reverse acc, "")
+    bracket d acc (c : cs)
+      | c == '[' = bracket (d + 1) (c : acc) cs
+      | c == ']' && d == 1 = (reverse (c : acc), cs)
+      | c == ']' = bracket (d - 1) (c : acc) cs
+      | otherwise = bracket d (c : acc) cs
+
+-- | How many arguments each parameter of a type constructor or a class takes,
+-- and whether it is a class.
+paramKinds :: Checked -> Name -> Maybe ([Int], Bool)
+paramKinds ck name = case lookup name builtin of
+  Just ks -> Just (ks, False)
+  Nothing -> case [d | (n, d) <- M.toList (ckData ck), matches n] of
+    d : _ -> Just (diKinds d, False)
+    [] -> case [c | (n, c) <- M.toList (ckClasses ck), matches n] of
+      c : _ -> Just (clsKinds c, True)
+      [] -> Nothing
+  where
+    base = unqual name
+    matches n = unqual n == base
+    builtin =
+      [ ("Int", []), ("Integer", []), ("Double", []), ("Bool", []), ("Char", []), ("String", [])
+      , ("()", []), ("[]", [0]), ("IO", [0]), ("Lazy", [0]), ("(->)", [0, 0]) ]
+        ++ [("(" ++ replicate (n - 1) ',' ++ ")", replicate n 0) | n <- [2 .. 15]]
 
 -- | A type with its constraints, as GHCi shows it: variables renamed in
 -- the order they appear, a, b, c... for types and f, g, h... for type
