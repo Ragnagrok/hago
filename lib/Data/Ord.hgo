@@ -1,0 +1,22 @@
+-- Orderings: comparing by a part of a value, and an order turned around.
+module Data.Ord (comparing, Down (..), clamp) where
+
+-- compare, by what a function gives: sortBy (comparing snd).
+comparing :: Ord b => (a -> b) -> a -> a -> Ordering
+comparing f x y = compare (f x) (f y)
+
+-- The same values in the opposite order: sortOn Down sorts from largest.
+newtype Down a = Down a
+
+instance Eq a => Eq (Down a) where
+  Down x == Down y = x == y
+
+instance Ord a => Ord (Down a) where
+  compare (Down x) (Down y) = compare y x
+
+instance Show a => Show (Down a) where
+  show (Down x) = "Down " ++ showsPrec 11 x
+
+-- The value, moved into the range from low to high.
+clamp :: Ord a => (a, a) -> a -> a
+clamp (low, high) x = min high (max low x)

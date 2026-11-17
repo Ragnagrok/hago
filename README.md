@@ -220,6 +220,11 @@ program with the same name comes first):
 | `Control.Monad.Trans` | `MonadTrans` (`lift`), `MonadIO` (`liftIO`) |
 | `Data.Functor.Identity` | `Identity`, trampolined |
 | `Data.String` | `uncons` in constant time (a Go string is sliced, not copied), `length`, `elem`, `isPrefixOf`, `stripPrefix`, `concat` in one pass, `intercalate`, `replicate`; import it qualified |
+| `Data.List` | `sort` (a stable merge sort), `sortBy`, `sortOn`, `nub`, `group`, `partition`, `intercalate` (of any `Monoid`, so of `String`s too), `intersperse`, `transpose`, `isPrefixOf` and friends, `tails`, `inits`, `subsequences`, `permutations`, `delete`, `\\`, `union`, `intersect`, `elemIndex`, `findIndex`, `unfoldr`, `maximumBy` and `minimumBy` (with `Maybe`) |
+| `Data.Char` | `toUpper`, `toLower`, Unicode's tests (`isPunctuation`, `isSymbol`...), `digitToInt` and `intToDigit` (with `Maybe`) |
+| `Data.Ord` | `comparing`, `Down`, `clamp` |
+| `Data.Map` | balanced search trees from keys to values, as in containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (no `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` and `Foldable`; import it qualified |
+| `Data.Set` | the same for sets: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; import it qualified |
 | `System.Environment` | `getArgs` |
 
 The Prelude reads and writes files and standard input: `getContents`, and `readFile` and

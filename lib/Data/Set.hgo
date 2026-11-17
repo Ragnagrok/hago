@@ -1,0 +1,219 @@
+-- Finite sets, kept as a balanced binary search tree, as Data.Map is:
+-- membership, inserting and deleting take time logarithmic in the size.
+-- Many names are the Prelude's, so this module is meant to be imported
+-- qualified: import qualified Data.Set as Set.
+module Data.Set
+  ( Set, empty, singleton, fromList, insert, delete, member, notMember, size, null
+  , toList, toAscList, toDescList, elems, map, filter, partition, foldr, union, unions
+  , intersection, difference, isSubsetOf, lookupMin, lookupMax, deleteMin, deleteMax
+  ) where
+
+data Set a = Tip | Bin Int a (Set a) (Set a)
+
+empty :: Set a
+empty = Tip
+
+singleton :: a -> Set a
+singleton x = Bin 1 x Tip Tip
+
+fromList :: Ord a => [a] -> Set a
+fromList xs = foldl (\s x -> insert x s) Tip xs
+
+insert :: Ord a => a -> Set a -> Set a
+insert x Tip = singleton x
+insert x s@(Bin n y l r) = case compare x y of
+  LT -> balance y (insert x l) r
+  GT -> balance y l (insert x r)
+  EQ -> s
+
+delete :: Ord a => a -> Set a -> Set a
+delete _ Tip = Tip
+delete x (Bin _ y l r) = case compare x y of
+  LT -> balance y (delete x l) r
+  GT -> balance y l (delete x r)
+  EQ -> glue l r
+
+member :: Ord a => a -> Set a -> Bool
+member _ Tip = False
+member x (Bin _ y l r) = case compare x y of
+  LT -> member x l
+  GT -> member x r
+  EQ -> True
+
+notMember :: Ord a => a -> Set a -> Bool
+notMember x s = not (member x s)
+
+size :: Set a -> Int
+size Tip = 0
+size (Bin n _ _ _) = n
+
+null :: Set a -> Bool
+null Tip = True
+null _ = False
+
+-- The elements, in increasing order.
+toList :: Set a -> [a]
+toList s = toAscList s
+
+toAscList :: Set a -> [a]
+toAscList s = foldr (\x rest -> x : rest) [] s
+
+toDescList :: Set a -> [a]
+toDescList s = go [] s
+  where
+    go acc Tip = acc
+    go acc (Bin _ x l r) = go (x : go acc l) r
+
+elems :: Set a -> [a]
+elems s = toAscList s
+
+foldr :: (a -> b -> b) -> b -> Set a -> b
+foldr _ z Tip = z
+foldr f z (Bin _ x l r) = foldr f (f x (foldr f z r)) l
+
+map :: Ord b => (a -> b) -> Set a -> Set b
+map f s = fromList (Prelude.map f (toAscList s))
+
+filter :: (a -> Bool) -> Set a -> Set a
+filter _ Tip = Tip
+filter p (Bin _ x l r)
+  | p x = link x (filter p l) (filter p r)
+  | otherwise = merge (filter p l) (filter p r)
+
+partition :: (a -> Bool) -> Set a -> (Set a, Set a)
+partition p s = (filter p s, filter (\x -> not (p x)) s)
+
+union :: Ord a => Set a -> Set a -> Set a
+union a b = foldl (\s x -> insert x s) a (toAscList b)
+
+unions :: Ord a => [Set a] -> Set a
+unions ss = foldl union Tip ss
+
+intersection :: Ord a => Set a -> Set a -> Set a
+intersection a b = filter (\x -> member x b) a
+
+difference :: Ord a => Set a -> Set a -> Set a
+difference a b = filter (\x -> notMember x b) a
+
+isSubsetOf :: Ord a => Set a -> Set a -> Bool
+isSubsetOf a b = size a <= size b && all (\x -> member x b) (toAscList a)
+
+lookupMin :: Set a -> Maybe a
+lookupMin Tip = Nothing
+lookupMin (Bin _ x Tip _) = Just x
+lookupMin (Bin _ _ l _) = lookupMin l
+
+lookupMax :: Set a -> Maybe a
+lookupMax Tip = Nothing
+lookupMax (Bin _ x _ Tip) = Just x
+lookupMax (Bin _ _ _ r) = lookupMax r
+
+deleteMin :: Set a -> Set a
+deleteMin Tip = Tip
+deleteMin (Bin _ _ Tip r) = r
+deleteMin (Bin _ x l r) = balance x (deleteMin l) r
+
+deleteMax :: Set a -> Set a
+deleteMax Tip = Tip
+deleteMax (Bin _ _ l Tip) = l
+deleteMax (Bin _ x l r) = balance x l (deleteMax r)
+
+-- Balancing, as in Data.Map ------------------------------------------------------------
+
+bin :: a -> Set a -> Set a -> Set a
+bin x l r = Bin (size l + size r + 1) x l r
+
+balance :: a -> Set a -> Set a -> Set a
+balance x l r
+  | sl + sr <= 1 = bin x l r
+  | sr > 3 * sl = rotateL x l r
+  | sl > 3 * sr = rotateR x l r
+  | otherwise = bin x l r
+  where
+    sl = size l
+    sr = size r
+
+rotateL :: a -> Set a -> Set a -> Set a
+rotateL x l r@(Bin _ _ rl rr)
+  | size rl < 2 * size rr = singleL x l r
+  | otherwise = doubleL x l r
+rotateL x l Tip = bin x l Tip
+
+rotateR :: a -> Set a -> Set a -> Set a
+rotateR x l@(Bin _ _ ll lr) r
+  | size lr < 2 * size ll = singleR x l r
+  | otherwise = doubleR x l r
+rotateR x Tip r = bin x Tip r
+
+singleL :: a -> Set a -> Set a -> Set a
+singleL x1 t1 (Bin _ x2 t2 t3) = bin x2 (bin x1 t1 t2) t3
+singleL x l Tip = bin x l Tip
+
+singleR :: a -> Set a -> Set a -> Set a
+singleR x1 (Bin _ x2 t1 t2) t3 = bin x2 t1 (bin x1 t2 t3)
+singleR x Tip r = bin x Tip r
+
+doubleL :: a -> Set a -> Set a -> Set a
+doubleL x1 t1 (Bin _ x2 (Bin _ x3 t2 t3) t4) = bin x3 (bin x1 t1 t2) (bin x2 t3 t4)
+doubleL x l r = singleL x l r
+
+doubleR :: a -> Set a -> Set a -> Set a
+doubleR x1 (Bin _ x2 t1 (Bin _ x3 t2 t3)) t4 = bin x3 (bin x2 t1 t2) (bin x1 t3 t4)
+doubleR x l r = singleR x l r
+
+glue :: Set a -> Set a -> Set a
+glue Tip r = r
+glue l Tip = l
+glue l r
+  | size l > size r = case lookupMax l of
+      Just x -> balance x (deleteMax l) r
+      Nothing -> r
+  | otherwise = case lookupMin r of
+      Just x -> balance x l (deleteMin r)
+      Nothing -> l
+
+merge :: Set a -> Set a -> Set a
+merge Tip b = b
+merge a Tip = a
+merge a@(Bin sa xa la ra) b@(Bin sb xb lb rb)
+  | 3 * sa < sb = balance xb (merge a lb) rb
+  | 3 * sb < sa = balance xa la (merge ra b)
+  | otherwise = glue a b
+
+link :: a -> Set a -> Set a -> Set a
+link x Tip r = insertMin x r
+link x l Tip = insertMax x l
+link x l@(Bin sl xl ll lr) r@(Bin sr xr rl rr)
+  | 3 * sl < sr = balance xr (link x l rl) rr
+  | 3 * sr < sl = balance xl ll (link x lr r)
+  | otherwise = bin x l r
+
+insertMin :: a -> Set a -> Set a
+insertMin x Tip = singleton x
+insertMin x (Bin _ y l r) = balance y (insertMin x l) r
+
+insertMax :: a -> Set a -> Set a
+insertMax x Tip = singleton x
+insertMax x (Bin _ y l r) = balance y l (insertMax x r)
+
+-- Instances ----------------------------------------------------------------------------
+
+instance Eq a => Eq (Set a) where
+  a == b = toAscList a == toAscList b
+
+instance Ord a => Ord (Set a) where
+  compare a b = compare (toAscList a) (toAscList b)
+
+instance Show a => Show (Set a) where
+  show s = "fromList " ++ show (toAscList s)
+  showsPrec d s = showParenString (d > 10) ("fromList " ++ show (toAscList s))
+
+instance Foldable Set where
+  foldr f z s = foldr (\x acc -> f x acc) z s
+  toList s = toAscList s
+
+instance Ord a => Semigroup (Set a) where
+  a <> b = union a b
+
+instance Ord a => Monoid (Set a) where
+  mempty = Tip

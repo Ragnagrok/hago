@@ -93,6 +93,11 @@ From easiest to hardest, which is the order we take them in.
       stack overflow at the prompt) prints `error: ...` and exits with 1, instead of a panic
       with the trace of every goroutine. `hago run FILE ARGS...` passes arguments.
 
+- [x] **`Data.List`, `Data.Char`, `Data.Ord`, `Data.Map`, `Data.Set`,** for the book's chapter on
+      modules. Maps and sets are weight-balanced trees, as in containers; nothing partial
+      (`!?` instead of `!`, `maximumBy` returns `Maybe`). `intercalate` joins any `Monoid`.
+      A million inserts, half a million deletes and lookups take 2.6 s and 590 MB.
+
 Next, found by the JSON program:
 
 - [ ] **Small sum types without allocation.** A non-recursive sum type (`Maybe`, `Either`, a

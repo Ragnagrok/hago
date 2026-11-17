@@ -1,0 +1,223 @@
+-- More functions on lists than the Prelude has: sorting, grouping, sets
+-- kept as lists, searching, and the ways of cutting a list up. Those that
+-- can have no answer (maximumBy on an empty list, elemIndex of something
+-- missing) return a Maybe.
+module Data.List
+  ( sort, sortBy, sortOn, insert, insertBy, nub, nubBy, group, groupBy, partition
+  , intercalate, intersperse, transpose, concatMap, isPrefixOf, isSuffixOf, isInfixOf
+  , isSubsequenceOf, stripPrefix, tails, inits, subsequences, permutations
+  , delete, deleteBy, (\\), union, intersect, elemIndex, elemIndices, findIndex, findIndices
+  , find, lookup, unfoldr, maximumBy, minimumBy, uncons, singleton, dropWhileEnd
+  , zip4, zipWith4, genericLength
+  ) where
+
+infix 5 \\
+
+-- Sorting ------------------------------------------------------------------------
+
+sort :: Ord a => [a] -> [a]
+sort xs = sortBy compare xs
+
+-- A merge sort: stable, so elements that compare equal keep their order.
+sortBy :: (a -> a -> Ordering) -> [a] -> [a]
+sortBy cmp xs = mergeAll (Prelude.map (\x -> [x]) xs)
+  where
+    mergeAll [] = []
+    mergeAll [one] = one
+    mergeAll several = mergeAll (mergePairs several)
+    mergePairs (a : b : rest) = merge a b : mergePairs rest
+    mergePairs short = short
+    merge as@(a : as') bs@(b : bs') = case cmp a b of
+      GT -> b : merge as bs'
+      _ -> a : merge as' bs
+    merge [] bs = bs
+    merge as [] = as
+
+-- Sorted by what f gives, which is computed once per element.
+sortOn :: Ord b => (a -> b) -> [a] -> [a]
+sortOn f xs = Prelude.map snd (sortBy (\a b -> compare (fst a) (fst b)) [(f x, x) | x <- xs])
+
+-- Into a sorted list, before the first element that is larger.
+insert :: Ord a => a -> [a] -> [a]
+insert x xs = insertBy compare x xs
+
+insertBy :: (a -> a -> Ordering) -> a -> [a] -> [a]
+insertBy _ x [] = [x]
+insertBy cmp x (y : ys) = case cmp x y of
+  GT -> y : insertBy cmp x ys
+  _ -> x : y : ys
+
+-- Grouping -------------------------------------------------------------------------
+
+-- The first of each element, in order. It compares every pair, so it is
+-- slow on long lists; Data.Set does better when the order does not matter.
+nub :: Eq a => [a] -> [a]
+nub xs = nubBy (==) xs
+
+nubBy :: (a -> a -> Bool) -> [a] -> [a]
+nubBy _ [] = []
+nubBy eq (x : xs) = x : nubBy eq (Prelude.filter (\y -> not (eq x y)) xs)
+
+-- Runs of equal elements next to each other: group [1, 1, 2, 1] is
+-- [[1, 1], [2], [1]].
+group :: Eq a => [a] -> [[a]]
+group xs = groupBy (==) xs
+
+groupBy :: (a -> a -> Bool) -> [a] -> [[a]]
+groupBy _ [] = []
+groupBy eq (x : xs) = (x : same) : groupBy eq rest
+  where
+    (same, rest) = span (eq x) xs
+
+-- The elements that satisfy p, and the others.
+partition :: (a -> Bool) -> [a] -> ([a], [a])
+partition p xs = (Prelude.filter p xs, Prelude.filter (\x -> not (p x)) xs)
+
+-- Joining and splitting ----------------------------------------------------------------
+
+-- The pieces with sep between them. It joins any Monoid, Strings among
+-- them: intercalate ", " ["a", "b"] is "a, b".
+intercalate :: Monoid a => a -> [a] -> a
+intercalate sep xs = mconcat (intersperse sep xs)
+
+intersperse :: a -> [a] -> [a]
+intersperse _ [] = []
+intersperse sep (x : xs) = x : go xs
+  where
+    go [] = []
+    go (y : ys) = sep : y : go ys
+
+-- Rows into columns, with short rows leaving gaps.
+transpose :: [[a]] -> [[a]]
+transpose [] = []
+transpose ([] : rows) = transpose rows
+transpose ((x : xs) : rows) = (x : [h | (h : _) <- rows]) : transpose (xs : [t | (_ : t) <- rows])
+
+tails :: [a] -> [[a]]
+tails [] = [[]]
+tails whole@(_ : rest) = whole : tails rest
+
+inits :: [a] -> [[a]]
+inits [] = [[]]
+inits (x : xs) = [] : Prelude.map (\ys -> x : ys) (inits xs)
+
+-- Every choice of elements, in order.
+subsequences :: [a] -> [[a]]
+subsequences xs = [] : nonEmpty xs
+  where
+    nonEmpty [] = []
+    nonEmpty (y : ys) = [y] : foldr (\s rest -> s : (y : s) : rest) [] (nonEmpty ys)
+
+-- Every order of the elements.
+permutations :: [a] -> [[a]]
+permutations [] = [[]]
+permutations xs = [y : p | (y, rest) <- picks xs, p <- permutations rest]
+  where
+    picks [] = []
+    picks (z : zs) = (z, zs) : [(w, z : ws) | (w, ws) <- picks zs]
+
+dropWhileEnd :: (a -> Bool) -> [a] -> [a]
+dropWhileEnd p xs = foldr (\x rest -> if p x && Prelude.null rest then [] else x : rest) [] xs
+
+-- Tests ---------------------------------------------------------------------------
+
+isPrefixOf :: Eq a => [a] -> [a] -> Bool
+isPrefixOf [] _ = True
+isPrefixOf _ [] = False
+isPrefixOf (x : xs) (y : ys) = x == y && isPrefixOf xs ys
+
+isSuffixOf :: Eq a => [a] -> [a] -> Bool
+isSuffixOf xs ys = isPrefixOf (reverse xs) (reverse ys)
+
+isInfixOf :: Eq a => [a] -> [a] -> Bool
+isInfixOf needle haystack = any (isPrefixOf needle) (tails haystack)
+
+-- Whether the elements of the first list appear in the second, in order.
+isSubsequenceOf :: Eq a => [a] -> [a] -> Bool
+isSubsequenceOf [] _ = True
+isSubsequenceOf _ [] = False
+isSubsequenceOf whole@(x : xs) (y : ys)
+  | x == y = isSubsequenceOf xs ys
+  | otherwise = isSubsequenceOf whole ys
+
+-- The rest of the list after the prefix, if it starts with it.
+stripPrefix :: Eq a => [a] -> [a] -> Maybe [a]
+stripPrefix [] ys = Just ys
+stripPrefix _ [] = Nothing
+stripPrefix (x : xs) (y : ys)
+  | x == y = stripPrefix xs ys
+  | otherwise = Nothing
+
+-- Lists as sets ---------------------------------------------------------------------
+
+-- Without the first occurrence of x.
+delete :: Eq a => a -> [a] -> [a]
+delete x xs = deleteBy (==) x xs
+
+deleteBy :: (a -> a -> Bool) -> a -> [a] -> [a]
+deleteBy _ _ [] = []
+deleteBy eq x (y : ys) = if eq x y then ys else y : deleteBy eq x ys
+
+-- The first list without one occurrence of each element of the second.
+(\\) :: Eq a => [a] -> [a] -> [a]
+xs \\ ys = foldl (\acc y -> delete y acc) xs ys
+
+union :: Eq a => [a] -> [a] -> [a]
+union xs ys = xs ++ foldl (\acc x -> delete x acc) (nub ys) xs
+
+intersect :: Eq a => [a] -> [a] -> [a]
+intersect xs ys = [x | x <- xs, x `elem` ys]
+
+-- Searching -------------------------------------------------------------------------
+
+elemIndex :: Eq a => a -> [a] -> Maybe Int
+elemIndex x xs = findIndex (== x) xs
+
+elemIndices :: Eq a => a -> [a] -> [Int]
+elemIndices x xs = findIndices (== x) xs
+
+findIndex :: (a -> Bool) -> [a] -> Maybe Int
+findIndex p xs = case findIndices p xs of
+  [] -> Nothing
+  i : _ -> Just i
+
+findIndices :: (a -> Bool) -> [a] -> [Int]
+findIndices p xs = [i | (x, i) <- zip xs [0 ..], p x]
+
+maximumBy :: (a -> a -> Ordering) -> [a] -> Maybe a
+maximumBy _ [] = Nothing
+maximumBy cmp (x : xs) = Just (foldl (\m y -> case cmp y m of
+  GT -> y
+  _ -> m) x xs)
+
+minimumBy :: (a -> a -> Ordering) -> [a] -> Maybe a
+minimumBy _ [] = Nothing
+minimumBy cmp (x : xs) = Just (foldl (\m y -> case cmp y m of
+  LT -> y
+  _ -> m) x xs)
+
+-- Building ---------------------------------------------------------------------------
+
+-- A list from a seed: f gives the next element and the next seed, or
+-- Nothing to stop.
+unfoldr :: (b -> Maybe (a, b)) -> b -> [a]
+unfoldr f seed = case f seed of
+  Nothing -> []
+  Just (x, next) -> x : unfoldr f next
+
+uncons :: [a] -> Maybe (a, [a])
+uncons [] = Nothing
+uncons (x : xs) = Just (x, xs)
+
+singleton :: a -> [a]
+singleton x = [x]
+
+zip4 :: [a] -> [b] -> [c] -> [d] -> [(a, b, c, d)]
+zip4 as bs cs ds = zipWith4 (\a b c d -> (a, b, c, d)) as bs cs ds
+
+zipWith4 :: (a -> b -> c -> d -> e) -> [a] -> [b] -> [c] -> [d] -> [e]
+zipWith4 f (a : as) (b : bs) (c : cs) (d : ds) = f a b c d : zipWith4 f as bs cs ds
+zipWith4 _ _ _ _ _ = []
+
+genericLength :: Num n => [a] -> n
+genericLength xs = foldl (\n _ -> n + 1) 0 xs

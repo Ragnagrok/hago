@@ -1,0 +1,316 @@
+-- Finite maps from keys to values, kept as a balanced binary search tree,
+-- as in Haskell's containers: a tree whose subtrees' sizes never differ by
+-- more than a factor of three (Adams, "Efficient sets: a balancing act",
+-- 1993). Looking up, inserting and deleting take time logarithmic in the
+-- size. Keys need an order, and values are computed when they are put in,
+-- as everything in Hago is. Many names are the Prelude's, so this module is
+-- meant to be imported qualified: import qualified Data.Map as Map.
+module Data.Map
+  ( Map, empty, singleton, fromList, fromListWith, insert, insertWith, delete, adjust, alter
+  , lookup, (!?), findWithDefault, member, notMember, size, null, toList, toAscList, toDescList
+  , keys, elems, assocs, map, mapWithKey, filter, filterWithKey, foldr, foldrWithKey
+  , foldlWithKey, union, unionWith, unions, unionsWith, intersectionWith, difference
+  , lookupMin, lookupMax, deleteMin, deleteMax, partition, split
+  ) where
+
+infixl 9 !?
+
+data Map k v = Tip | Bin Int k v (Map k v) (Map k v)
+
+-- Building ---------------------------------------------------------------------------
+
+empty :: Map k v
+empty = Tip
+
+singleton :: k -> v -> Map k v
+singleton k v = Bin 1 k v Tip Tip
+
+-- From pairs; of two pairs with the same key, the last one wins.
+fromList :: Ord k => [(k, v)] -> Map k v
+fromList kvs = foldl (\m (k, v) -> insert k v m) Tip kvs
+
+-- From pairs, combining the values of a key with f: f new old.
+fromListWith :: Ord k => (v -> v -> v) -> [(k, v)] -> Map k v
+fromListWith f kvs = foldl (\m (k, v) -> insertWith f k v m) Tip kvs
+
+-- Inserting and deleting -------------------------------------------------------------
+
+insert :: Ord k => k -> v -> Map k v -> Map k v
+insert k v m = insertWith (\new _ -> new) k v m
+
+-- If the key is there, its value becomes f new old.
+insertWith :: Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
+insertWith _ k v Tip = singleton k v
+insertWith f k v (Bin n k' v' l r) = case compare k k' of
+  LT -> balance k' v' (insertWith f k v l) r
+  GT -> balance k' v' l (insertWith f k v r)
+  EQ -> Bin n k (f v v') l r
+
+delete :: Ord k => k -> Map k v -> Map k v
+delete _ Tip = Tip
+delete k (Bin _ k' v' l r) = case compare k k' of
+  LT -> balance k' v' (delete k l) r
+  GT -> balance k' v' l (delete k r)
+  EQ -> glue l r
+
+-- The value at the key changed with f, if the key is there.
+adjust :: Ord k => (v -> v) -> k -> Map k v -> Map k v
+adjust f k m = alter (fmap f) k m
+
+-- f is given the value at the key, if there is one, and says what the key
+-- has afterwards: Nothing deletes it.
+alter :: Ord k => (Maybe v -> Maybe v) -> k -> Map k v -> Map k v
+alter f k m = case f (lookup k m) of
+  Nothing -> delete k m
+  Just v -> insert k v m
+
+-- Looking up -------------------------------------------------------------------------
+
+lookup :: Ord k => k -> Map k v -> Maybe v
+lookup _ Tip = Nothing
+lookup k (Bin _ k' v l r) = case compare k k' of
+  LT -> lookup k l
+  GT -> lookup k r
+  EQ -> Just v
+
+-- lookup, with the map first: m !? k. There is no (!), which would fail
+-- on a missing key.
+(!?) :: Ord k => Map k v -> k -> Maybe v
+m !? k = lookup k m
+
+findWithDefault :: Ord k => v -> k -> Map k v -> v
+findWithDefault d k m = case lookup k m of
+  Nothing -> d
+  Just v -> v
+
+member :: Ord k => k -> Map k v -> Bool
+member k m = case lookup k m of
+  Nothing -> False
+  Just _ -> True
+
+notMember :: Ord k => k -> Map k v -> Bool
+notMember k m = not (member k m)
+
+size :: Map k v -> Int
+size Tip = 0
+size (Bin n _ _ _ _) = n
+
+null :: Map k v -> Bool
+null Tip = True
+null _ = False
+
+lookupMin :: Map k v -> Maybe (k, v)
+lookupMin Tip = Nothing
+lookupMin (Bin _ k v Tip _) = Just (k, v)
+lookupMin (Bin _ _ _ l _) = lookupMin l
+
+lookupMax :: Map k v -> Maybe (k, v)
+lookupMax Tip = Nothing
+lookupMax (Bin _ k v _ Tip) = Just (k, v)
+lookupMax (Bin _ _ _ _ r) = lookupMax r
+
+deleteMin :: Map k v -> Map k v
+deleteMin Tip = Tip
+deleteMin (Bin _ _ _ Tip r) = r
+deleteMin (Bin _ k v l r) = balance k v (deleteMin l) r
+
+deleteMax :: Map k v -> Map k v
+deleteMax Tip = Tip
+deleteMax (Bin _ _ _ l Tip) = l
+deleteMax (Bin _ k v l r) = balance k v l (deleteMax r)
+
+-- Lists ------------------------------------------------------------------------------
+
+-- The pairs, by increasing key.
+toList :: Map k v -> [(k, v)]
+toList m = toAscList m
+
+toAscList :: Map k v -> [(k, v)]
+toAscList m = foldrWithKey (\k v rest -> (k, v) : rest) [] m
+
+toDescList :: Map k v -> [(k, v)]
+toDescList m = foldlWithKey (\rest k v -> (k, v) : rest) [] m
+
+assocs :: Map k v -> [(k, v)]
+assocs m = toAscList m
+
+keys :: Map k v -> [k]
+keys m = foldrWithKey (\k _ rest -> k : rest) [] m
+
+elems :: Map k v -> [v]
+elems m = foldrWithKey (\_ v rest -> v : rest) [] m
+
+-- Changing and combining -----------------------------------------------------------------
+
+map :: (a -> b) -> Map k a -> Map k b
+map f m = mapWithKey (\_ v -> f v) m
+
+mapWithKey :: (k -> a -> b) -> Map k a -> Map k b
+mapWithKey _ Tip = Tip
+mapWithKey f (Bin n k v l r) = Bin n k (f k v) (mapWithKey f l) (mapWithKey f r)
+
+filter :: (v -> Bool) -> Map k v -> Map k v
+filter p m = filterWithKey (\_ v -> p v) m
+
+filterWithKey :: (k -> v -> Bool) -> Map k v -> Map k v
+filterWithKey _ Tip = Tip
+filterWithKey p (Bin _ k v l r)
+  | p k v = link k v (filterWithKey p l) (filterWithKey p r)
+  | otherwise = merge (filterWithKey p l) (filterWithKey p r)
+
+partition :: (v -> Bool) -> Map k v -> (Map k v, Map k v)
+partition p m = (filter p m, filter (\v -> not (p v)) m)
+
+-- The keys smaller than k, and those larger.
+split :: Ord k => k -> Map k v -> (Map k v, Map k v)
+split _ Tip = (Tip, Tip)
+split k (Bin _ k' v l r) = case compare k k' of
+  LT -> let (ll, lr) = split k l in (ll, link k' v lr r)
+  GT -> let (rl, rr) = split k r in (link k' v l rl, rr)
+  EQ -> (l, r)
+
+foldr :: (a -> b -> b) -> b -> Map k a -> b
+foldr f z m = foldrWithKey (\_ v acc -> f v acc) z m
+
+foldrWithKey :: (k -> v -> b -> b) -> b -> Map k v -> b
+foldrWithKey _ z Tip = z
+foldrWithKey f z (Bin _ k v l r) = foldrWithKey f (f k v (foldrWithKey f z r)) l
+
+foldlWithKey :: (b -> k -> v -> b) -> b -> Map k v -> b
+foldlWithKey _ z Tip = z
+foldlWithKey f z (Bin _ k v l r) = foldlWithKey f (f (foldlWithKey f z l) k v) r
+
+-- Of a key in both, the value of the first map.
+union :: Ord k => Map k v -> Map k v -> Map k v
+union a b = unionWith (\x _ -> x) a b
+
+unionWith :: Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
+unionWith f a b = foldlWithKey (\m k v -> insertWith (\new old -> f old new) k v m) a b
+
+unions :: Ord k => [Map k v] -> Map k v
+unions ms = foldl union Tip ms
+
+unionsWith :: Ord k => (v -> v -> v) -> [Map k v] -> Map k v
+unionsWith f ms = foldl (unionWith f) Tip ms
+
+-- The keys in both, with their values combined.
+intersectionWith :: Ord k => (a -> b -> c) -> Map k a -> Map k b -> Map k c
+intersectionWith f a b =
+  fromDistinctAscList [(k, f x y) | (k, x) <- toAscList a, Just y <- [lookup k b]]
+
+-- The first map without the keys of the second.
+difference :: Ord k => Map k a -> Map k b -> Map k a
+difference a b = filterWithKey (\k _ -> notMember k b) a
+
+fromDistinctAscList :: Ord k => [(k, v)] -> Map k v
+fromDistinctAscList kvs = fromList kvs
+
+-- Balancing --------------------------------------------------------------------------
+
+bin :: k -> v -> Map k v -> Map k v -> Map k v
+bin k v l r = Bin (size l + size r + 1) k v l r
+
+-- A node whose subtrees were balanced, and one of which grew or shrank by
+-- one element.
+balance :: k -> v -> Map k v -> Map k v -> Map k v
+balance k v l r
+  | sl + sr <= 1 = bin k v l r
+  | sr > 3 * sl = rotateL k v l r
+  | sl > 3 * sr = rotateR k v l r
+  | otherwise = bin k v l r
+  where
+    sl = size l
+    sr = size r
+
+rotateL :: k -> v -> Map k v -> Map k v -> Map k v
+rotateL k v l r@(Bin _ _ _ rl rr)
+  | size rl < 2 * size rr = singleL k v l r
+  | otherwise = doubleL k v l r
+rotateL k v l Tip = bin k v l Tip
+
+rotateR :: k -> v -> Map k v -> Map k v -> Map k v
+rotateR k v l@(Bin _ _ _ ll lr) r
+  | size lr < 2 * size ll = singleR k v l r
+  | otherwise = doubleR k v l r
+rotateR k v Tip r = bin k v Tip r
+
+singleL :: k -> v -> Map k v -> Map k v -> Map k v
+singleL k1 v1 t1 (Bin _ k2 v2 t2 t3) = bin k2 v2 (bin k1 v1 t1 t2) t3
+singleL k v l Tip = bin k v l Tip
+
+singleR :: k -> v -> Map k v -> Map k v -> Map k v
+singleR k1 v1 (Bin _ k2 v2 t1 t2) t3 = bin k2 v2 t1 (bin k1 v1 t2 t3)
+singleR k v Tip r = bin k v Tip r
+
+doubleL :: k -> v -> Map k v -> Map k v -> Map k v
+doubleL k1 v1 t1 (Bin _ k2 v2 (Bin _ k3 v3 t2 t3) t4) = bin k3 v3 (bin k1 v1 t1 t2) (bin k2 v2 t3 t4)
+doubleL k v l r = singleL k v l r
+
+doubleR :: k -> v -> Map k v -> Map k v -> Map k v
+doubleR k1 v1 (Bin _ k2 v2 t1 (Bin _ k3 v3 t2 t3)) t4 = bin k3 v3 (bin k2 v2 t1 t2) (bin k1 v1 t3 t4)
+doubleR k v l r = singleR k v l r
+
+-- Two trees, every key of the first smaller than every key of the second.
+glue :: Map k v -> Map k v -> Map k v
+glue Tip r = r
+glue l Tip = l
+glue l r
+  | size l > size r = case lookupMax l of
+      Just (k, v) -> balance k v (deleteMax l) r
+      Nothing -> r
+  | otherwise = case lookupMin r of
+      Just (k, v) -> balance k v l (deleteMin r)
+      Nothing -> l
+
+merge :: Map k v -> Map k v -> Map k v
+merge l r = glue' l r
+  where
+    glue' Tip b = b
+    glue' a Tip = a
+    glue' a@(Bin sa ka va la ra) b@(Bin sb kb vb lb rb)
+      | 3 * sa < sb = balance kb vb (glue' a lb) rb
+      | 3 * sb < sa = balance ka va la (glue' ra b)
+      | otherwise = glue a b
+
+-- A node with subtrees of any sizes, every key of l smaller than k and every
+-- key of r larger.
+link :: k -> v -> Map k v -> Map k v -> Map k v
+link k v Tip r = insertMin k v r
+link k v l Tip = insertMax k v l
+link k v l@(Bin sl kl vl ll lr) r@(Bin sr kr vr rl rr)
+  | 3 * sl < sr = balance kr vr (link k v l rl) rr
+  | 3 * sr < sl = balance kl vl ll (link k v lr r)
+  | otherwise = bin k v l r
+
+insertMin :: k -> v -> Map k v -> Map k v
+insertMin k v Tip = singleton k v
+insertMin k v (Bin _ k' v' l r) = balance k' v' (insertMin k v l) r
+
+insertMax :: k -> v -> Map k v -> Map k v
+insertMax k v Tip = singleton k v
+insertMax k v (Bin _ k' v' l r) = balance k' v' l (insertMax k v r)
+
+-- Instances ----------------------------------------------------------------------------
+
+instance (Eq k, Eq v) => Eq (Map k v) where
+  a == b = toAscList a == toAscList b
+
+instance (Ord k, Ord v) => Ord (Map k v) where
+  compare a b = compare (toAscList a) (toAscList b)
+
+instance (Show k, Show v) => Show (Map k v) where
+  show m = "fromList " ++ show (toAscList m)
+  showsPrec d m = showParenString (d > 10) ("fromList " ++ show (toAscList m))
+
+instance Functor (Map k) where
+  fmap f m = map f m
+
+instance Foldable (Map k) where
+  foldr f z m = foldrWithKey (\_ v acc -> f v acc) z m
+  toList m = elems m
+
+instance Ord k => Semigroup (Map k v) where
+  a <> b = union a b
+
+instance Ord k => Monoid (Map k v) where
+  mempty = Tip

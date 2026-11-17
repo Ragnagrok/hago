@@ -1,0 +1,40 @@
+-- The library's Data.List, Data.Char, Data.Ord, Data.Map and Data.Set.
+import Data.Char (toUpper, toLower, isPunctuation, digitToInt, intToDigit)
+import Data.List
+import qualified Data.Map as Map
+import qualified Data.Set as Set
+import Data.Ord (comparing, Down (..))
+
+wordCounts :: String -> Map.Map String Int
+wordCounts text = Map.fromListWith (+) [(pack (map toLower (unpack w)), 1) | w <- words text]
+
+main :: IO ()
+main = do
+  -- Data.List
+  print (sort [3, 1, 2], sortBy (comparing snd) [(1, 'c'), (2, 'a'), (3, 'b')], sortOn Down [3, 1, 2])
+  print (nub [1, 2, 1, 3, 2], group (unpack "aabccc"), partition even [1 .. 10])
+  print (intercalate ", " ["a", "b", "c"], intersperse 0 [1, 2, 3], transpose [[1, 2, 3], [4, 5], [6]])
+  print (isPrefixOf [1, 2] [1, 2, 3], isSuffixOf [3] [1, 2, 3], isInfixOf [2, 3] [1, 2, 3, 4])
+  print (tails [1, 2, 3], take 3 (inits [1 ..]), subsequences [1, 2, 3])
+  print (permutations [1, 2, 3], delete 2 [1, 2, 3, 2], [1, 2, 3, 4] \\ [2, 4], union [1, 2] [2, 3], intersect [1, 2, 3] [2, 3, 4])
+  print (elemIndex 3 [1, 2, 3], findIndex (> 5) [1, 2, 3], elemIndices 1 [1, 0, 1], stripPrefix [1] [1, 2])
+  print (unfoldr (\n -> if n > 100 then Nothing else Just (n, n * 2)) 1, maximumBy (comparing snd) [(1, 'a'), (2, 'z')], minimumBy compare ([] :: [Int]))
+  print (insert 3 [1, 2, 4, 5], dropWhileEnd (== ' ') (unpack "hi  "), isSubsequenceOf [1, 3] [1, 2, 3], genericLength [1, 2, 3] :: Double)
+  print (take 5 (sort [100, 99 .. 1]), length (sort [1 .. 100000]))
+  -- Data.Char
+  print (pack (map toUpper (unpack "hello, world")), filter isPunctuation (unpack "a,b.c!"), map digitToInt (unpack "1f"), intToDigit 11)
+  -- Data.Map
+  let counts = wordCounts "the cat and the hat and THE bat"
+  print counts
+  print (Map.lookup "the" counts, Map.lookup "dog" counts, Map.findWithDefault 0 "dog" counts, Map.member "cat" counts)
+  print (Map.toList (Map.filter (> 1) counts), Map.keys counts, Map.elems counts, Map.size counts)
+  print (Map.insert "dog" 5 counts Map.!? "dog", Map.adjust (* 10) "cat" counts, Map.delete "the" counts)
+  print (Map.unionWith (+) (Map.fromList [(1, 1), (2, 2)]) (Map.fromList [(2, 10), (3, 3)]), fmap (* 2) (Map.fromList [(1, 1)]))
+  print (Map.lookupMin counts, Map.lookupMax counts, sum counts, Map.alter (const (Just 0)) "new" (Map.fromList [("old", 1)]))
+  let big = Map.fromList [(i, i * i) | i <- [1 .. 100000 :: Int]]
+  print (Map.size big, Map.lookup 777 big, Map.size (foldr Map.delete big [1, 3 .. 100000]))
+  -- Data.Set
+  let letters = Set.fromList (unpack "mississippi")
+  print (letters, Set.size letters, Set.member 's' letters, Set.toList (Set.map toUpper letters))
+  print (Set.union (Set.fromList [1, 2]) (Set.fromList [2, 3]), Set.intersection (Set.fromList [1, 2, 3]) (Set.fromList [2, 3, 4]), Set.difference (Set.fromList [1, 2, 3]) (Set.fromList [2]))
+  print (Set.isSubsetOf (Set.fromList [1]) (Set.fromList [1, 2]), length (Set.fromList [1, 1, 2]), Set.size (Set.fromList [1 .. 50000 :: Int]))

@@ -1,0 +1,52 @@
+-- Characters: what kind each is, and changing case. A Char is a Unicode
+-- code point (Go's rune), and the tests are Unicode's.
+module Data.Char
+  ( isSpace, isAlpha, isLetter, isUpper, isLower, isDigit, isAlphaNum, isHexDigit, isOctDigit
+  , isPunctuation, isSymbol, isControl, isPrint, isAscii, isMark, isNumber
+  , toUpper, toLower, toTitle, ord, chr, digitToInt, intToDigit
+  ) where
+
+foreign import go "unicode.ToUpper" toUpper :: Char -> Char
+foreign import go "unicode.ToLower" toLower :: Char -> Char
+foreign import go "unicode.ToTitle" toTitle :: Char -> Char
+foreign import go "unicode.IsPunct" isPunctuation :: Char -> Bool
+foreign import go "unicode.IsSymbol" isSymbol :: Char -> Bool
+foreign import go "unicode.IsControl" isControl :: Char -> Bool
+foreign import go "unicode.IsPrint" isPrint :: Char -> Bool
+foreign import go "unicode.IsMark" isMark :: Char -> Bool
+foreign import go "unicode.IsNumber" isNumber :: Char -> Bool
+
+-- The code point of a character, and the character of a code point; they
+-- are also always in scope, as the compiler's own.
+ord :: Char -> Int
+ord c = Prelude.ord c
+
+chr :: Int -> Char
+chr n = Prelude.chr n
+
+isLetter :: Char -> Bool
+isLetter c = isAlpha c
+
+isAscii :: Char -> Bool
+isAscii c = ord c < 128
+
+isOctDigit :: Char -> Bool
+isOctDigit c = c >= '0' && c <= '7'
+
+isHexDigit :: Char -> Bool
+isHexDigit c = isDigit c || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+
+-- The value of a decimal or hexadecimal digit, if the character is one.
+digitToInt :: Char -> Maybe Int
+digitToInt c
+  | isDigit c = Just (ord c - ord '0')
+  | c >= 'a' && c <= 'f' = Just (ord c - ord 'a' + 10)
+  | c >= 'A' && c <= 'F' = Just (ord c - ord 'A' + 10)
+  | otherwise = Nothing
+
+-- The digit for a value from 0 to 15.
+intToDigit :: Int -> Maybe Char
+intToDigit n
+  | n >= 0 && n < 10 = Just (chr (ord '0' + n))
+  | n >= 10 && n < 16 = Just (chr (ord 'a' + n - 10))
+  | otherwise = Nothing
