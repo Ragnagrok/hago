@@ -210,7 +210,8 @@ resolveVal sc x
       [] -> pure n   -- unknown: the type checker reports it
       is -> case nub is of
         [i] -> pure i
-        is' -> failAt sc ("ambiguous name " ++ n ++ ": it could be " ++ intercalate " or " (sort is'))
+        -- the Prelude's names are unqualified inside the compiler
+        is' -> failAt sc ("ambiguous name " ++ n ++ ": it could be " ++ intercalate " or " (sort (map fromPrelude is')))
 
 resolveType :: Scope -> Name -> Rn Name
 resolveType sc x = case splitQual x of
@@ -346,3 +347,10 @@ rnStmts sc = \case
     (sc', ds') <- rnLocals sc ds
     (SLet ds' :) <$> rnStmts sc' rest
   SExpr e : rest -> (:) <$> (SExpr <$> rnExpr sc e) <*> rnStmts sc rest
+
+-- | A name as the programmer would write it qualified: the Prelude's own
+-- names have no module inside the compiler.
+fromPrelude :: Name -> Name
+fromPrelude n = case splitQual n of
+  (Nothing, _) -> "Prelude." ++ n
+  _ -> n
