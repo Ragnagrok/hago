@@ -1,0 +1,35 @@
+-- Function and operator definitions as in the Report's funlhs, sections, and a let inside a let on one line.
+
+import Control.Monad (liftM)
+
+infixr 1 >=>>
+(>=>>) :: Monad m => (a -> m b) -> (b -> m c) -> a -> m c
+(f >=>> g) x = f x >>= g
+
+data V = V Int Int deriving (Show)
+
+infixl 6 |+|
+(|+|) :: V -> V -> V
+V a b |+| V c d = V (a + c) (b + d)
+
+compose3 :: (b -> c) -> (a -> b) -> a -> c
+(f `compose3` g) x = f (g x)
+
+main :: IO ()
+main = do
+  let y = let x = 1 in x + 1
+  print y
+  print (let a = 2; b = 3 in a * b)
+  print ((halve >=>> halve) 12)
+  print (V 1 2 |+| V 3 4 |+| V 10 10)
+  print ((show `compose3` (+ 1)) 41)
+  print (map (subtract 1) [1, 2, 3], map (`div` 2) [10, 20], map (2 ^) [1, 2, 3])
+  print (case 5 of
+           n | n > 3 -> "big"
+             | otherwise -> "small")
+  print [x | Just x <- [Just 1, Nothing, Just 3]]
+  print (f 10)
+  where
+    halve :: Int -> Maybe Int
+    halve n = if even n then Just (n `div` 2) else Nothing
+    f n = g n * 2 where g m = m + 1

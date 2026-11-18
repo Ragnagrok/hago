@@ -304,19 +304,27 @@ patVars = \case
   _ -> []
 
 binding :: Parser Decl
-binding = try infixDef <|> prefixDef
+binding = do
+  (name, ps) <- funLhs
+  r <- rhs (key "=")
+  pure (DBind name [Clause ps r])
+
+-- | What is being defined, and its arguments, as in the Report's funlhs:
+-- @f x y@, @x <+> y@, @x `op` y@, or one of those in parentheses with more
+-- arguments after it, as in @(f >=> g) x@.
+funLhs :: Parser (Name, [Pat])
+funLhs = try parenthesised <|> try infixLhs <|> prefixLhs
   where
-    prefixDef = do
-      name <- var
-      ps <- many (locP aPat)
-      r <- rhs (key "=")
-      pure (DBind name [Clause ps r])
-    infixDef = do
+    prefixLhs = (,) <$> var <*> many (locP aPat)
+    infixLhs = do
       l <- pat
       op <- varSym <|> (special "`" *> varId <* special "`")
       r <- pat
-      body <- rhs (key "=")
-      pure (DBind op [Clause [l, r] body])
+      pure (op, [l, r])
+    parenthesised = do
+      (name, ps) <- special "(" *> funLhs <* special ")"
+      more <- many1 (locP aPat)
+      pure (name, ps ++ more)
 
 rhs :: Parser () -> Parser Rhs
 rhs sep = do

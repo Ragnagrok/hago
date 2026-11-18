@@ -135,11 +135,24 @@ Known rough edges, found on the way and not fixed yet:
 - [ ] **A binding a later guard uses is computed before the first guard,** even when the first
       guard holds and nothing uses it; guards could be split so that it is computed just
       before the first guard that needs it.
-- [ ] **`(f >=> g) x = ...` does not parse:** an operator defined in parentheses with more
-      arguments after them. `f >=> g = \x -> ...` does.
 - [ ] **Coverage does not look inside guards,** so complementary conditions need `otherwise`.
 - [ ] **A record update that changes a type parameter some other field fixes** is reported as the
       type mismatch it causes (`no instance for Num String`), not as the field that cannot change.
+
+## Syntax: where Hago parts from the Haskell 2010 Report
+
+The parser follows chapter 10 of the Report (the context-free grammar and the layout algorithm
+L); `examples/syntax-*.hgo` hold the tricky cases. Where it differs:
+
+- **The layout rule's parse-error(t) is approximated** by the tokens that cannot continue an
+  implicit block: a closing bracket or a comma of an enclosing bracket, an `in` whose `let` is
+  outside the block (`let y = let x = 1 in x + 1`), a `then` or `else` whose `if` is outside it
+  (`if c then case x of ... else e`), and a `where` after `do` or in the block's column. A block
+  that some other token could only close by a parse error needs explicit braces or a new line.
+- **`f.g` is not composition:** `.` with no spaces is a record field (`p.name`), so composition
+  is written `f . g`.
+- **A string literal is a `String`, never a `[Char]`,** so it is not a list pattern.
+- **No `n+k` patterns, no `(x <+> y) = e` pattern binding of an operator,** as in Haskell 2010.
 
 ## Out of scope, on purpose
 

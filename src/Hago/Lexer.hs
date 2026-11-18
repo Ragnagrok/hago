@@ -193,37 +193,52 @@ markers (t : ts) = case tokVal t of
               | k `elem` openers -> lineMark ++ [x, x {tokVal = TOpenN k 0}]
             _ -> lineMark ++ [x] ++ go (tokLine x) False xs
 
--- | The algorithm L. Each context remembers the bracket depth it was opened
--- at and the keyword that opened it, so a closing bracket, a comma, an @in@
--- (after let), a @where@ (after do, or in the block's column) can end an implicit block (a cheap stand-in for the report's
--- parse-error(t) rule).
-resolve :: [Token] -> [(Int, Int, String)] -> Int -> [Token]
-resolve [] ctx _ = [Token 0 0 (TSpecial "}") | (m, _, _) <- ctx, m /= 0]
+-- | An open block: its column (0 for explicit braces), the bracket depth
+-- it was opened at, the keyword that opened it, and how many @then@s and
+-- @else@s, and how many @in@s, of the @if@s and @let@s inside it are
+-- still to come.
+data Ctx = Ctx {cCol :: Int, cDepth :: Int, cKey :: String, cIfs :: Int, cLets :: Int}
+
+-- | The algorithm L. The report's parse-error(t) rule closes an implicit
+-- block when the next token cannot continue it; that is approximated by
+-- the tokens that cannot: a closing bracket or a comma of an enclosing
+-- bracket, an @in@ whose @let@ is outside the block, a @then@ or @else@
+-- whose @if@ is outside the block, and a @where@ after do or in the block's
+-- column.
+resolve :: [Token] -> [Ctx] -> Int -> [Token]
+resolve [] ctx _ = [Token 0 0 (TSpecial "}") | c <- ctx, cCol c /= 0]
 resolve (t : ts) ctx depth = case (tokVal t, ctx) of
-  (TLineN n, (m, _, _) : ms)
+  (TLineN n, c : ms)
     -- no item of a block starts with where, so a where in its column ends it
-    | m == n, (w : _) <- ts, tokVal w == TKey "where" -> sym "}" : resolve ts ms depth
-    | m == n -> sym ";" : resolve ts ctx depth
-    | n < m -> sym "}" : resolve (t : ts) ms depth
+    | cCol c == n, (w : _) <- ts, tokVal w == TKey "where" -> sym "}" : resolve ts ms depth
+    | cCol c == n -> sym ";" : resolve ts ctx depth
+    | n < cCol c -> sym "}" : resolve (t : ts) ms depth
   (TLineN _, _) -> resolve ts ctx depth
-  (TOpenN k n, (m, _, _) : _)
-    | n > m -> sym "{" : resolve ts ((n, depth, k) : ctx) depth
+  (TOpenN k n, c : _)
+    | n > cCol c -> sym "{" : resolve ts (Ctx n depth k 0 0 : ctx) depth
   (TOpenN k n, [])
-    | n > 0 -> sym "{" : resolve ts [(n, depth, k)] depth
+    | n > 0 -> sym "{" : resolve ts [Ctx n depth k 0 0] depth
   (TOpenN _ n, _) -> sym "{" : sym "}" : resolve (t {tokVal = TLineN n} : ts) ctx depth
   -- explicit braces (blocks and records) count as brackets, so a comma
   -- inside a record closes an implicit block opened in a field's value
-  (TSpecial "}", (0, _, _) : ms) -> t : resolve ts ms (depth - 1)
-  (TSpecial "}", (m, _, _) : ms) | m /= 0 -> sym "}" : resolve (t : ts) ms depth
-  (TSpecial "{", _) -> t : resolve ts ((0, depth + 1, "") : ctx) (depth + 1)
-  (TKey "in", (m, _, "let") : ms) | m /= 0 -> sym "}" : resolve (t : ts) ms depth
-  (TKey "where", (m, _, "do") : ms) | m /= 0 -> sym "}" : resolve (t : ts) ms depth
-  (TSpecial c, (m, d, _) : ms)
-    | m /= 0, c `elem` [")", "]"], depth <= d -> sym "}" : resolve (t : ts) ms depth
-    | m /= 0, c == ",", d > 0, depth <= d -> sym "}" : resolve (t : ts) ms depth
-  (TSpecial c, _)
-    | c `elem` ["(", "["] -> t : resolve ts ctx (depth + 1)
-    | c `elem` [")", "]"] -> t : resolve ts ctx (depth - 1)
+  (TSpecial "}", c : ms) | cCol c == 0 -> t : resolve ts ms (depth - 1)
+  (TSpecial "}", _ : ms) -> sym "}" : resolve (t : ts) ms depth
+  (TSpecial "{", _) -> t : resolve ts (Ctx 0 (depth + 1) "" 0 0 : ctx) (depth + 1)
+  (TKey "let", c : ms) -> t : resolve ts (c {cLets = cLets c + 1} : ms) depth
+  (TKey "in", c : ms)
+    | cLets c > 0 -> t : resolve ts (c {cLets = cLets c - 1} : ms) depth
+    | cCol c /= 0, depth <= cDepth c -> sym "}" : resolve (t : ts) ms depth
+  (TKey "if", c : ms) -> t : resolve ts (c {cIfs = cIfs c + 2} : ms) depth
+  (TKey k, c : ms)
+    | k `elem` ["then", "else"], cIfs c > 0 -> t : resolve ts (c {cIfs = cIfs c - 1} : ms) depth
+    | k `elem` ["then", "else"], cCol c /= 0, depth <= cDepth c -> sym "}" : resolve (t : ts) ms depth
+  (TKey "where", c : ms) | cKey c == "do", cCol c /= 0 -> sym "}" : resolve (t : ts) ms depth
+  (TSpecial s, c : ms)
+    | cCol c /= 0, s `elem` [")", "]"], depth <= cDepth c -> sym "}" : resolve (t : ts) ms depth
+    | cCol c /= 0, s == ",", cDepth c > 0, depth <= cDepth c -> sym "}" : resolve (t : ts) ms depth
+  (TSpecial s, _)
+    | s `elem` ["(", "["] -> t : resolve ts ctx (depth + 1)
+    | s `elem` [")", "]"] -> t : resolve ts ctx (depth - 1)
   _ -> t : resolve ts ctx depth
   where
     sym s = t {tokVal = TSpecial s}

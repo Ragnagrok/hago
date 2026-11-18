@@ -1,0 +1,48 @@
+-- The layout rule where the Report's parse-error(t) closes a block: an else after a case, a then and else in a do block's column, explicit braces, where in a case alternative.
+
+data P = P Int Int deriving (Show)
+
+infixl 7 `dot`
+dot :: P -> P -> Int
+P a b `dot` P c d = a * c + b * d
+
+f :: Int -> String
+f (-1) = "minus one"
+f 0 = "zero"
+f _ = "other"
+
+g :: Int -> Int
+g x = case x of
+  y | y > 10 -> big
+    | otherwise -> small
+    where
+      big = 100
+      small = 1
+
+h :: Bool -> IO ()
+h b = do
+  if b
+  then putStrLn "yes"
+  else putStrLn "no"
+  let { u = 1; v = 2 }
+  print (u + v)
+
+k :: Int -> Int
+k n = if n > 0 then case n of
+  1 -> 10
+  _ -> 20 else 0
+
+op :: Int -> Int -> Int
+op = (\a b -> a - b)
+
+main :: IO ()
+main = do
+  print (P 1 2 `dot` P 3 4 + 1)
+  print (map f [-1, 0, 5])
+  print (map g [5, 50])
+  h True
+  h False
+  print (k 1, k 2, k 0)
+  print (3 `op` 1, (`op` 1) 5, (10 `op`) 4)
+  print [if even x then x else -x | x <- [1 .. 4]]
+  print (let xs = [1, 2, 3] in sum xs, let in 7)

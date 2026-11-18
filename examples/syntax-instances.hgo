@@ -1,0 +1,35 @@
+-- Infix method definitions, negative literal patterns, guards in a local function.
+
+data P = P Int Int
+
+instance Eq P where
+  P a b == P c d = a == c && b == d
+
+class Container f where
+  (<+>) :: f -> f -> f
+
+newtype Box = Box Int
+
+instance Container Box where
+  Box a <+> Box b = Box (a + b)
+
+unbox :: Box -> Int
+unbox (Box n) = n
+
+sign :: Int -> String
+sign n = case n of
+  -1 -> "minus"
+  0 -> "zero"
+  _ -> "plus"
+
+main :: IO ()
+main = do
+  let step x | x > 0 = x - 1
+             | otherwise = 0
+      twice q = q . q
+  print (twice step 5)
+  print (P 1 2 == P 1 2, P 1 2 /= P 2 1)
+  print (unbox (Box 1 <+> Box 2))
+  print (map sign [-1, 0, 3])
+  print (negate 3, - 3 + 1, (\x -> -x) 4, subtract 1 10)
+  mapM_ print $ zip [1 :: Int ..] [True, False]
