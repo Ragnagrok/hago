@@ -657,6 +657,15 @@ genExpr ctx e = case e of
           a' <- genExpr ctx a
           b' <- genExpr ctx inner
           pure ("(" ++ a' ++ " " ++ op ++ " " ++ b' ++ ")")
+    -- a call to Go: functions given to it are generated as Go functions of
+    -- all their arguments at once (see 'foreignArg')
+    CVar x ref _
+      | Just (VKForeign fo) <- M.lookup x (cxVars ctx), fArity fo > 0, length args >= fArity fo -> do
+          let (now, later) = splitAt (fArity fo) args
+              targs = refTypes ctx ref
+              (params, _) = splitFun (fArity fo) (foreignInst fo targs)
+          as <- zipWithM (foreignArg ctx (isRuntimeSymbol fo)) params now
+          foldM (\acc a -> (\a' -> acc ++ "(" ++ a' ++ ")") <$> genExpr ctx a) (foreignCall ctx fo targs True as) later
     CVar x ref t | Just ar <- knownArity x, ar > 0 ->
       genApp ctx f args (Just ar) (\as -> call ctx x ref t as) t
     CCon k targs t -> genApp ctx f args (Just (conArity k)) (\as -> pure (conValue ctx k targs as)) t
@@ -752,7 +761,7 @@ genVar ctx x ref t = case M.lookup x (cxVars ctx) of
   Just (VKTop 0 _ True) -> pure (mangle x)
   Just (VKTop 0 _ False) -> pure (mangle x ++ insts ++ "(" ++ commas (dictArgs ctx ref) ++ ")")
   Just (VKLocal 0) -> pure (mangle x)
-  Just (VKForeign f) | fArity f == 0 -> pure (foreignCall ctx f (refTypes ctx ref) [])
+  Just (VKForeign f) | fArity f == 0 -> pure (foreignCall ctx f (refTypes ctx ref) True [])
   Just (VKPrim 0) -> call ctx x ref t []
   Just _ -> genExpr ctx (CApp (CVar x ref t) [])
   Nothing -> error ("codegen: unknown variable " ++ x)
@@ -766,7 +775,7 @@ call :: Ctx -> Name -> VRef -> Type -> [String] -> Gen String
 call ctx x ref _ as = case M.lookup x (cxVars ctx) of
   Just (VKTop _ tps _) -> pure (mangle x ++ insts tps ++ "(" ++ commas (dictArgs ctx ref ++ as) ++ ")")
   Just (VKLocal _) -> pure (mangle x ++ "(" ++ commas as ++ ")")
-  Just (VKForeign f) -> pure (foreignCall ctx f (refTypes ctx ref) as)
+  Just (VKForeign f) -> pure (foreignCall ctx f (refTypes ctx ref) False as)
   Just (VKPrim _) -> genPrim ctx x targs as
   Nothing -> error ("codegen: unknown function " ++ x)
   where
@@ -862,8 +871,8 @@ refTypes ctx = \case
 -- type parameters are the Hago type variables in the order they first appear
 -- in its signature, and it is given them explicitly: Go cannot infer a type
 -- parameter that only the result has (newEmptyMVar :: IO (MVar a)).
-foreignCall :: Ctx -> Foreign -> [Type] -> [String] -> String
-foreignCall ctx f targs as0 = case declared of
+foreignCall :: Ctx -> Foreign -> [Type] -> Bool -> [String] -> String
+foreignCall ctx f targs adapted as0 = case declared of
   -- the conventions (IO (), Either for an error) follow the declared type:
   -- takeMVar :: MVar a -> IO a stays a plain call at a = Either e b
   TCon "IO" [TCon "()" []] -> "func() IOStep[struct{}] { " ++ goCall ++ "; return rt_done(struct{}{}) }"
@@ -875,13 +884,10 @@ foreignCall ctx f targs as0 = case declared of
   where
     (_, declared) = splitFun (fArity f) (fType f)
     t = case r of TCon "IO" [x] -> x; x -> x
-    inst = substTV (M.fromList (zip (fVars f) targs))
-    (params, r) = splitFun (fArity f) (inst (fType f))
+    (params, r) = splitFun (fArity f) (foreignInst f targs)
     isIO = case r of TCon "IO" _ -> True; _ -> False
-    -- the runtime's own functions take Hago's curried functions and actions;
-    -- any other Go function gets Go's kind (see 'callback')
-    runtimeFn = "rt_" `isPrefixOf` fSymbol f
-    as = if runtimeFn then as0 else zipWith (callback ctx) params as0
+    -- arguments already made into what Go expects, or values to adapt
+    as = if adapted then as0 else zipWith (callback ctx (isRuntimeSymbol f)) params as0
     sym = snd (splitSymbol (fSymbol f)) ++ (if length targs == length (fVars f) then typeArgs ctx targs else "")
     goCall = case (fSymbol f, as) of
       -- ".Body.Close()": a selector on the first argument, a field or a method
@@ -902,30 +908,95 @@ foreignCall ctx f targs as0 = case declared of
             , "if hg_err != nil { return " ++ conValue ctx "Left" targsOf ["hg_err.Error()"] ++ " }"
             , "return " ++ conValue ctx "Right" targsOf [if unitRight then "struct{}{}" else "hg_v"] ]
 
--- | A Hago function or action given to a Go function, as Go expects it: a
--- function of all its arguments at once, which runs the action it makes and
--- returns its result (nothing for ()). Go may call it from any goroutine
--- (net/http calls a handler on one per request), and a failure in it ends
--- the program, as in any thread.
-callback :: Ctx -> Type -> String -> String
-callback ctx ty a = case ty of
-  TFun _ _ -> adapt
-  TCon "IO" [_] -> adapt
+-- | A Hago function or action already computed, given to a Go function: see
+-- 'foreignArg', which makes better code when it sees the function's source.
+callback :: Ctx -> Bool -> Type -> String -> String
+callback ctx runtime ty a = case ty of
+  TFun _ _ | runtime, [_] <- args -> a
+  TFun _ _ -> goFunc ctx runtime args res (\ps -> "(" ++ a ++ ")" ++ concat ["(" ++ p ++ ")" | p <- ps])
+  TCon "IO" [_] | not runtime -> goFunc ctx runtime [] ty (const a)
   _ -> a
   where
     (args, res) = uncurried ty
-    uncurried = \case
-      TFun x y -> let (xs, z) = uncurried y in (x : xs, z)
-      z -> ([], z)
+
+-- | The arguments of a function type and its result.
+uncurried :: Type -> ([Type], Type)
+uncurried = \case
+  TFun x y -> let (xs, z) = uncurried y in (x : xs, z)
+  z -> ([], z)
+
+-- | A Go function of all the arguments at once, whose body applies the Hago
+-- function (given the parameter names). For a Go function from outside the
+-- runtime, an action it makes is run and its result returned (nothing for
+-- ()), and a failure in it ends the program, as in any thread: Go may call
+-- it from any goroutine (net/http calls a handler on one per request). The
+-- runtime's functions get the action itself.
+goFunc :: Ctx -> Bool -> [Type] -> Type -> ([String] -> String) -> String
+goFunc ctx runtime args res apply =
+  "func(" ++ commas [p ++ " " ++ goTy ctx x | (p, x) <- zip ps args] ++ ")" ++ resTy
+    ++ " {\n" ++ (if runtime then "" else "defer rt_failed()\n") ++ body ++ "\n}"
+  where
     ps = ["hg_p" ++ show i | i <- [0 .. length args - 1]]
-    applied = "(" ++ a ++ ")" ++ concat ["(" ++ p ++ ")" | p <- ps]
+    applied = apply ps
     (resTy, body) = case res of
-      TCon "IO" [TCon "()" []] -> ("", "rt_run(" ++ applied ++ ")")
-      TCon "IO" [x] -> (" " ++ goTy ctx x, "return rt_run(" ++ applied ++ ")")
+      TCon "IO" [TCon "()" []] | not runtime -> ("", "rt_run(" ++ applied ++ ")")
+      TCon "IO" [x] | not runtime -> (" " ++ goTy ctx x, "return rt_run(" ++ applied ++ ")")
       x -> (" " ++ goTy ctx x, "return " ++ applied)
-    adapt =
-      "func(" ++ commas [p ++ " " ++ goTy ctx x | (p, x) <- zip ps args] ++ ")" ++ resTy
-        ++ " {\ndefer rt_failed()\n" ++ body ++ "\n}"
+
+-- | The Go type of what 'goFunc' makes.
+goFuncType :: Ctx -> Bool -> [Type] -> Type -> String
+goFuncType ctx runtime args res = "func(" ++ commas (map (goTy ctx) args) ++ ")" ++ case res of
+  TCon "IO" [TCon "()" []] | not runtime -> ""
+  TCon "IO" [x] | not runtime -> " " ++ goTy ctx x
+  x -> " " ++ goTy ctx x
+
+-- | A Go function's type, with its type variables given.
+foreignInst :: Foreign -> [Type] -> Type
+foreignInst f targs = substTV (M.fromList (zip (fVars f) targs)) (fType f)
+
+-- | The runtime's own functions take Hago's actions as they are; any other Go
+-- function gets them made into Go functions that run them.
+isRuntimeSymbol :: Foreign -> Bool
+isRuntimeSymbol f = "rt_" `isPrefixOf` fSymbol f
+
+-- | An argument of a call to Go. A function is given as a Go function of all
+-- its arguments at once; when its source is a lambda or a known function,
+-- that function is generated directly, without the curried closures a
+-- function value has, which would allocate one per argument on each call.
+foreignArg :: Ctx -> Bool -> Type -> CExpr -> Gen String
+foreignArg ctx runtime ty e = case ty of
+  TFun _ _
+    | [_] <- args, runtime -> genExpr ctx e
+    | otherwise -> case e of
+        CLam ps _ body | length ps == n -> do
+          let ctx' = noSelf (bindLocals ctx [(p, 0) | (p, _) <- ps])
+          ls <- genStmts ctx' body
+          let direct = "func(" ++ commas [mangle p ++ " " ++ goTy ctx t | (p, t) <- ps] ++ ") " ++ goTy ctx res ++ " {\n" ++ unlines ls ++ "}"
+          pure (if runtime then direct else goFunc ctx runtime args res (\qs -> direct ++ "(" ++ commas qs ++ ")"))
+        CVar x ref t | Just k <- arityOf x, k == n -> do
+          let names = ["hg_p" ++ show i | i <- [0 .. n - 1]]
+          body <- call ctx x ref t names
+          pure (goFunc ctx runtime args res (const body))
+        -- a known function given some of its arguments: those are computed
+        -- once, before the Go function is made
+        CApp (CVar x ref t) given | Just k <- arityOf x, k == length given + n -> do
+          vals <- mapM (genExpr ctx) given
+          vars <- mapM (const (freshName "a")) given
+          let names = ["hg_p" ++ show i | i <- [0 .. n - 1]]
+          body <- call ctx x ref t (vars ++ names)
+          pure ("func() " ++ goFuncType ctx runtime args res ++ " {\n" ++ unlines [v ++ " := " ++ a | (v, a) <- zip vars vals]
+                  ++ "return " ++ goFunc ctx runtime args res (const body) ++ "\n}()")
+        _ -> callback ctx runtime ty <$> genExpr ctx e
+  TCon "IO" [_] | not runtime -> callback ctx runtime ty <$> genExpr ctx e
+  _ -> genExpr ctx e
+  where
+    (args, res) = uncurried ty
+    n = length args
+    arityOf x = case M.lookup x (cxVars ctx) of
+      Just (VKTop a _ _) -> Just a
+      Just (VKLocal a) -> Just a
+      Just (VKPrim a) -> Just a
+      _ -> Nothing
 
 conValue :: Ctx -> Name -> [Type] -> [String] -> String
 conValue ctx k targs as = case k of
