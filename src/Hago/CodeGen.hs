@@ -302,17 +302,29 @@ genHkData prog (c, canon) =
 data Repr
   = Plain    -- ^ its one constructor's struct, passed by value
   | Tagged   -- ^ one struct, passed by value, with a tag saying which constructor and the fields of all of them
+  | Pointer  -- ^ a pointer to the struct of the constructor with fields; nil is the one without, as [] and Tip
 
 -- | The data types kept by value. Not one that contains itself by value
 -- (through its fields, tuples, or other such types), which would have no
 -- size, nor one over type constructors, nor one bigger than eight words,
 -- which would be slow to copy.
+--
+-- A type with two constructors, one with no fields, as a list or a tree, is
+-- a pointer, which is half the size of an interface and is matched by
+-- comparing it with nil.
 dataReprs :: Program -> M.Map Name Repr
-dataReprs prog = M.fromList [(n, repr n) | AcyclicSCC n <- stronglyConnComp [(n, n, byValue n) | n <- S.toList candidates]]
+dataReprs prog = M.union byValueReprs pointers
   where
+    byValueReprs = M.fromList [(n, repr n) | AcyclicSCC n <- stronglyConnComp [(n, n, byValue n) | n <- S.toList candidates]]
+    pointers = M.fromList
+      [ (n, Pointer) | (n, DataInfo _ _ [a, b] nt) <- M.toList (progData prog), not nt, n `notElem` ["Bool"]
+      , null (hkPositions prog n), tupleArity n == Nothing
+      , length (filter null [ciFields (progCons prog M.! a), ciFields (progCons prog M.! b)]) == 1 ]
     candidates = S.fromList
       [ n | (n, DataInfo _ _ ks nt) <- M.toList (progData prog), not nt, not (null ks), n `notElem` ["[]", "Bool", "()"]
-      , tupleArity n == Nothing, null (hkPositions prog n), sizeOf [] n <= 8 ]
+      , tupleArity n == Nothing, null (hkPositions prog n), sizeOf [] n <= (8 :: Int) ]
+    -- the sums small enough to be kept by value if they do not contain themselves
+    smallSums = S.fromList [n | (n, di) <- M.toList (progData prog), length (diCons di) <= 3]
     repr n = case diCons (progData prog M.! n) of
       [_] -> Plain
       _ -> Tagged
@@ -334,6 +346,7 @@ dataReprs prog = M.fromList [(n, repr n) | AcyclicSCC n <- stronglyConnComp [(n,
       TCon c ts
         | c `elem` ["Int", "Double", "Char", "Bool", "Integer", "()", "Lazy", "IO"] -> 1
         | tupleArity c /= Nothing -> sum (map (wordsOf seen) ts)
+        | M.member c pointers, not (S.member c smallSums) -> 1
         | Just di <- M.lookup c (progData prog), length (diCons di) <= 3, not (diNewtype di), null (hkPositions prog c), c `notElem` ["[]"] ->
             min 100 (sizeOf seen c)
         | otherwise -> 2
@@ -343,6 +356,11 @@ dataReprs prog = M.fromList [(n, repr n) | AcyclicSCC n <- stronglyConnComp [(n,
 genData :: Program -> M.Map Name Repr -> (Name, DataInfo) -> [String]
 genData prog unboxed (n, DataInfo ps _ ks _)
   | n == "()" || tupleArity n /= Nothing = []
+  | Just Pointer <- M.lookup n unboxed, [k] <- [k | k <- ks, not (null (ciFields (progCons prog M.! k)))] =
+      let ci = progCons prog M.! k
+          fields = [ "F" ++ show i ++ " " ++ goTy ctx (if lz then tLazy t else t) | (i, (lz, t)) <- zip [0 :: Int ..] (ciFields ci)]
+       in [ "type " ++ conStruct prog k ++ tparamList ps ++ " struct{ " ++ intercalate "; " fields ++ " }"
+          , "type " ++ typeName n ++ tparamList ps ++ " = *" ++ conStruct prog k ++ (if null ps then "" else "[" ++ commas (map tyVar ps) ++ "]") ]
   | Just Tagged <- M.lookup n unboxed =
       let fields =
             "tag uint8"
@@ -536,6 +554,13 @@ genPats ctx ((s, p) : rest) k = case p of
     Tagged -> do
       body <- genPats ctx ([(s ++ "." ++ taggedField ci i, q) | (i, q) <- zip [0 :: Int ..] subs] ++ rest) k
       pure (["if " ++ s ++ ".tag == " ++ show (ciTag ci) ++ " {"] ++ body ++ ["}"])
+    Pointer
+      | null (ciFields ci) -> do
+          body <- genPats ctx rest k
+          pure (["if " ++ s ++ " == nil {"] ++ body ++ ["}"])
+      | otherwise -> do
+          body <- genPats ctx ([(s ++ ".F" ++ show i, q) | (i, q) <- zip [0 :: Int ..] subs] ++ rest) k
+          pure (["if " ++ s ++ " != nil {"] ++ body ++ ["}"])
   CPCon k' targs subs -> do
     let struct = conRef ctx k' targs
     if all isWild subs
@@ -813,6 +838,10 @@ conValue ctx k targs as = case k of
   "True" -> "true"
   "False" -> "false"
   "()" -> "struct{}{}"
+  _ | Just ci <- M.lookup k (progCons (cxProg ctx)), Just Pointer <- M.lookup (ciType ci) (cxUnboxed ctx) ->
+        if null (ciFields ci)
+          then goTy ctx (TCon (ciType ci) targs) ++ "(nil)"
+          else "&" ++ conRef ctx k targs ++ "{" ++ commas as ++ "}"
   _ | Just ci <- M.lookup k (progCons (cxProg ctx)), Just Tagged <- M.lookup (ciType ci) (cxUnboxed ctx) ->
         typeName (ciType ci) ++ typeArgs ctx targs ++ "{" ++ commas (("tag: " ++ show (ciTag ci)) : [taggedField ci i ++ ": " ++ a | (i, a) <- zip [0 :: Int ..] as]) ++ "}"
   _ -> conRef ctx k targs ++ "{" ++ commas as ++ "}"

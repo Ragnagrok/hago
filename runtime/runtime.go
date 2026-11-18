@@ -18,15 +18,13 @@ import (
 // --- runtime ---
 
 // Lists: the head is strict, the tail a memoised thunk.
-type List[T any] interface{ isList() }
-type Nil[T any] struct{}
+// A list is a pointer to its first cell, and nil when it is empty.
+type List[T any] = *Cons[T]
 type Cons[T any] struct {
 	F0 T
 	F1 *rt_thunk[List[T]]
 }
 
-func (Nil[T]) isList()  {}
-func (Cons[T]) isList() {}
 
 
 // Every runtime import is used even if the program never prints.
@@ -191,10 +189,10 @@ func rt_nextGlobalSeed() int {
 }
 
 func rt_stringList(ss []string) List[string] {
-	var l List[string] = Nil[string]{}
+	var l List[string]
 	for i := len(ss) - 1; i >= 0; i-- {
 		tail := l
-		l = Cons[string]{ss[i], rt_ready(tail)}
+		l = &Cons[string]{ss[i], rt_ready(tail)}
 	}
 	return l
 }
@@ -205,7 +203,7 @@ func rt_words(s string) List[string] { return rt_stringList(rt_strings.Fields(s)
 
 func rt_lines(s string) List[string] {
 	if s == "" {
-		return Nil[string]{}
+		return nil
 	}
 	return rt_stringList(rt_strings.Split(rt_strings.TrimSuffix(s, "\n"), "\n"))
 }
@@ -227,14 +225,11 @@ func rt_dropRune(s string) string {
 }
 func rt_concatStrings(l List[string]) string {
 	var sb rt_strings.Builder
-	for {
-		c, ok := l.(Cons[string])
-		if !ok {
-			return sb.String()
-		}
-		sb.WriteString(c.F0)
-		l = c.F1.force()
+	for l != nil {
+		sb.WriteString(l.F0)
+		l = l.F1.force()
 	}
+	return sb.String()
 }
 
 // Haskell's div and mod round towards negative infinity.
@@ -255,14 +250,11 @@ func rt_mod(a, b int) int {
 
 func rt_pack(l List[rune]) string {
 	var sb rt_strings.Builder
-	for {
-		c, ok := l.(Cons[rune])
-		if !ok {
-			return sb.String()
-		}
-		sb.WriteRune(c.F0)
-		l = c.F1.force()
+	for l != nil {
+		sb.WriteRune(l.F0)
+		l = l.F1.force()
 	}
+	return sb.String()
 }
 
 func rt_unpack(s string) List[rune] {
@@ -270,9 +262,9 @@ func rt_unpack(s string) List[rune] {
 	var from func(i int) List[rune]
 	from = func(i int) List[rune] {
 		if i >= len(rs) {
-			return Nil[rune]{}
+			return nil
 		}
-		return Cons[rune]{rs[i], rt_lazy(func() List[rune] { return from(i + 1) })}
+		return &Cons[rune]{rs[i], rt_lazy(func() List[rune] { return from(i + 1) })}
 	}
 	return from(0)
 }
