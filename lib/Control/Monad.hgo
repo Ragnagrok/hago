@@ -42,10 +42,10 @@ zipWithM_ f xs ys = sequenceA (zipWith f xs ys) *> pure ()
 
 -- Composition of functions that give monadic results.
 (>=>) :: Monad m => (a -> m b) -> (b -> m c) -> a -> m c
-f >=> g = \x -> f x >>= g
+(f >=> g) x = f x >>= g
 
 (<=<) :: Monad m => (b -> m c) -> (a -> m b) -> a -> m c
-g <=< f = \x -> f x >>= g
+(g <=< f) x = f x >>= g
 
 liftM :: Monad m => (a -> b) -> m a -> m b
 liftM f m = m >>= \x -> pure (f x)
