@@ -8,14 +8,14 @@ import (
 	rt_fmt "fmt"
 	rt_iter "iter"
 	rt_big "math/big"
-	rt_filepath "path/filepath"
-	rt_time "time"
 	rt_os "os"
+	rt_filepath "path/filepath"
 	rt_slices "slices"
 	rt_strconv "strconv"
 	rt_strings "strings"
 	rt_sync "sync"
 	rt_atomic "sync/atomic"
+	rt_time "time"
 )
 
 // --- runtime ---
@@ -28,8 +28,6 @@ type Cons[T any] struct {
 	F1 *rt_thunk[List[T]]
 }
 
-
-
 // Every runtime import is used even if the program never prints.
 var _ = rt_fmt.Sprint
 
@@ -40,7 +38,8 @@ var _ = rt_sync.OnceValue[int]
 var _ = rt_big.NewInt
 var _ = rt_filepath.Base
 var _ = rt_time.Now
-func rt_error[T any](msg string) T       { panic(msg) }
+
+func rt_error[T any](msg string) T { panic(msg) }
 
 // A program that fails (error, a division by zero) says why on standard
 // error and exits with status 1, without Go's trace of the goroutines.
@@ -273,15 +272,15 @@ func rt_integerParse(s string) (*rt_big.Int, error) {
 	return z, nil
 }
 
-func rt_integerAdd(a, b *rt_big.Int) *rt_big.Int { return new(rt_big.Int).Add(a, b) }
-func rt_integerSub(a, b *rt_big.Int) *rt_big.Int { return new(rt_big.Int).Sub(a, b) }
-func rt_integerMul(a, b *rt_big.Int) *rt_big.Int { return new(rt_big.Int).Mul(a, b) }
-func rt_integerNeg(a *rt_big.Int) *rt_big.Int    { return new(rt_big.Int).Neg(a) }
+func rt_integerAdd(a, b *rt_big.Int) *rt_big.Int  { return new(rt_big.Int).Add(a, b) }
+func rt_integerSub(a, b *rt_big.Int) *rt_big.Int  { return new(rt_big.Int).Sub(a, b) }
+func rt_integerMul(a, b *rt_big.Int) *rt_big.Int  { return new(rt_big.Int).Mul(a, b) }
+func rt_integerNeg(a *rt_big.Int) *rt_big.Int     { return new(rt_big.Int).Neg(a) }
 func rt_integerQuot(a, b *rt_big.Int) *rt_big.Int { return new(rt_big.Int).Quo(a, b) }
 func rt_integerRem(a, b *rt_big.Int) *rt_big.Int  { return new(rt_big.Int).Rem(a, b) }
-func rt_integerCompare(a, b *rt_big.Int) int     { return a.Cmp(b) }
-func rt_integerShow(a *rt_big.Int) string        { return a.String() }
-func rt_integerToInt(a *rt_big.Int) int          { return int(a.Int64()) }
+func rt_integerCompare(a, b *rt_big.Int) int      { return a.Cmp(b) }
+func rt_integerShow(a *rt_big.Int) string         { return a.String() }
+func rt_integerToInt(a *rt_big.Int) int           { return int(a.Int64()) }
 
 func rt_integerToDouble(a *rt_big.Int) float64 {
 	f, _ := new(rt_big.Float).SetInt(a).Float64()
@@ -645,3 +644,71 @@ func rt_iterChars(s string) rt_iter.Seq[rune] {
 		}
 	}
 }
+
+// Data.Ratio: a Rational is a *big.Rat that is never modified, always in
+// lowest terms with a positive denominator.
+func rt_ratMake(n, d *rt_big.Int) *rt_big.Rat {
+	if d.Sign() == 0 {
+		panic("division by zero")
+	}
+	return new(rt_big.Rat).SetFrac(n, d)
+}
+
+func rt_ratFromInt(n int) *rt_big.Rat             { return new(rt_big.Rat).SetInt64(int64(n)) }
+func rt_ratFromInteger(n *rt_big.Int) *rt_big.Rat { return new(rt_big.Rat).SetInt(n) }
+
+// The exact value of a Double: 0.1 is 3602879701896397 % 36028797018963968.
+func rt_ratFromDouble(x float64) *rt_big.Rat {
+	r := new(rt_big.Rat)
+	if r.SetFloat64(x) == nil {
+		panic("a Rational from a Double that is not a number or is infinite")
+	}
+	return r
+}
+
+func rt_ratAdd(a, b *rt_big.Rat) *rt_big.Rat { return new(rt_big.Rat).Add(a, b) }
+func rt_ratSub(a, b *rt_big.Rat) *rt_big.Rat { return new(rt_big.Rat).Sub(a, b) }
+func rt_ratMul(a, b *rt_big.Rat) *rt_big.Rat { return new(rt_big.Rat).Mul(a, b) }
+func rt_ratNeg(a *rt_big.Rat) *rt_big.Rat    { return new(rt_big.Rat).Neg(a) }
+
+func rt_ratQuo(a, b *rt_big.Rat) *rt_big.Rat {
+	if b.Sign() == 0 {
+		panic("division by zero")
+	}
+	return new(rt_big.Rat).Quo(a, b)
+}
+
+func rt_ratCompare(a, b *rt_big.Rat) int          { return a.Cmp(b) }
+func rt_ratNumerator(a *rt_big.Rat) *rt_big.Int   { return new(rt_big.Int).Set(a.Num()) }
+func rt_ratDenominator(a *rt_big.Rat) *rt_big.Int { return new(rt_big.Int).Set(a.Denom()) }
+
+func rt_ratToDouble(a *rt_big.Rat) float64 {
+	f, _ := a.Float64()
+	return f
+}
+
+// Data.Time: a Time is Go's time.Time.
+func rt_timeNow() rt_time.Time { return rt_time.Now() }
+
+// Seconds from the second time to the first.
+func rt_timeDiff(a, b rt_time.Time) float64 { return a.Sub(b).Seconds() }
+
+func rt_timeAdd(seconds float64, t rt_time.Time) rt_time.Time {
+	return t.Add(rt_time.Duration(seconds * float64(rt_time.Second)))
+}
+
+func rt_timeFromUnix(seconds int) rt_time.Time           { return rt_time.Unix(int64(seconds), 0).UTC() }
+func rt_timeUnix(t rt_time.Time) int                     { return int(t.Unix()) }
+func rt_timeUTC(t rt_time.Time) rt_time.Time             { return t.UTC() }
+func rt_timeLocal(t rt_time.Time) rt_time.Time           { return t.Local() }
+func rt_timeFormat(layout string, t rt_time.Time) string { return t.Format(layout) }
+
+func rt_timeParse(layout, s string) (rt_time.Time, error) { return rt_time.Parse(layout, s) }
+
+func rt_timeYear(t rt_time.Time) int    { return t.Year() }
+func rt_timeMonth(t rt_time.Time) int   { return int(t.Month()) }
+func rt_timeDay(t rt_time.Time) int     { return t.Day() }
+func rt_timeHour(t rt_time.Time) int    { return t.Hour() }
+func rt_timeMinute(t rt_time.Time) int  { return t.Minute() }
+func rt_timeSecond(t rt_time.Time) int  { return t.Second() }
+func rt_timeWeekday(t rt_time.Time) int { return int(t.Weekday()) }

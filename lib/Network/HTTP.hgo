@@ -1,0 +1,23 @@
+-- Asking web servers for pages, with Go's net/http: get and post, with the
+-- whole answer read. An error is a failure to reach the server; an answer
+-- with any status, 404 included, is a Response.
+module Network.HTTP (Response (..), get, post) where
+
+data Response = Response {status :: Int, body :: String}
+  deriving (Eq, Show)
+
+foreign import go type "rt_HttpResponse" GoResponse
+foreign import go "rt_httpGet" goGet :: String -> IO (Either String GoResponse)
+foreign import go "rt_httpPost" goPost :: String -> String -> String -> IO (Either String GoResponse)
+foreign import go ".Status" goStatus :: GoResponse -> Int
+foreign import go ".Body" goBody :: GoResponse -> String
+
+response :: GoResponse -> Response
+response r = Response {status = goStatus r, body = goBody r}
+
+get :: String -> IO (Either String Response)
+get url = fmap (fmap response) (goGet url)
+
+-- post url contentType body
+post :: String -> String -> String -> IO (Either String Response)
+post url contentType content = fmap (fmap response) (goPost url contentType content)

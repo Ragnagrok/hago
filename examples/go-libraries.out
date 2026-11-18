@@ -1,0 +1,23 @@
+(1 % 2,1 % 1,(-3) % 4,1 % 2)
+(3,4,7381 % 2520,0.125)
+(1 % 2,False,LT,True)
+2026-11-18T11:06:40Z
+(2026,11,18,3)
+Wednesday, Nov 18, 2026 at 11:06
+(90.0,True)
+(Right 2026-11-18T00:00:00Z,"not a date")
+(True,Just "ada@example.com")
+fromList ["ada@example.com","alan@test.org"]
+(Just (fromList ["ada@example.com","ada","example.com"]),Nothing)
+write to <ada at example.com> or <alan at test.org>
+write to moc.elpmaxe@ada or gro.tset@nala
+error parsing regexp: missing closing ): `a(b`
+fromList ["a","b","c","d"]
+1, 2, 3, 4, 5.
+20000
+513392b9b02ffab72520a7c1fa866b6c811cc38711ab98fedd9ecccd1a5738f1
+8d3a5a2c5d553d26e8747dac0a04a97b3180b943
+("aGFnbywgc3RyaWN0bHk=",Right "hago",Left "illegal base64 data at input byte 0")
+("6869",Right "hi",Left "encoding/hex: invalid byte: U+007A 'z'")
+Right "LOUD\n"
+Left "false: exit status 1"

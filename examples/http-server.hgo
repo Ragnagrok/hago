@@ -3,13 +3,12 @@
 -- the visits are counted in an MVar.
 import Control.Concurrent
 import Control.Concurrent.Async
+import qualified Network.HTTP as HTTP
 
 foreign import go type "net.Listener" Listener
 foreign import go type "*net/http.ServeMux" ServeMux
 foreign import go type "net/http.ResponseWriter" ResponseWriter
 foreign import go type "*net/http.Request" Request
-foreign import go type "*net/http.Response" Response
-foreign import go type "[]byte" Bytes
 
 foreign import go "net.Listen" listen :: String -> String -> IO (Either String Listener)
 foreign import go ".Addr().String()" address :: Listener -> String
@@ -19,32 +18,17 @@ foreign import go "net/http.Serve" serve :: Listener -> ServeMux -> IO (Either S
 foreign import go ".URL.Query().Get" queryParam :: Request -> String -> String
 foreign import go "fmt.Fprint" write :: ResponseWriter -> String -> IO ()
 
-foreign import go "net/http.Get" get :: String -> IO (Either String Response)
-foreign import go ".StatusCode" statusCode :: Response -> Int
-foreign import go "string" bytesToString :: Bytes -> String
-
--- io.ReadAll wants the body, a field of the response
-foreign import go ".Body" body :: Response -> Body
-foreign import go type "io.ReadCloser" Body
-foreign import go "io.ReadAll" readAll :: Body -> IO (Either String Bytes)
-foreign import go ".Close()" closeBody :: Body -> IO ()
-
 greet :: MVar Int -> ResponseWriter -> Request -> IO ()
 greet visits w r = do
   modifyMVar_ visits (pure . (+ 1))
   let name = queryParam r "name"
   write w ("hello, " ++ (if name == "" then "stranger" else name))
 
+-- Network.HTTP is the client; the server above uses net/http directly
 fetch :: String -> IO String
 fetch url = do
-  answer <- get url
-  case answer of
-    Left err -> pure ("failed: " ++ err)
-    Right response -> do
-      let b = body response
-      text <- readAll b
-      closeBody b
-      pure (show (statusCode response) ++ " " ++ either id bytesToString text)
+  answer <- HTTP.get url
+  pure (either ("failed: " ++) (\r -> show r.status ++ " " ++ r.body) answer)
 
 main :: IO ()
 main = do

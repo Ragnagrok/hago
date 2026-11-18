@@ -250,6 +250,13 @@ del programa con el mismo nombre tiene prioridad):
 | `Data.Set` | lo mismo para conjuntos: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; conviene importarlo calificado |
 | `Data.Vector` | `Vector a`, un slice de Go que Hago nunca modifica: `fromList`, `!?`, `generate`, `map`, `imap`, `filter`, `foldl`, `slice` (sin copiar), `sort`, `sortOn`, `zipWith`, `Foldable`; se importa calificado |
 | `Data.Iter` | `Iter a`, el `iter.Seq` de Go: `from`, `range`, `iterate`, `lines`, `words`, `map`, `filter`, `takeWhile`, `take`, `zipWith`, `foldl`, `sum`, `find`, `mapM_`; se importa calificado |
+| `Data.Ratio` | `Rational` (el `*big.Rat` de Go), exacto: `%`, `numerator`, `denominator`, `Num`, `Fractional`, `fromRational`, `toRational` |
+| `Data.String.Builder` | `Builder`, un `Monoid` de pedazos que `toString` une en una pasada, para textos largos armados de muchos pedazos |
+| `Text.Regex` | el `regexp` de Go (RE2, tiempo lineal): `compile`, `matches`, `find`, `findAll`, `groups`, `replaceAll` (con `$1`), `replaceAllWith`, `split`; se importa calificado |
+| `Data.Time` | el `time.Time` de Go: `getCurrentTime`, `diffSeconds`, `addSeconds`, `format` y `parse` con los layouts de Go, `year`, `month`, `day`... |
+| `Crypto.Hash`, `Data.Encoding` | `sha1`, `sha256`, `sha512` en hexadecimal; `base64Encode`, `base64Decode`, `hexEncode`, `hexDecode` |
+| `System.Process` | `readProcess`: corre un programa con argumentos y entrada, y da su salida |
+| `Network.HTTP` | `get` y `post` con el `net/http` de Go, que dan un `Response` con su `status` y su `body` |
 | `System.Environment` | `getArgs`, `getProgName` |
 | `System.IO` | `stdin`, `stdout`, `stderr`, `hPutStrLn`, `hPrint`, `isEOF`, y el resto de los nombres de Haskell para los tres handles estándar |
 | `System.Exit` | `exitWith`, `exitSuccess`, `exitFailure` |
@@ -683,6 +690,7 @@ Haskell 98.
 | `runtime/runtime.go` | listas e IO con trampolín; se copia en cada programa |
 | `runtime/thunk_sequential.go` | thunks para un programa en una sola goroutine |
 | `runtime/concurrent.go` | thunks que cualquier goroutine puede forzar, hilos, MVars, canales, `select` y `parMap`, para un programa que los usa |
+| `runtime/lib_*.go` | lo que necesitan los hashes, las codificaciones, los procesos y el cliente HTTP; se copia sólo en un programa que lo usa, para que no todo programa importe `net/http` o `crypto` |
 | `prelude/Prelude.hgo` | el prelude, escrito en Hago |
 | `lib/` | la biblioteca estándar (`Control.Monad.State` y compañía), escrita en Hago |
 

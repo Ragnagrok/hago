@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 
 cabal build -v0 exe:hago
 # the runtime, in both versions (see runtime/concurrent.go)
-(cd runtime && go vet runtime.go thunk_sequential.go && go vet -tags hago_concurrent runtime.go concurrent.go)
+(cd runtime && go vet runtime.go thunk_sequential.go lib_*.go && go vet -tags hago_concurrent runtime.go concurrent.go)
 hago=$(cabal list-bin -v0 exe:hago)
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT

@@ -1,0 +1,50 @@
+-- Fractions, exact: 1 % 3 + 1 % 6 is 1 % 2, never 0.49999. A Rational is a
+-- numerator and a denominator of any size (Go's *big.Rat), always in lowest
+-- terms. Arithmetic on it is exact, and slower than on Double.
+module Data.Ratio (Rational, (%), numerator, denominator, fromRational, toRational) where
+
+foreign import go type "*math/big.Rat" Rational
+
+foreign import go "rt_ratMake" (%) :: Integer -> Integer -> Rational
+
+infixl 7 %
+
+foreign import go "rt_ratNumerator" numerator :: Rational -> Integer
+foreign import go "rt_ratDenominator" denominator :: Rational -> Integer
+
+-- The Double nearest to a Rational.
+foreign import go "rt_ratToDouble" fromRational :: Rational -> Double
+
+-- The exact value of a Double: toRational 0.1 is not 1 % 10.
+foreign import go "rt_ratFromDouble" toRational :: Double -> Rational
+
+foreign import go "rt_ratFromInt" fromInt :: Int -> Rational
+foreign import go "rt_ratAdd" add :: Rational -> Rational -> Rational
+foreign import go "rt_ratSub" sub :: Rational -> Rational -> Rational
+foreign import go "rt_ratMul" mul :: Rational -> Rational -> Rational
+foreign import go "rt_ratQuo" quo :: Rational -> Rational -> Rational
+foreign import go "rt_ratNeg" neg :: Rational -> Rational
+foreign import go "rt_ratCompare" compareRat :: Rational -> Rational -> Int
+
+instance Eq Rational where
+  x == y = compareRat x y == 0
+
+instance Ord Rational where
+  compare x y = compare (compareRat x y) 0
+
+instance Show Rational where
+  show x = showsPrec 0 x
+  showsPrec d x =
+    let s = showsPrec 7 (numerator x) ++ " % " ++ show (denominator x)
+     in if d > 7 then "(" ++ s ++ ")" else s
+
+instance Num Rational where
+  x + y = add x y
+  x - y = sub x y
+  x * y = mul x y
+  negate x = neg x
+  fromInteger n = fromInt n
+
+instance Fractional Rational where
+  x / y = quo x y
+  fromDouble x = toRational x

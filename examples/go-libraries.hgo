@@ -1,0 +1,50 @@
+-- Libraries built on Go's: exact fractions, times, regular expressions, a
+-- string builder, hashes, encodings, and other programs.
+import Data.Ratio
+import qualified Data.Time as Time
+import qualified Text.Regex as Regex
+import qualified Data.String.Builder as Builder
+import qualified Crypto.Hash as Hash
+import Data.Encoding
+import System.Process
+
+harmonic :: Integer -> Rational
+harmonic n = sum [1 % k | k <- [1 .. n]]
+
+main :: IO ()
+main = do
+  -- Data.Ratio
+  print (1 % 3 + 1 % 6, (3 % 4) * 2 - 1 % 2, (-3) % 4, (2 % 5) / (4 % 5))
+  print (numerator (6 % 8), denominator (6 % 8), harmonic 10, fromRational (1 % 8))
+  print (toRational 0.5, toRational 0.1 == 1 % 10, compare (1 % 3) (1 % 2), [1 % 2, 2 % 4] == [2 % 4, 1 % 2])
+  -- Data.Time, at a fixed moment
+  let moment = Time.fromUnix 1795000000
+  print moment
+  print (Time.year moment, Time.month moment, Time.day moment, Time.weekday moment)
+  putStrLn (Time.format "Monday, Jan 2, 2006 at 15:04" moment)
+  print (Time.diffSeconds (Time.addSeconds 90 moment) moment, Time.addSeconds 3600 moment > moment)
+  print (Time.parse "2006-01-02" "2026-11-18", either (const "not a date") show (Time.parse "2006-01-02" "18/11"))
+  -- Text.Regex
+  case Regex.compile "([a-z]+)@([a-z.]+)" of
+    Left err -> putStrLn err
+    Right address -> do
+      let text = "write to ada@example.com or alan@test.org"
+      print (Regex.matches address text, Regex.find address text)
+      print (Regex.findAll address text)
+      print (Regex.groups address text, Regex.groups address "no address here")
+      putStrLn (Regex.replaceAll address text "<$1 at $2>")
+      putStrLn (Regex.replaceAllWith address text (\m -> pack (reverse (unpack m))))
+  putStrLn (either id (const "compiled") (Regex.compile "a(b"))
+  either putStrLn (\digits -> print (Regex.split digits "a1b22c333d")) (Regex.compile "[0-9]+")
+  -- Data.String.Builder
+  let numbers = Builder.intercalate (Builder.fromString ", ") [Builder.fromShow n | n <- [1 .. 5 :: Int]]
+  putStrLn (Builder.toString (numbers <> Builder.fromChar '.'))
+  print (length (unpack (Builder.toString (mconcat (replicate 10000 (Builder.fromString "ab"))))))
+  -- Crypto.Hash and Data.Encoding
+  putStrLn (Hash.sha256 "hago")
+  putStrLn (Hash.sha1 "hago")
+  print (base64Encode "hago, strictly", base64Decode "aGFnbw==", base64Decode "!!")
+  print (hexEncode "hi", hexDecode "6869", hexDecode "zz")
+  -- System.Process
+  readProcess "tr" ["a-z", "A-Z"] "loud\n" >>= print
+  readProcess "false" [] "" >>= print

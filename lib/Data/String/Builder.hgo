@@ -1,0 +1,33 @@
+-- Building a long String from many pieces. Joining two Strings copies both,
+-- so a text built by adding pieces one by one takes time that grows with
+-- the square of its length. A Builder keeps the pieces, and toString joins
+-- them all at once, in time that grows with the length.
+module Data.String.Builder (Builder, fromString, fromChar, fromShow, toString, intercalate) where
+
+import qualified Data.String as S
+
+-- The pieces, as a function that puts them in front of the ones after.
+newtype Builder = Builder ([String] -> [String])
+
+fromString :: String -> Builder
+fromString s = Builder (\rest -> s : rest)
+
+fromChar :: Char -> Builder
+fromChar c = fromString (pack [c])
+
+fromShow :: Show a => a -> Builder
+fromShow x = fromString (show x)
+
+toString :: Builder -> String
+toString (Builder pieces) = S.concat (pieces [])
+
+instance Semigroup Builder where
+  Builder f <> Builder g = Builder (\rest -> f (g rest))
+
+instance Monoid Builder where
+  mempty = Builder (\rest -> rest)
+
+-- The builders, with another between each two.
+intercalate :: Builder -> [Builder] -> Builder
+intercalate _ [] = mempty
+intercalate sep (b : bs) = b <> mconcat [sep <> x | x <- bs]

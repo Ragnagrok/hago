@@ -1,0 +1,51 @@
+-- Points in time, Go's time.Time: the current time, the seconds between two,
+-- and dates written and read. A Time knows its time zone; utc and local
+-- give the same moment in UTC and in the computer's zone.
+module Data.Time
+  ( Time, getCurrentTime, diffSeconds, addSeconds, fromUnix, toUnix, utc, local
+  , format, parse, iso8601, year, month, day, hour, minute, second, weekday
+  ) where
+
+foreign import go type "time.Time" Time
+
+foreign import go "rt_timeNow" getCurrentTime :: IO Time
+
+-- The seconds from the second time to the first: diffSeconds later earlier.
+foreign import go "rt_timeDiff" diffSeconds :: Time -> Time -> Double
+foreign import go "rt_timeAdd" addSeconds :: Double -> Time -> Time
+
+-- Seconds since 1970-01-01 00:00 UTC, and back.
+foreign import go "rt_timeFromUnix" fromUnix :: Int -> Time
+foreign import go "rt_timeUnix" toUnix :: Time -> Int
+
+foreign import go "rt_timeUTC" utc :: Time -> Time
+foreign import go "rt_timeLocal" local :: Time -> Time
+
+-- Go's way of writing a layout: the reference time, Mon Jan 2 15:04:05 MST
+-- 2006, written the way the result should look. "2006-01-02" is a date,
+-- "15:04" an hour and minutes, "Jan 2, 2006" a date in words.
+foreign import go "rt_timeFormat" format :: String -> Time -> String
+foreign import go "rt_timeParse" parse :: String -> String -> Either String Time
+
+-- 2026-11-18T07:00:13Z, the form RFC 3339 and most programs use.
+iso8601 :: Time -> String
+iso8601 t = format "2006-01-02T15:04:05Z07:00" t
+
+foreign import go "rt_timeYear" year :: Time -> Int
+foreign import go "rt_timeMonth" month :: Time -> Int
+foreign import go "rt_timeDay" day :: Time -> Int
+foreign import go "rt_timeHour" hour :: Time -> Int
+foreign import go "rt_timeMinute" minute :: Time -> Int
+foreign import go "rt_timeSecond" second :: Time -> Int
+
+-- 0 for Sunday, 1 for Monday... 6 for Saturday.
+foreign import go "rt_timeWeekday" weekday :: Time -> Int
+
+instance Eq Time where
+  a == b = diffSeconds a b == 0
+
+instance Ord Time where
+  compare a b = compare (diffSeconds a b) 0
+
+instance Show Time where
+  show t = iso8601 t

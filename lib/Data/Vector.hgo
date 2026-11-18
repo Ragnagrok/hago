@@ -111,6 +111,7 @@ foreign import go "rt_vecFromIter" fromIter :: Iter a -> Vector a
 
 instance Show a => Show (Vector a) where
   show v = "fromList " ++ show (toList v)
+  showsPrec d v = showParenString (d > 10) ("fromList " ++ show (toList v))
 
 instance Eq a => Eq (Vector a) where
   a == b = length a == length b && all id (zipWith (==) a b)

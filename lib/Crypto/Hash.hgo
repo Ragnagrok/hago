@@ -1,0 +1,8 @@
+-- Hashes of a String's bytes, in hexadecimal: SHA-1 (only for checking data
+-- against what other programs give; it is broken for security), SHA-256
+-- and SHA-512.
+module Crypto.Hash (sha1, sha256, sha512) where
+
+foreign import go "rt_sha1Hex" sha1 :: String -> String
+foreign import go "rt_sha256Hex" sha256 :: String -> String
+foreign import go "rt_sha512Hex" sha512 :: String -> String

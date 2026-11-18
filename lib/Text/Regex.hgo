@@ -1,0 +1,54 @@
+-- Regular expressions, Go's regexp: the syntax of RE2, as Go documents it.
+-- Matching takes time proportional to the text, whatever the expression,
+-- because RE2 has no back-references. Import it qualified:
+-- import qualified Text.Regex as Regex.
+module Text.Regex
+  ( Regex, compile, matches, find, findAll, groups, allGroups
+  , replaceAll, replaceAllWith, split
+  ) where
+
+import Data.Vector (Vector)
+import qualified Data.Vector as Vector
+
+foreign import go type "*regexp.Regexp" Regex
+
+-- An expression, or why it is not one.
+foreign import go "regexp.Compile" compile :: String -> Either String Regex
+
+-- Whether the expression matches somewhere in the text.
+foreign import go ".MatchString" matches :: Regex -> String -> Bool
+
+foreign import go ".FindStringIndex" goFindIndex :: Regex -> String -> Vector Int
+foreign import go ".FindString" goFind :: Regex -> String -> String
+foreign import go ".FindAllString" goFindAll :: Regex -> String -> Int -> Vector String
+foreign import go ".FindStringSubmatch" goGroups :: Regex -> String -> Vector String
+foreign import go ".FindAllStringSubmatch" goAllGroups :: Regex -> String -> Int -> Vector (Vector String)
+
+-- The first match.
+find :: Regex -> String -> Maybe String
+find r s = if Vector.null (goFindIndex r s) then Nothing else Just (goFind r s)
+
+-- Every match, from left to right, without overlapping.
+findAll :: Regex -> String -> Vector String
+findAll r s = goFindAll r s (-1)
+
+-- The first match and its groups: the whole match first, then what each
+-- pair of parentheses matched.
+groups :: Regex -> String -> Maybe (Vector String)
+groups r s = let g = goGroups r s in if Vector.null g then Nothing else Just g
+
+-- The groups of every match.
+allGroups :: Regex -> String -> Vector (Vector String)
+allGroups r s = goAllGroups r s (-1)
+
+-- Replaces every match; $1 in the replacement is the first group.
+foreign import go ".ReplaceAllString" replaceAll :: Regex -> String -> String -> String
+
+-- Replaces every match with what a function makes of it.
+foreign import go ".ReplaceAllStringFunc" replaceAllWith :: Regex -> String -> (String -> String) -> String
+
+foreign import go ".Split" goSplit :: Regex -> String -> Int -> Vector String
+
+-- The pieces of the text between the matches.
+split :: Regex -> String -> Vector String
+split r s = goSplit r s (-1)

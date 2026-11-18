@@ -5,12 +5,13 @@
 -- generation.
 module Hago.Driver (Virtual, compileFile, checkProgram, generateProgram, quoteSource, quoteIn) where
 
+import Control.Applicative ((<|>))
 import Control.Monad (foldM)
 import Data.Char (isAlphaNum, isDigit)
 import Data.List (intercalate, isPrefixOf, stripPrefix)
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Hago.CodeGen (generate)
+import Hago.CodeGen (Runtime (..), RuntimePart (..), generate)
 import Hago.Derive (expandDeriving)
 import Hago.Embed (embedFile)
 import Hago.Expand (expandSynonyms, synonymsOf)
@@ -49,6 +50,14 @@ libraryModules = M.fromList
   , ("Control.Parallel", $(embedFile "lib/Control/Parallel.hgo"))
   , ("Data.Vector", $(embedFile "lib/Data/Vector.hgo"))
   , ("Data.Iter", $(embedFile "lib/Data/Iter.hgo"))
+  , ("Data.Ratio", $(embedFile "lib/Data/Ratio.hgo"))
+  , ("Data.Time", $(embedFile "lib/Data/Time.hgo"))
+  , ("Text.Regex", $(embedFile "lib/Text/Regex.hgo"))
+  , ("Data.String.Builder", $(embedFile "lib/Data/String/Builder.hgo"))
+  , ("Crypto.Hash", $(embedFile "lib/Crypto/Hash.hgo"))
+  , ("Data.Encoding", $(embedFile "lib/Data/Encoding.hgo"))
+  , ("System.Process", $(embedFile "lib/System/Process.hgo"))
+  , ("Network.HTTP", $(embedFile "lib/Network/HTTP.hgo"))
   , ("Data.String", $(embedFile "lib/Data/String.hgo"))
   , ("Data.Char", $(embedFile "lib/Data/Char.hgo"))
   , ("Data.Monoid", $(embedFile "lib/Data/Monoid.hgo"))
@@ -71,11 +80,29 @@ runtimeSource concurrent = body shared ++ body (if concurrent then conc else seq
 concurrentRuntime :: String
 concurrentRuntime = $(embedFile "runtime/concurrent.go")
 
--- | The functions only the concurrent runtime has: a program that calls one
--- gets it.
-concurrentSymbols :: [String]
-concurrentSymbols =
-  [takeWhile (\c -> isAlphaNum c || c == '_') rest | l <- lines concurrentRuntime, Just rest <- [stripPrefix "func rt_" l >>= Just . ("rt_" ++)]]
+-- | The runtime, with the parts a program gets only if it uses them.
+runtime :: Runtime
+runtime = Runtime
+  { rtCore = runtimeSource
+  , rtConcurrentSymbols = definedIn concurrentRuntime
+  , rtParts = map part
+      [ $(embedFile "runtime/lib_codec.go")
+      , $(embedFile "runtime/lib_process.go")
+      , $(embedFile "runtime/lib_http.go") ]
+  }
+  where
+    part src = RuntimePart (afterMarker src) (definedIn src) (importsOf src)
+    afterMarker src = unlines (drop 1 (dropWhile (not . ("// --- runtime ---" `isPrefixOf`)) (lines src)))
+    -- the lines of the import block, as "rt_http \"net/http\""
+    importsOf src =
+      [ unwords (words l) | l <- takeWhile (/= ")") (drop 1 (dropWhile (/= "import (") (lines src))) ]
+
+-- | The functions and types a part of the runtime defines.
+definedIn :: String -> [String]
+definedIn src =
+  [ takeWhile (\c -> isAlphaNum c || c == '_') rest
+  | l <- lines src
+  , Just rest <- [fmap ("rt_" ++) (stripPrefix "func rt_" l <|> stripPrefix "type rt_" l)] ]
 
 -- | Eq, Ord, Show, Bounded and Read for every size of tuple, written out as
 -- Prelude source.
@@ -155,7 +182,7 @@ generateProgram file modules = do
     (c, k) : _ -> Left (file ++ ": two modules define the instance " ++ c ++ " " ++ k)
     [] -> pure ()
   prog <- either (Left . ((file ++ ": ") ++)) Right (specialize (sinkLocals (programOf (mconcat checked))))
-  pure (generate runtimeSource concurrentSymbols (eraseNewtypes prog))
+  pure (generate runtime (eraseNewtypes prog))
 
 -- | Compiles each module, dependencies first, reusing what the cache keeps
 -- for a module whose source and imports have not changed. Each module is

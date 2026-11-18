@@ -239,6 +239,13 @@ program with the same name comes first):
 | `Data.Set` | the same for sets: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; import it qualified |
 | `Data.Vector` | `Vector a`, a Go slice Hago never changes: `fromList`, `!?`, `generate`, `map`, `imap`, `filter`, `foldl`, `slice` (without copying), `sort`, `sortOn`, `zipWith`, `Foldable`; import it qualified |
 | `Data.Iter` | `Iter a`, Go's `iter.Seq`: `from`, `range`, `iterate`, `lines`, `words`, `map`, `filter`, `takeWhile`, `take`, `zipWith`, `foldl`, `sum`, `find`, `mapM_`; import it qualified |
+| `Data.Ratio` | `Rational` (Go's `*big.Rat`), exact: `%`, `numerator`, `denominator`, `Num`, `Fractional`, `fromRational`, `toRational` |
+| `Data.String.Builder` | `Builder`, a `Monoid` of pieces joined in one pass by `toString`, for long texts built from many pieces |
+| `Text.Regex` | Go's `regexp` (RE2, linear time): `compile`, `matches`, `find`, `findAll`, `groups`, `replaceAll` (with `$1`), `replaceAllWith`, `split`; import it qualified |
+| `Data.Time` | Go's `time.Time`: `getCurrentTime`, `diffSeconds`, `addSeconds`, `format` and `parse` with Go's layouts, `year`, `month`, `day`... |
+| `Crypto.Hash`, `Data.Encoding` | `sha1`, `sha256`, `sha512` in hexadecimal; `base64Encode`, `base64Decode`, `hexEncode`, `hexDecode` |
+| `System.Process` | `readProcess`: runs a program with arguments and input, and gives its output |
+| `Network.HTTP` | `get` and `post` with Go's `net/http`, giving a `Response` with its `status` and `body` |
 | `System.Environment` | `getArgs`, `getProgName` |
 | `System.IO` | `stdin`, `stdout`, `stderr`, `hPutStrLn`, `hPrint`, `isEOF`, and the rest of Haskell's names for the three standard handles |
 | `System.Exit` | `exitWith`, `exitSuccess`, `exitFailure` |
@@ -656,6 +663,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `runtime/runtime.go` | lists and trampolined IO, copied into every program |
 | `runtime/thunk_sequential.go` | thunks for a program on one goroutine |
 | `runtime/concurrent.go` | thunks any goroutine can force, threads, MVars, channels, `select`, `parMap`, for a program that uses them |
+| `runtime/lib_*.go` | what hashes, encodings, processes and the HTTP client need, copied only into a program that uses it, so that every program does not import `net/http` or `crypto` |
 | `prelude/Prelude.hgo` | the prelude, written in Hago |
 | `lib/` | the standard library (`Control.Monad.State` and friends), written in Hago |
 

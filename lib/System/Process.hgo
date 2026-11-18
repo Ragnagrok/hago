@@ -1,0 +1,8 @@
+-- Running other programs.
+module System.Process (readProcess) where
+
+-- Runs a program with its arguments and what to give it on its standard
+-- input, and gives what it printed. The program is found on the PATH. A
+-- program that cannot be started or that fails is an error, with what it
+-- printed on its standard error.
+foreign import go "rt_readProcess" readProcess :: String -> [String] -> String -> IO (Either String String)

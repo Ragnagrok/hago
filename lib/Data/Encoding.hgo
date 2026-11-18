@@ -1,0 +1,8 @@
+-- Writing any bytes with a few safe characters, and back: base64 (RFC 4648,
+-- with padding) and hexadecimal.
+module Data.Encoding (base64Encode, base64Decode, hexEncode, hexDecode) where
+
+foreign import go "rt_base64Encode" base64Encode :: String -> String
+foreign import go "rt_base64Decode" base64Decode :: String -> Either String String
+foreign import go "rt_hexEncode" hexEncode :: String -> String
+foreign import go "rt_hexDecode" hexDecode :: String -> Either String String

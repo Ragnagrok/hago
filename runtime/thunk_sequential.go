@@ -40,4 +40,3 @@ func rt_lazy[T any](f func() T) *rt_thunk[T] { return &rt_thunk[T]{f: f} }
 
 // A suspension of a value already computed.
 func rt_ready[T any](v T) *rt_thunk[T] { return &rt_thunk[T]{v: v, state: 2} }
-

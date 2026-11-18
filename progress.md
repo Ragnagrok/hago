@@ -192,6 +192,17 @@ patterns and sharing; two more kinds of sequence come from Go.
       and when each fits.
 - [ ] **Ranges and comprehensions over `Iter`,** if code wants them: `[1 ..]` stays a list.
 
+Next, more of Go's library (decided 2026-11-18), the easy ones first:
+
+- [x] **`Data.Ratio`** (`*big.Rat`), **`Data.String.Builder`**, **`Text.Regex`** (`regexp`),
+      **`Data.Time`** (`time.Time`), **`Crypto.Hash`** and **`Data.Encoding`**,
+      **`System.Process`** (`os/exec`), **`Network.HTTP`** (a client). The runtime has optional
+      parts (`runtime/lib_*.go`), copied only into programs that call one of their functions,
+      so a program that does not use them does not import `net/http` or `crypto`.
+- [ ] **Mutable structures in a monad.** In `IO` first (`IORef`, a mutable vector, a hash table
+      on Go's `map` with keys limited to types Go compares by value); then `ST` with a pure
+      `runST`, which needs its rank-2 type checked by a rule of its own.
+
 Known rough edges, found on the way and not fixed yet:
 
 - [ ] **Errors in type signatures have no location** (a context with the wrong number of types, an
