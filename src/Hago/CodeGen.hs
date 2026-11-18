@@ -38,6 +38,7 @@ data Ctx = Ctx
   , cxTParams :: [Name]
   , cxProg :: Program
   , cxPending :: S.Set Name   -- ^ local variables declared but not assigned yet
+  , cxUnboxed :: M.Map Name Repr   -- ^ the data types kept by value (see 'dataReprs')
   }
 
 data GS = GS {gsNext :: Int, gsLoop :: Bool}
@@ -73,6 +74,7 @@ generate runtime prog = unlines (header ++ [runtime] ++ tupleDecls ++ dataDecls 
       , cxTParams = []
       , cxProg = prog
       , cxPending = S.empty
+      , cxUnboxed = unboxed
       }
     -- a struct for each size of tuple the program uses
     tupleDecls =
@@ -84,7 +86,8 @@ generate runtime prog = unlines (header ++ [runtime] ++ tupleDecls ++ dataDecls 
       TFun a b -> tupleSizes a ++ tupleSizes b
       TApp f x -> tupleSizes f ++ tupleSizes x
       _ -> []
-    dataDecls = concatMap (genData prog)
+    unboxed = dataReprs prog
+    dataDecls = concatMap (genData prog unboxed)
       [(n, d) | (n, d) <- M.toList (progData prog), n `notElem` ["[]", "Bool"], null (hkPositions prog n)]
     hkDecls = concatMap (genHkData prog) (hkInstances prog)
     (tops, inits) = flip evalState (GS 0 False) (unzip <$> mapM (\b -> genTop ctx0 (S.member (tbName b) deferred) b) initOrder)
@@ -284,7 +287,7 @@ genHkData prog (c, canon) =
     s = M.fromList (zip hkParams canon)
     name = instName c canon
     marker = "is" ++ name
-    ctx = Ctx M.empty Nothing params prog S.empty
+    ctx = Ctx M.empty Nothing params prog S.empty M.empty
     recv k = name ++ "_" ++ suffix k ++ (if null params then "" else "[" ++ commas (map tyVar params) ++ "]")
     suffix = conSuffix
     con k =
@@ -293,16 +296,71 @@ genHkData prog (c, canon) =
        in [ "type " ++ name ++ "_" ++ suffix k ++ tparamList params ++ " struct{ " ++ intercalate "; " fields ++ " }"
           , "func (" ++ recv k ++ ") " ++ marker ++ "() {}" ]
 
-genData :: Program -> (Name, DataInfo) -> [String]
-genData prog (n, DataInfo ps _ ks _)
+-- | How a data type is kept in Go, when it is not an interface with a
+-- struct per constructor (which costs an allocation to build and a type
+-- test to match).
+data Repr
+  = Plain    -- ^ its one constructor's struct, passed by value
+  | Tagged   -- ^ one struct, passed by value, with a tag saying which constructor and the fields of all of them
+
+-- | The data types kept by value. Not one that contains itself by value
+-- (through its fields, tuples, or other such types), which would have no
+-- size, nor one over type constructors, nor one bigger than eight words,
+-- which would be slow to copy.
+dataReprs :: Program -> M.Map Name Repr
+dataReprs prog = M.fromList [(n, repr n) | AcyclicSCC n <- stronglyConnComp [(n, n, byValue n) | n <- S.toList candidates]]
+  where
+    candidates = S.fromList
+      [ n | (n, DataInfo _ _ ks nt) <- M.toList (progData prog), not nt, not (null ks), n `notElem` ["[]", "Bool", "()"]
+      , tupleArity n == Nothing, null (hkPositions prog n), sizeOf [] n <= 8 ]
+    repr n = case diCons (progData prog M.! n) of
+      [_] -> Plain
+      _ -> Tagged
+    fieldsOf n = [(lz, t) | k <- diCons (progData prog M.! n), (lz, t) <- ciFields (progCons prog M.! k)]
+    byValue n = [c | (lz, t) <- fieldsOf n, not lz, c <- inside t]
+    inside = \case
+      TCon c ts
+        | S.member c candidates -> c : concatMap inside ts
+        | tupleArity c /= Nothing -> concatMap inside ts
+      _ -> []
+    -- in words, guessing two for a type variable; a type that contains
+    -- itself is too big
+    sizeOf seen n
+      | n `elem` seen = 100
+      | otherwise =
+          let ks = diCons (progData prog M.! n)
+           in (if length ks > 1 then 1 else 0) + sum [if lz then 1 else wordsOf (n : seen) t | (lz, t) <- fieldsOf n]
+    wordsOf seen = \case
+      TCon c ts
+        | c `elem` ["Int", "Double", "Char", "Bool", "Integer", "()", "Lazy", "IO"] -> 1
+        | tupleArity c /= Nothing -> sum (map (wordsOf seen) ts)
+        | Just di <- M.lookup c (progData prog), length (diCons di) <= 3, not (diNewtype di), null (hkPositions prog c), c `notElem` ["[]"] ->
+            min 100 (sizeOf seen c)
+        | otherwise -> 2
+      TFun _ _ -> 1
+      _ -> 2
+
+genData :: Program -> M.Map Name Repr -> (Name, DataInfo) -> [String]
+genData prog unboxed (n, DataInfo ps _ ks _)
   | n == "()" || tupleArity n /= Nothing = []
+  | Just Tagged <- M.lookup n unboxed =
+      let fields =
+            "tag uint8"
+              : [ taggedField (progCons prog M.! k) i ++ " " ++ goTy ctx (if lz then tLazy t else t)
+                | k <- ks, (i, (lz, t)) <- zip [0 :: Int ..] (ciFields (progCons prog M.! k)) ]
+       in ["type " ++ typeName n ++ tparamList ps ++ " struct{ " ++ intercalate "; " fields ++ " }"]
+  | Just Plain <- M.lookup n unboxed, [k] <- ks =
+      let ci = progCons prog M.! k
+          fields = [ "F" ++ show i ++ " " ++ goTy ctx (if lz then tLazy t else t) | (i, (lz, t)) <- zip [0 :: Int ..] (ciFields ci)]
+       in [ "type " ++ conStruct prog k ++ tparamList ps ++ " struct{ " ++ intercalate "; " fields ++ " }"
+          , "type " ++ typeName n ++ tparamList ps ++ " = " ++ conStruct prog k ++ (if null ps then "" else "[" ++ commas (map tyVar ps) ++ "]") ]
   | otherwise =
       ["type " ++ typeName n ++ tparamList ps ++ " interface{ " ++ marker ++ "() }"]
         ++ concatMap con ks
   where
     marker = "is" ++ typeName n
     recv k = conStruct prog k ++ (if null ps then "" else "[" ++ commas (map tyVar ps) ++ "]")
-    ctx = Ctx M.empty Nothing ps prog S.empty
+    ctx = Ctx M.empty Nothing ps prog S.empty M.empty
     con k =
       let ci = progCons prog M.! k
           fields = [ "F" ++ show i ++ " " ++ goTy ctx (if lz then tLazy t else t) | (i, (lz, t)) <- zip [0 :: Int ..] (ciFields ci)]
@@ -471,6 +529,13 @@ genPats ctx ((s, p) : rest) k = case p of
   CPCon "()" _ _ -> genPats ctx rest k
   CPCon k' _ subs | Just _ <- tupleArity k' ->
     genPats ctx ([(s ++ ".F" ++ show i, q) | (i, q) <- zip [0 :: Int ..] subs] ++ rest) k
+  -- the only constructor of a type kept as a struct always matches, and
+  -- one of a tagged struct is told by its tag
+  CPCon k' _ subs | Just ci <- M.lookup k' (progCons (cxProg ctx)), Just r <- M.lookup (ciType ci) (cxUnboxed ctx) -> case r of
+    Plain -> genPats ctx ([(s ++ ".F" ++ show i, q) | (i, q) <- zip [0 :: Int ..] subs] ++ rest) k
+    Tagged -> do
+      body <- genPats ctx ([(s ++ "." ++ taggedField ci i, q) | (i, q) <- zip [0 :: Int ..] subs] ++ rest) k
+      pure (["if " ++ s ++ ".tag == " ++ show (ciTag ci) ++ " {"] ++ body ++ ["}"])
   CPCon k' targs subs -> do
     let struct = conRef ctx k' targs
     if all isWild subs
@@ -534,6 +599,13 @@ genExpr ctx e = case e of
           a' <- genExpr ctx a
           b' <- genExpr ctx inner
           pure ("(" ++ a' ++ " + " ++ b' ++ ")")
+    -- the Prelude's && and ||, whose second argument is suspended, are Go's,
+    -- which only computes it when it is needed
+    CVar op _ _
+      | op `elem` ["&&", "||"], Just (VKTop 2 _ _) <- M.lookup op (cxVars ctx), [a, CDelay _ inner] <- args -> do
+          a' <- genExpr ctx a
+          b' <- genExpr ctx inner
+          pure ("(" ++ a' ++ " " ++ op ++ " " ++ b' ++ ")")
     CVar x ref t | Just ar <- knownArity x, ar > 0 ->
       genApp ctx f args (Just ar) (\as -> call ctx x ref t as) t
     CCon k targs t -> genApp ctx f args (Just (conArity k)) (\as -> pure (conValue ctx k targs as)) t
@@ -730,19 +802,24 @@ foreignCall ctx f as = case r of
     sym = snd (splitSymbol (fSymbol f))
     goCall = if fArity f == 0 && not isIO then sym else sym ++ "(" ++ commas as ++ ")"
     eitherBody t =
-      let prog = cxProg ctx
-          targsOf = case t of TCon _ ts -> typeArgs ctx ts; _ -> ""
+      let targsOf = case t of TCon _ ts -> ts; _ -> []
        in unlines
             [ "hg_v, hg_err := " ++ goCall
-            , "if hg_err != nil { return " ++ conStruct prog "Left" ++ targsOf ++ "{hg_err.Error()} }"
-            , "return " ++ conStruct prog "Right" ++ targsOf ++ "{hg_v}" ]
+            , "if hg_err != nil { return " ++ conValue ctx "Left" targsOf ["hg_err.Error()"] ++ " }"
+            , "return " ++ conValue ctx "Right" targsOf ["hg_v"] ]
 
 conValue :: Ctx -> Name -> [Type] -> [String] -> String
 conValue ctx k targs as = case k of
   "True" -> "true"
   "False" -> "false"
   "()" -> "struct{}{}"
+  _ | Just ci <- M.lookup k (progCons (cxProg ctx)), Just Tagged <- M.lookup (ciType ci) (cxUnboxed ctx) ->
+        typeName (ciType ci) ++ typeArgs ctx targs ++ "{" ++ commas (("tag: " ++ show (ciTag ci)) : [taggedField ci i ++ ": " ++ a | (i, a) <- zip [0 :: Int ..] as]) ++ "}"
   _ -> conRef ctx k targs ++ "{" ++ commas as ++ "}"
+
+-- | The field of a tagged struct that holds a constructor's i-th field.
+taggedField :: ConInfo -> Int -> String
+taggedField ci i = "K" ++ show (ciTag ci) ++ "_" ++ show i
 
 genLam :: Ctx -> [(Name, Type)] -> Type -> CExpr -> Gen String
 genLam ctx ps r body = go ps
