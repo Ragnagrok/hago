@@ -13,6 +13,7 @@ import (
 	rt_strconv "strconv"
 	rt_strings "strings"
 	rt_sync "sync"
+	rt_atomic "sync/atomic"
 )
 
 // --- runtime ---
@@ -30,41 +31,8 @@ type Cons[T any] struct {
 // Every runtime import is used even if the program never prints.
 var _ = rt_fmt.Sprint
 
-// Thunks.
-// A thunk is computed the first time it is forced and remembered. Programs
-// run on one goroutine, so it needs no lock: sync.OnceValue cost seven
-// allocations per thunk, this costs two. A thunk forced while it is being
-// computed is a value defined in terms of itself.
-type rt_thunk[T any] struct {
-	f     func() T
-	v     T
-	state uint8 // 0 not computed, 1 computing, 2 computed
-}
-
-// A Lazy a is a *rt_thunk[a]: one allocation, and the closure that computes
-// it, which is dropped once it has run.
-func (t *rt_thunk[T]) force() T {
-	if t.state == 2 {
-		return t.v
-	}
-	return t.compute()
-}
-
-func (t *rt_thunk[T]) compute() T {
-	if t.state == 1 {
-		panic("a value is defined in terms of itself")
-	}
-	t.state = 1
-	t.v = t.f()
-	t.f = nil
-	t.state = 2
-	return t.v
-}
-
-func rt_lazy[T any](f func() T) *rt_thunk[T] { return &rt_thunk[T]{f: f} }
-
-// A suspension of a value already computed.
-func rt_ready[T any](v T) *rt_thunk[T] { return &rt_thunk[T]{v: v, state: 2} }
+// Thunks are in thunk_sequential.go or thunk_concurrent.go: the compiler
+// copies the concurrent ones only into programs that start goroutines.
 
 var _ = rt_sync.OnceValue[int]
 var _ = rt_big.NewInt
@@ -111,10 +79,14 @@ func rt_then[A, B any](m IO[A], n *rt_thunk[IO[B]]) IO[B] {
 	return func() IOStep[B] { rt_run(m); return IOStep[B]{next: n.force()} }
 }
 
+// Standard input is read through one buffer, which goroutines take turns at.
 var rt_stdin = rt_bufio.NewReader(rt_os.Stdin)
+var rt_stdinMu rt_sync.Mutex
 
 var rt_getLine IO[string] = func() IOStep[string] {
+	rt_stdinMu.Lock()
 	s, _ := rt_stdin.ReadString('\n')
+	rt_stdinMu.Unlock()
 	return rt_done(rt_strings.TrimRight(s, "\r\n"))
 }
 
@@ -122,6 +94,8 @@ var rt_getLine IO[string] = func() IOStep[string] {
 // imports in the Prelude and System.Environment.
 func rt_getContents() string {
 	var sb rt_strings.Builder
+	rt_stdinMu.Lock()
+	defer rt_stdinMu.Unlock()
 	rt_stdin.WriteTo(&sb)
 	return sb.String()
 }
@@ -144,6 +118,8 @@ func rt_appendFile(path string, s string) (struct{}, error) {
 
 // Whether standard input has nothing more to read.
 func rt_isEOF() bool {
+	rt_stdinMu.Lock()
+	defer rt_stdinMu.Unlock()
 	_, err := rt_stdin.Peek(1)
 	return err != nil
 }
@@ -173,19 +149,19 @@ func rt_unsignedMod(x, n int) int { return int(uint64(x) % uint64(n)) }
 func rt_unitDouble(x int) float64 { return float64(uint64(x)>>11) / (1 << 53) }
 
 // The generator randomRIO and newStdGen draw from: seeded by the clock, or
-// by HAGO_RANDOM_SEED, which makes a run repeatable.
-var rt_globalSeed = func() int {
+// by HAGO_RANDOM_SEED, which makes a run repeatable. It is stepped
+// atomically, so goroutines that draw at once each get their own number.
+var rt_globalSeed = func() uint64 {
 	if s := rt_os.Getenv("HAGO_RANDOM_SEED"); s != "" {
 		if n, err := rt_strconv.Atoi(s); err == nil {
-			return rt_splitmixMix(n)
+			return uint64(rt_splitmixMix(n))
 		}
 	}
-	return rt_splitmixMix(int(rt_time.Now().UnixNano()))
+	return uint64(rt_splitmixMix(int(rt_time.Now().UnixNano())))
 }()
 
 func rt_nextGlobalSeed() int {
-	rt_globalSeed = rt_splitmixStep(rt_globalSeed)
-	return rt_splitmixMix(rt_globalSeed)
+	return rt_splitmixMix(int(rt_atomic.AddUint64(&rt_globalSeed, 0x9e3779b97f4a7c15)))
 }
 
 func rt_stringList(ss []string) List[string] {

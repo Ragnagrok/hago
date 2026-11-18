@@ -186,7 +186,7 @@ dataDecl = do
   key "="
   cons <- conDecl `sepBy1` key "|"
   derivs <- option [] (key "deriving" >> ((pure <$> conId) <|> parens (conId `sepBy` special ",")))
-  pure (DData (DataDecl name params cons derivs nt l))
+  pure (DData (DataDecl name params cons derivs nt l Nothing))
 
 typeDecl :: Parser Decl
 typeDecl = do
@@ -254,13 +254,22 @@ conDecl = try infixCon <|> try recordCon <|> prefixCon
 
 foreignDecl :: Parser Decl
 foreignDecl = do
+  l <- here
   key "foreign" >> key "import"
   lang <- varId
   unless (lang == "go") (fail "only `foreign import go` is supported")
+  isType <- option False (True <$ key "type")
   sym <- satisfyT (\t -> case t of TStr s -> Just s; _ -> Nothing)
-  name <- var
-  key "::"
-  DForeign sym name <$> pType
+  if isType
+    then do
+      -- foreign import go type "*net/http.Request" Request
+      name <- conId
+      params <- many varId
+      pure (DData (DataDecl name params [] [] False l (Just sym)))
+    else do
+      name <- var
+      key "::"
+      DForeign sym name <$> pType
 
 -- | Declarations allowed in let/where and at the top: signatures, fixity
 -- declarations, function clauses and pattern bindings.

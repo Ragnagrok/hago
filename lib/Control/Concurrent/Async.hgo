@@ -1,0 +1,58 @@
+-- Running actions at the same time and waiting for their results, without
+-- handling threads: async starts one, wait gives its result.
+--
+-- Unlike Haskell's async, a thread cannot be stopped from outside (see
+-- Control.Concurrent), so race does not cancel the action that loses: it
+-- runs to the end, and its result is dropped.
+module Control.Concurrent.Async
+  ( Async, async, wait, poll, concurrently, race
+  , mapConcurrently, mapConcurrently_, forConcurrently, forConcurrently_
+  ) where
+
+import Control.Concurrent
+
+-- An action running on its own thread, and the box its result goes to.
+newtype Async a = Async (MVar a)
+
+async :: IO a -> IO (Async a)
+async action = do
+  box <- newEmptyMVar
+  forkIO (action >>= putMVar box)
+  pure (Async box)
+
+-- Waits for the result.
+wait :: Async a -> IO a
+wait (Async box) = readMVar box
+
+-- The result, if the action has finished.
+poll :: Async a -> IO (Maybe a)
+poll (Async box) = tryReadMVar box
+
+-- Both actions at the same time; both results.
+concurrently :: IO a -> IO b -> IO (a, b)
+concurrently a b = do
+  first <- async a
+  y <- b
+  x <- wait first
+  pure (x, y)
+
+-- Both actions at the same time; the result of the first to finish.
+race :: IO a -> IO b -> IO (Either a b)
+race a b = do
+  box <- newEmptyMVar
+  forkIO (a >>= \x -> tryPutMVar box (Left x) >> pure ())
+  forkIO (b >>= \y -> tryPutMVar box (Right y) >> pure ())
+  takeMVar box
+
+-- The action on every element, all at the same time; the results in order.
+mapConcurrently :: (a -> IO b) -> [a] -> IO [b]
+mapConcurrently f xs = mapM (async . f) xs >>= mapM wait
+
+mapConcurrently_ :: (a -> IO b) -> [a] -> IO ()
+mapConcurrently_ f xs = mapConcurrently f xs >> pure ()
+
+forConcurrently :: [a] -> (a -> IO b) -> IO [b]
+forConcurrently xs f = mapConcurrently f xs
+
+forConcurrently_ :: [a] -> (a -> IO b) -> IO ()
+forConcurrently_ xs f = mapConcurrently_ f xs

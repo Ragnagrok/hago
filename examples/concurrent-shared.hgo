@@ -1,0 +1,15 @@
+-- A lazy list shared by threads: its cells are computed by whichever thread
+-- needs them first, once, and the others see the same values.
+import Control.Concurrent.Async
+
+primes :: [Int]
+primes = sieve [2 ..]
+  where
+    sieve (p : xs) = p : sieve [x | x <- xs, x `mod` p /= 0]
+    sieve [] = []
+
+main :: IO ()
+main = do
+  sums <- mapConcurrently (\k -> pure (sum (take k primes))) [100, 200, 300, 400, 500, 600]
+  print sums
+  print (sums == map (\k -> sum (take k primes)) [100, 200, 300, 400, 500, 600])

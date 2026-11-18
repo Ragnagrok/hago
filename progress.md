@@ -144,6 +144,32 @@ Next, found by the JSON program:
       parser that takes a run (`takeWhileP`), instead of one `satisfy` per character.
 - [ ] **Decide whether `Text.Parser` and `Text.Pretty` belong in the library.**
 
+Next, concurrency (decided 2026-11-18), in this order:
+
+- [x] **A runtime safe on several goroutines.** Two versions of the thunks: a program that uses
+      concurrency gets ones with a lock, taken only to compute, and an atomic load once computed
+      (2% slower on the lazy list benchmark); the others keep the ones without. The global
+      random seed is stepped atomically, and standard input is read under a lock. A failure in
+      any thread ends the program with `error:`. A deadlock is Go's one line
+      (`all goroutines are asleep`), without the traces: the program starts itself again with
+      `GOTRACEBACK=none`, which Go only reads at start.
+- [x] **`Control.Concurrent`:** `forkIO` (no `ThreadId`: Go cannot kill a goroutine), MVars
+      (a mutex and a condition, so `readMVar` is atomic), `threadDelay`, `yield`.
+- [x] **`Control.Concurrent.Channel`:** Go's channels, with a buffer, `close`, `receive` giving
+      `Nothing` once closed, and `select` over `onReceive`, `onSend` and `after`
+      (`reflect.Select`).
+- [x] **`Control.Concurrent.Async`:** `async`, `wait`, `poll`, `concurrently`, `race` (the loser
+      runs to the end), `mapConcurrently`, `forConcurrently`.
+- [x] **`Control.Parallel`:** `parMap`, on as many goroutines as processors (16 × `fib 32`:
+      0.11 s → 0.02 s on 8).
+      On the way: `foreign import go type` for Go types Hago only passes around, and polymorphic
+      foreign imports, which call a generic Go function with its types given. The concurrent
+      examples run under Go's race detector in `check.sh`, and `failing/` holds programs that
+      must fail at run time with a given message.
+- [ ] **More of Go:** methods and fields of Go types, Hago functions passed to Go as callbacks,
+      and an HTTP server as the example that puts all of it to work, one goroutine per request.
+- [ ] **Chapter 15 of hago-book, "Concurrency".**
+
 Known rough edges, found on the way and not fixed yet:
 
 - [ ] **Errors in type signatures have no location** (a context with the wrong number of types, an

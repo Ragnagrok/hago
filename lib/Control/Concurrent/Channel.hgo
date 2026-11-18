@@ -1,0 +1,56 @@
+-- Go's channels. A channel carries values of one type from the threads that
+-- send them to the threads that receive them, in order. It has a buffer of
+-- a fixed size: a send waits while the buffer is full, and with a size of 0
+-- each send waits for a receive. Closing a channel says nothing more will
+-- be sent: receivers get what is left, and then Nothing.
+--
+-- select waits on several channels at once, as Go's select statement does.
+module Control.Concurrent.Channel
+  ( Channel, newChannel, send, receive, close, receiveAll
+  , Case, select, onReceive, onSend, after
+  ) where
+
+foreign import go type "rt_Channel" Channel a
+
+foreign import go "rt_newChannel" newChannel :: Int -> IO (Channel a)
+
+-- Fails if the channel is closed.
+foreign import go "rt_send" send :: Channel a -> a -> IO ()
+
+foreign import go "rt_close" close :: Channel a -> IO ()
+
+foreign import go "rt_receive" goReceive :: Channel a -> IO (Either String a)
+
+-- The next value, or Nothing once the channel is closed and empty.
+receive :: Channel a -> IO (Maybe a)
+receive c = fmap (either (const Nothing) Just) (goReceive c)
+
+-- Every value until the channel is closed.
+receiveAll :: Channel a -> IO [a]
+receiveAll c = do
+  v <- receive c
+  case v of
+    Nothing -> pure []
+    Just x -> fmap (x :) (receiveAll c)
+
+-- One of the things a select waits for, and what to do if it happens.
+foreign import go type "rt_Case" Case a
+
+foreign import go "rt_onReceive" goOnReceive :: Channel b -> (b -> IO a) -> IO a -> Case a
+
+-- A value received, or Nothing if the channel is closed.
+onReceive :: Channel b -> (Maybe b -> IO a) -> Case a
+onReceive c k = goOnReceive c (\x -> k (Just x)) (k Nothing)
+
+-- The value sent.
+foreign import go "rt_onSend" onSend :: Channel b -> b -> IO a -> Case a
+
+-- This many microseconds after the select starts, if nothing else happened.
+foreign import go "rt_after" after :: Int -> IO a -> Case a
+
+foreign import go "rt_select" goSelect :: [Case a] -> IO (IO a)
+
+-- Waits until one of the cases can happen, makes it happen, and runs what
+-- goes with it. If several can at once, one is chosen at random.
+select :: [Case a] -> IO a
+select cases = goSelect cases >>= id

@@ -1,0 +1,14 @@
+-- parMap computes the elements on every processor; the result is map's.
+import Control.Parallel
+
+collatz :: Int -> Int
+collatz 1 = 0
+collatz n = 1 + collatz (if even n then n `div` 2 else 3 * n + 1)
+
+main :: IO ()
+main = do
+  let ns = [1 .. 20000]
+  print (parMap collatz ns == map collatz ns)
+  print (maximum (parMap collatz ns))
+  print (parMap (* 2) [1, 2, 3 :: Int])
+  print (parMap show ([] :: [Int]))

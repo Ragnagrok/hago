@@ -1,0 +1,28 @@
+-- Threads that share a counter in an MVar.
+import Control.Concurrent
+
+main :: IO ()
+main = do
+  counter <- newMVar (0 :: Int)
+  finished <- newEmptyMVar
+  -- ten threads add one a thousand times each; modifyMVar_ never loses one
+  let addOne = modifyMVar_ counter (\n -> pure (n + 1))
+      thread = mapM_ (const addOne) [1 .. 1000 :: Int] >> putMVar finished ()
+  mapM_ (const (forkIO thread)) [1 .. 10 :: Int]
+  mapM_ (const (takeMVar finished)) [1 .. 10 :: Int]
+  readMVar counter >>= print
+  -- modifyMVar gives a result besides the new value
+  old <- modifyMVar counter (\n -> pure (0, n))
+  print old
+  withMVar counter print
+  -- the try versions do not wait
+  box <- newEmptyMVar
+  tryTakeMVar box >>= print
+  tryPutMVar box "first" >>= print
+  tryPutMVar box "second" >>= print
+  tryReadMVar box >>= print
+  takeMVar box >>= putStrLn
+  -- a thread hands back its result through an empty MVar
+  answer <- newEmptyMVar
+  forkIO (threadDelay 1000 >> putMVar answer (product [1 .. 10 :: Int]))
+  takeMVar answer >>= print

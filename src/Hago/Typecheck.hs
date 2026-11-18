@@ -822,7 +822,7 @@ programOf ck = Program
   }
 
 builtinData :: M.Map Name DataInfo
-builtinData = M.fromList [("[]", DataInfo ["a"] [0] ["[]", ":"] False), ("Bool", DataInfo [] [] ["False", "True"] False)]
+builtinData = M.fromList [("[]", DataInfo ["a"] [0] ["[]", ":"] False Nothing), ("Bool", DataInfo [] [] ["False", "True"] False Nothing)]
 
 -- | Resolves every unification variable and fills in every dictionary.
 closeUp :: Subst -> IM.IntMap Dict -> Checked -> Checked
@@ -877,7 +877,7 @@ tcModule interactive modName' before ds = do
       ownRecords = M.fromList (concatMap snd checked)
       cons = M.unions [builtinCons, ckCons before, M.fromList userCons]
       dataInfos = M.fromList
-          [ (ddName d, DataInfo (ddParams d) [M.findWithDefault 0 p ar | p <- ddParams d] [k | ConDecl k _ _ <- ddCons d] (ddNewtype d))
+          [ (ddName d, DataInfo (ddParams d) [M.findWithDefault 0 p ar | p <- ddParams d] [k | ConDecl k _ _ <- ddCons d] (ddNewtype d) (ddForeign d))
              | d <- datas
              , let ar = M.unionsWith max [stypeArities st | ConDecl _ fs _ <- ddCons d, (_, st) <- fs] ]
       envC = envD {envCons = cons, envRecords = M.union (ckRecords before) ownRecords}
@@ -947,7 +947,7 @@ tcModule interactive modName' before ds = do
   -- foreign imports, signatures and bindings
   foreigns <- forM [(s, n, st) | DForeign s n st <- ds] $ \(s, n, st) -> withCtx n $ do
     t <- fromSType env0 (rigid st) st
-    pure (n, (Forall (stypeVars st) [] t, Foreign s t (arrows t)))
+    pure (n, (Forall (stypeVars st) [] t, Foreign s (stypeVars st) t (arrows t)))
   let sigs = M.fromList [(n, (ctx, st)) | DSig ns ctx st <- ds, n <- ns]
       binds = [(n, cs) | DBind n cs <- ds]
       names = map fst binds

@@ -1,0 +1,21 @@
+-- Actions at the same time, without handling threads.
+import Control.Concurrent
+import Control.Concurrent.Async
+
+slowly :: Int -> a -> IO a
+slowly ms x = threadDelay (ms * 1000) >> pure x
+
+main :: IO ()
+main = do
+  task <- async (slowly 20 "done")
+  poll task >>= print
+  wait task >>= putStrLn
+  poll task >>= print
+  concurrently (slowly 10 'x') (slowly 5 True) >>= print
+  race (slowly 300 "slow") (slowly 1 (42 :: Int)) >>= print
+  race (pure "fast") (slowly 300 'x') >>= print
+  -- the results come in the order of the list, whatever order they finish in
+  mapConcurrently (\n -> slowly (50 - n * 10) (n * n)) [1 .. 4] >>= print
+  forConcurrently (unpack "abc") (\c -> pure (pack [c, c])) >>= print
+  mapConcurrently_ (slowly 1) [(), ()]
+  putStrLn "all finished"

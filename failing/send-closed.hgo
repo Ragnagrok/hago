@@ -1,0 +1,8 @@
+-- expects: error: send on a closed channel
+import Control.Concurrent.Channel
+
+main :: IO ()
+main = do
+  c <- newChannel 1
+  close c
+  send c 'x'

@@ -39,9 +39,11 @@ se evalúa cuando se liga, como en Go. La pereza existe sólo donde un tipo la p
   donde se espera una función común (`liftA2 (:)`, `map (False &&)`) recibe ahí argumentos
   comunes. `f $ x` es `f x`, así que `x` sigue siendo perezoso si `f` lo pide.
 
-Las suspensiones son thunks memoizados: se evalúan como mucho una vez. Un programa corre en una
-sola goroutine, así que no toman ningún lock, y cuestan dos allocations en vez de las siete de
-`sync.OnceValue`.
+Las suspensiones son thunks memoizados: se evalúan como mucho una vez. Un programa que corre en
+una sola goroutine recibe thunks que no toman ningún lock. Uno que lanza goroutines (ver
+[Concurrencia](#concurrencia)) recibe thunks que cualquier goroutine puede forzar: el primero que
+llega calcula el valor con el lock del thunk tomado, y una vez calculado, forzarlo es una lectura
+atómica. El benchmark de listas perezosas de más abajo corre un 2% más lento con ellos.
 
 Los valores de nivel superior se calculan al arrancar el programa, en orden. Los que se necesitan
 entre sí para calcularse (`x = y + 1`, `y = x + 1`) no se pueden calcular, y se rechazan. Los que
@@ -250,6 +252,10 @@ del programa con el mismo nombre tiene prioridad):
 | `System.IO` | `stdin`, `stdout`, `stderr`, `hPutStrLn`, `hPrint`, `isEOF`, y el resto de los nombres de Haskell para los tres handles estándar |
 | `System.Exit` | `exitWith`, `exitSuccess`, `exitFailure` |
 | `System.Random` | `StdGen` (SplitMix64), `mkStdGen`, `randomR`, `random`, `randomRs`, `randoms`, `split`; en IO `newStdGen` y `randomRIO`, con semilla del reloj o de `HAGO_RANDOM_SEED` |
+| `Control.Concurrent` | `forkIO`, `threadDelay`, `yield`, `getNumCapabilities`; `MVar` con `takeMVar`, `putMVar`, `readMVar`, las versiones `try`, `modifyMVar_`, `modifyMVar`, `withMVar` |
+| `Control.Concurrent.Channel` | los canales de Go: `newChannel` (con el tamaño de su buffer), `send`, `receive` (`Nothing` una vez cerrado), `close`, `receiveAll`, y `select` sobre `onReceive`, `onSend` y `after` |
+| `Control.Concurrent.Async` | `async`, `wait`, `poll`, `concurrently`, `race`, `mapConcurrently`, `forConcurrently` y sus versiones con `_` |
+| `Control.Parallel` | `parMap`: `map` con los elementos calculados en todos los procesadores |
 
 El Prelude lee y escribe archivos y la entrada estándar: `getContents` e `interact` (que leen
 toda la entrada primero), y `readFile`, `writeFile` y `appendFile`, que devuelven un
@@ -415,6 +421,57 @@ foreign import go "math.MaxInt32"  maxInt32     :: Int
 - El paquete se importa desde la ruta anterior al último punto: `"path/filepath.Join"` importa
   `path/filepath`.
 - Declarar una función sin `IO` es una promesa tuya de que es pura.
+- Una polimórfica es una función genérica de Go, cuyos parámetros de tipo son las variables de
+  tipo de Hago en el orden en que aparecen por primera vez en la firma.
+
+Un tipo de Go que el código de Hago sólo pasa de un lado a otro se declara con
+`foreign import go type`:
+
+```haskell
+foreign import go type "*net/url.URL" URL
+foreign import go "net/url.Parse" parseURL :: String -> Either String URL
+foreign import go type "*rt_MVar" MVar a       -- el del runtime, genérico: *rt_MVar[T]
+```
+
+No tiene constructores, así que el código de Hago no puede mirar adentro ni armar uno; eso lo
+hacen funciones de Go.
+
+## Concurrencia
+
+Un hilo de Hago es una goroutine: lanzar uno es barato, y pueden correr miles a la vez.
+
+```haskell
+import Control.Concurrent
+import Control.Concurrent.Async
+
+main = do
+  counter <- newMVar 0
+  mapConcurrently (\_ -> modifyMVar_ counter (pure . (+ 1))) [1 .. 1000]
+  readMVar counter >>= print                       -- 1000
+  race (threadDelay 100000) (pure "fast") >>= print  -- Right "fast"
+```
+
+- **Las MVar** (`Control.Concurrent`) son cajas vacías o con un valor: `takeMVar` espera a que
+  haya uno, `putMVar` a que haya lugar. **Los canales** (`Control.Concurrent.Channel`) son los de
+  Go, con buffer, `close` y `select`. **`Control.Concurrent.Async`** corre acciones a la vez y
+  espera sus resultados sin manejar hilos. **`parMap`** (`Control.Parallel`) es un `map` puro
+  calculado en todos los procesadores, con el mismo resultado que `map`.
+- **Los valores son inmutables, así que los hilos los comparten sin cuidado.** El único estado
+  que comparten y cambian está en MVars y canales. También se puede compartir una lista perezosa:
+  sus celdas se calculan una vez, en el hilo que las fuerce primero. `check.sh` corre los ejemplos
+  bajo el detector de carreras de Go.
+- **Una falla en cualquier hilo termina el programa,** con `error:` y el motivo, como en el
+  principal. Hago no tiene excepciones que atrapar, así que no hay nada que entregarle al hilo
+  que espera.
+- **Go no puede frenar una goroutine desde afuera,** así que no hay `killThread`, y `race` no
+  cancela la acción que pierde: corre hasta el final y su resultado se descarta. A un hilo que
+  tiene que terminar antes hay que avisarle, con una MVar o un canal.
+- **Cuando todos los hilos esperan a otro,** Go frena el programa con `fatal error: all goroutines
+  are asleep - deadlock!`. Go agregaría la traza de cada goroutine, salvo que `GOTRACEBACK=none`
+  esté puesta al arrancar, así que un programa que usa concurrencia se vuelve a lanzar con ella.
+- **Sólo pagan los programas que usan concurrencia.** Un programa recibe el runtime concurrente
+  cuando llama a una función de estos módulos, o a una función de Go que recibe una función o
+  acción de Hago, que Go podría llamar desde otra goroutine.
 
 ## Performance
 
@@ -432,6 +489,8 @@ Son números de una sola máquina, como referencia y no como benchmark.
 | cincuenta millones de sumas de un `newtype Meters = Meters Double` | 0,02 s | ~4 MB |
 | lo mismo con `data Meters = Meters Double` | 0,02 s | ~4 MB |
 | parsear e imprimir con formato 3,7 MB de JSON con `examples/Data/Json.hgo` (`jq .`: 0,13 s) | 2,6 s | ~140 MB |
+| `fib 32` dieciséis veces con `map` | 0,11 s | — |
+| lo mismo con `parMap`, en 8 procesadores | 0,02 s | — |
 | un millón de inserciones en un `Data.Map`, después medio millón de borrados con `foldl`, y búsquedas | 1,45 s | ~170 MB |
 
 - **El código estricto en tipos concretos** se compila al Go que escribirías a mano, y rinde
@@ -522,7 +581,8 @@ Haskell 98.
   las funciones locales: un helper local puede usarse en varios tipos y tener restricciones. Las
   funciones literales de Go no pueden ser genéricas, así que una función así pasa al nivel
   superior y recibe como parámetros extra las variables locales que usa.
-- `foreign import go`.
+- `foreign import go` y `foreign import go type`.
+- Hilos, MVars, los canales de Go y `select`, `async` y `parMap`.
 
 **Falta**
 - **La recursión polimórfica a través de una restricción** (una función que se llama a sí misma
@@ -565,7 +625,9 @@ Haskell 98.
 | `src/Hago/CodeGen.hs` | generación de Go |
 | `src/Hago/Cache.hs` | compilación separada: lo que da cada módulo, guardado en disco |
 | `src/Hago/Driver.hs` | encontrar los módulos, compilar cada uno, y después el programa entero |
-| `runtime/runtime.go` | listas, thunks e IO con trampolín; se copia en cada programa |
+| `runtime/runtime.go` | listas e IO con trampolín; se copia en cada programa |
+| `runtime/thunk_sequential.go` | thunks para un programa en una sola goroutine |
+| `runtime/concurrent.go` | thunks que cualquier goroutine puede forzar, hilos, MVars, canales, `select` y `parMap`, para un programa que los usa |
 | `prelude/Prelude.hgo` | el prelude, escrito en Hago |
 | `lib/` | la biblioteca estándar (`Control.Monad.State` y compañía), escrita en Hago |
 

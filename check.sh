@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the compiler, compiles and runs every example program comparing its
-# output with the .out file next to it, replays every session in repl/, and
-# checks that every file in rejected/ fails
+# output with the .out file next to it (the concurrent ones also under Go's
+# race detector), checks that every program in failing/ fails at run time,
+# replays every session in repl/, and checks that every file in rejected/ fails
 # with the error announced on its "-- expects:" line. Modules are compiled with an
 # empty cache, and every example again with the cache full, which must give the
 # same Go.
@@ -9,6 +10,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 cabal build -v0 exe:hago
+# the runtime, in both versions (see runtime/concurrent.go)
+(cd runtime && go vet runtime.go thunk_sequential.go && go vet -tags hago_concurrent runtime.go concurrent.go)
 hago=$(cabal list-bin -v0 exe:hago)
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
@@ -27,6 +30,35 @@ for expected_out in examples/*.out; do
     echo "ok   $f"
   else
     echo "FAIL $f printed:"; echo "$actual"; failures=1
+  fi
+done
+
+# the concurrent examples again under Go's race detector, which fails a
+# program that touches memory from two goroutines without synchronising
+for f in examples/concurrent-*.hgo examples/parallel.hgo; do
+  name=$(basename "$f" .hgo)
+  if actual=$(cd "$out/$name" && go run -race main.go 2>&1) && [ "$actual" == "$(cat "examples/$name.out")" ]; then
+    echo "ok   $f under the race detector"
+  else
+    echo "FAIL $f under the race detector printed:"; echo "$actual"; failures=1
+  fi
+done
+
+# programs that compile, and then fail as their "-- expects:" line says
+for f in failing/*.hgo; do
+  expected=$(sed -n 's/^-- expects: //p' "$f")
+  name=failing-$(basename "$f" .hgo)
+  mkdir -p "$out/$name"
+  if ! "$hago" build "$f" -o "$out/$name/main.go"; then
+    echo "FAIL $f doesn't compile"; failures=1; continue
+  fi
+  (cd "$out/$name" && go build -o prog main.go)
+  if output=$("$out/$name/prog" 2>&1); then
+    echo "FAIL $f didn't fail"; failures=1
+  elif [ "$(head -1 <<<"$output")" == "$expected" ] && [ "$(wc -l <<<"$output")" -eq 1 ]; then
+    echo "ok   $f fails: $expected"
+  else
+    echo "FAIL $f failed with:"; echo "$output"; failures=1
   fi
 done
 

@@ -1,0 +1,74 @@
+-- Threads, and MVars to pass values between them. A thread is a goroutine:
+-- starting one is cheap, and thousands can run at once.
+--
+-- Differences from Haskell's Control.Concurrent:
+-- - forkIO gives no ThreadId: Go cannot stop a goroutine from outside, so
+--   there is no killThread. A thread that should stop early has to be told,
+--   through an MVar or a channel.
+-- - A failure in any thread (error, a division by zero) ends the program,
+--   as it does in the main one.
+-- - When the main thread finishes, the program ends, whatever the others
+--   are doing.
+module Control.Concurrent
+  ( forkIO, threadDelay, yield, getNumCapabilities
+  , MVar, newMVar, newEmptyMVar, takeMVar, putMVar, readMVar
+  , tryTakeMVar, tryPutMVar, tryReadMVar, modifyMVar_, modifyMVar, withMVar
+  ) where
+
+foreign import go "rt_forkIO" forkIO :: IO () -> IO ()
+
+-- Waits at least this many microseconds.
+foreign import go "rt_threadDelay" threadDelay :: Int -> IO ()
+
+-- Lets other threads run.
+foreign import go "rt_yield" yield :: IO ()
+
+-- How many threads can run at the same time: the processors Go uses.
+foreign import go "rt_numCapabilities" getNumCapabilities :: IO Int
+
+-- A box that is either empty or holds one value. takeMVar waits until it is
+-- full and empties it; putMVar waits until it is empty and fills it.
+foreign import go type "*rt_MVar" MVar a
+
+foreign import go "rt_newMVar" newMVar :: a -> IO (MVar a)
+foreign import go "rt_newEmptyMVar" newEmptyMVar :: IO (MVar a)
+foreign import go "rt_takeMVar" takeMVar :: MVar a -> IO a
+foreign import go "rt_putMVar" putMVar :: MVar a -> a -> IO ()
+
+-- The value, leaving it in the box: waits until there is one.
+foreign import go "rt_readMVar" readMVar :: MVar a -> IO a
+
+foreign import go "rt_tryTakeMVar" goTryTake :: MVar a -> IO (Either String a)
+foreign import go "rt_tryReadMVar" goTryRead :: MVar a -> IO (Either String a)
+
+-- Like takeMVar and readMVar, but Nothing at once if the box is empty.
+tryTakeMVar :: MVar a -> IO (Maybe a)
+tryTakeMVar m = fmap (either (const Nothing) Just) (goTryTake m)
+
+tryReadMVar :: MVar a -> IO (Maybe a)
+tryReadMVar m = fmap (either (const Nothing) Just) (goTryRead m)
+
+-- Fills the box if it is empty, and says whether it did.
+foreign import go "rt_tryPutMVar" tryPutMVar :: MVar a -> a -> IO Bool
+
+-- Takes the value, puts back what the action makes of it. Other threads
+-- that use the box only this way wait for each other, so the change is
+-- never lost.
+modifyMVar_ :: MVar a -> (a -> IO a) -> IO ()
+modifyMVar_ m f = takeMVar m >>= f >>= putMVar m
+
+-- The same, with a result besides the new value.
+modifyMVar :: MVar a -> (a -> IO (a, b)) -> IO b
+modifyMVar m f = do
+  x <- takeMVar m
+  (x', r) <- f x
+  putMVar m x'
+  pure r
+
+-- Uses the value while no other thread can take it.
+withMVar :: MVar a -> (a -> IO b) -> IO b
+withMVar m f = do
+  x <- takeMVar m
+  r <- f x
+  putMVar m x
+  pure r

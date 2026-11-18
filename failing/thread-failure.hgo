@@ -1,0 +1,10 @@
+-- expects: error: runtime error: integer divide by zero
+-- A failure in any thread ends the program, as in the main one.
+import Control.Concurrent
+
+main :: IO ()
+main = do
+  done <- newEmptyMVar
+  forkIO (print (10 `div` (0 :: Int)) >> putMVar done ())
+  takeMVar done
+  putStrLn "not reached"

@@ -7,7 +7,7 @@ module Hago.Driver (Virtual, compileFile, checkProgram, generateProgram, quoteSo
 
 import Control.Monad (foldM)
 import Data.Char (isAlphaNum, isDigit)
-import Data.List (intercalate, isPrefixOf)
+import Data.List (intercalate, isPrefixOf, stripPrefix)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Hago.CodeGen (generate)
@@ -43,6 +43,10 @@ libraryModules = M.fromList
   , ("System.IO", $(embedFile "lib/System/IO.hgo"))
   , ("System.Exit", $(embedFile "lib/System/Exit.hgo"))
   , ("System.Random", $(embedFile "lib/System/Random.hgo"))
+  , ("Control.Concurrent", $(embedFile "lib/Control/Concurrent.hgo"))
+  , ("Control.Concurrent.Channel", $(embedFile "lib/Control/Concurrent/Channel.hgo"))
+  , ("Control.Concurrent.Async", $(embedFile "lib/Control/Concurrent/Async.hgo"))
+  , ("Control.Parallel", $(embedFile "lib/Control/Parallel.hgo"))
   , ("Data.String", $(embedFile "lib/Data/String.hgo"))
   , ("Data.Char", $(embedFile "lib/Data/Char.hgo"))
   , ("Data.Monoid", $(embedFile "lib/Data/Monoid.hgo"))
@@ -52,9 +56,24 @@ libraryModules = M.fromList
   , ("Data.Map", $(embedFile "lib/Data/Map.hgo"))
   , ("Data.Set", $(embedFile "lib/Data/Set.hgo")) ]
 
-runtimeSource :: String
-runtimeSource = unlines (drop 1 (dropWhile (not . ("// --- runtime ---" `isPrefixOf`)) (lines raw)))
-  where raw = $(embedFile "runtime/runtime.go")
+-- | The runtime copied into every program: runtime.go, and the thunks of
+-- thunk_sequential.go, or concurrent.go for a program that starts goroutines.
+runtimeSource :: Bool -> String
+runtimeSource concurrent = body shared ++ body (if concurrent then conc else seqThunks)
+  where
+    body raw = unlines (drop 1 (dropWhile (not . ("// --- runtime ---" `isPrefixOf`)) (lines raw)))
+    shared = $(embedFile "runtime/runtime.go")
+    seqThunks = $(embedFile "runtime/thunk_sequential.go")
+    conc = concurrentRuntime
+
+concurrentRuntime :: String
+concurrentRuntime = $(embedFile "runtime/concurrent.go")
+
+-- | The functions only the concurrent runtime has: a program that calls one
+-- gets it.
+concurrentSymbols :: [String]
+concurrentSymbols =
+  [takeWhile (\c -> isAlphaNum c || c == '_') rest | l <- lines concurrentRuntime, Just rest <- [stripPrefix "func rt_" l >>= Just . ("rt_" ++)]]
 
 -- | Eq, Ord, Show, Bounded and Read for every size of tuple, written out as
 -- Prelude source.
@@ -134,7 +153,7 @@ generateProgram file modules = do
     (c, k) : _ -> Left (file ++ ": two modules define the instance " ++ c ++ " " ++ k)
     [] -> pure ()
   prog <- either (Left . ((file ++ ": ") ++)) Right (specialize (sinkLocals (programOf (mconcat checked))))
-  pure (generate runtimeSource (eraseNewtypes prog))
+  pure (generate runtimeSource concurrentSymbols (eraseNewtypes prog))
 
 -- | Compiles each module, dependencies first, reusing what the cache keeps
 -- for a module whose source and imports have not changed. Each module is

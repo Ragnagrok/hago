@@ -1,0 +1,10 @@
+-- expects: fatal error: all goroutines are asleep - deadlock!
+-- Every thread waits for another: Go stops the program, with one line.
+import Control.Concurrent
+
+main :: IO ()
+main = do
+  a <- newEmptyMVar
+  b <- newEmptyMVar
+  forkIO (takeMVar a >>= putMVar b)
+  takeMVar b >>= putStrLn

@@ -39,8 +39,11 @@ is bound, like in Go. Laziness only exists where a type asks for it.
   parameters passed where a plain function is expected (`liftA2 (:)`, `map (False &&)`) takes
   plain arguments there. `f $ x` is `f x`, so `x` stays lazy when `f` asks for it.
 
-Suspensions are memoised thunks, evaluated at most once. A program runs on one goroutine, so
-they take no lock, which makes them cost two allocations instead of `sync.OnceValue`'s seven.
+Suspensions are memoised thunks, evaluated at most once. A program that runs on one goroutine
+gets thunks that take no lock. One that starts goroutines (see [Concurrency](#concurrency)) gets
+thunks that any goroutine can force: the first computes the value holding the thunk's lock, and
+once it is computed, forcing it is one atomic load. The lazy list benchmark below runs 2% slower
+with them.
 
 Top-level values are computed when the program starts, in order. Values whose computations need
 each other (`x = y + 1`, `y = x + 1`) cannot be, and are rejected. Values that are functions can
@@ -238,6 +241,10 @@ program with the same name comes first):
 | `System.IO` | `stdin`, `stdout`, `stderr`, `hPutStrLn`, `hPrint`, `isEOF`, and the rest of Haskell's names for the three standard handles |
 | `System.Exit` | `exitWith`, `exitSuccess`, `exitFailure` |
 | `System.Random` | `StdGen` (SplitMix64), `mkStdGen`, `randomR`, `random`, `randomRs`, `randoms`, `split`; in IO `newStdGen`, `randomRIO`, seeded by the clock or by `HAGO_RANDOM_SEED` |
+| `Control.Concurrent` | `forkIO`, `threadDelay`, `yield`, `getNumCapabilities`; `MVar` with `takeMVar`, `putMVar`, `readMVar`, the `try` versions, `modifyMVar_`, `modifyMVar`, `withMVar` |
+| `Control.Concurrent.Channel` | Go's channels: `newChannel` (with the size of its buffer), `send`, `receive` (`Nothing` once closed), `close`, `receiveAll`, and `select` over `onReceive`, `onSend` and `after` |
+| `Control.Concurrent.Async` | `async`, `wait`, `poll`, `concurrently`, `race`, `mapConcurrently`, `forConcurrently` and their `_` versions |
+| `Control.Parallel` | `parMap`: `map` with the elements computed on every processor |
 
 The Prelude reads and writes files and standard input: `getContents` and `interact` (which
 read the whole input first), and `readFile`, `writeFile` and `appendFile`, which return an
@@ -398,6 +405,55 @@ foreign import go "math.MaxInt32"  maxInt32     :: Int
 - The package is imported from the path before the last dot: `"path/filepath.Join"` imports
   `path/filepath`.
 - A function declared without `IO` is a promise you make that it is pure.
+- A polymorphic one is a generic Go function, whose type parameters are the Hago type variables
+  in the order they first appear in the signature.
+
+A Go type that Hago code only passes around is declared with `foreign import go type`:
+
+```haskell
+foreign import go type "*net/url.URL" URL
+foreign import go "net/url.Parse" parseURL :: String -> Either String URL
+foreign import go type "*rt_MVar" MVar a       -- the runtime's, generic: *rt_MVar[T]
+```
+
+It has no constructors, so Hago code cannot look inside it or make one; Go functions do that.
+
+## Concurrency
+
+A Hago thread is a goroutine: starting one is cheap, and thousands can run at once.
+
+```haskell
+import Control.Concurrent
+import Control.Concurrent.Async
+
+main = do
+  counter <- newMVar 0
+  mapConcurrently (\_ -> modifyMVar_ counter (pure . (+ 1))) [1 .. 1000]
+  readMVar counter >>= print                       -- 1000
+  race (threadDelay 100000) (pure "fast") >>= print  -- Right "fast"
+```
+
+- **MVars** (`Control.Concurrent`) are boxes that are empty or hold one value: `takeMVar` waits
+  until there is one, `putMVar` until there is room. **Channels**
+  (`Control.Concurrent.Channel`) are Go's, buffer, `close` and `select` included.
+  **`Control.Concurrent.Async`** runs actions at the same time and waits for their results,
+  without handling threads. **`parMap`** (`Control.Parallel`) is a pure `map` computed on every
+  processor, with the same result as `map`.
+- **Values are immutable, so threads share them freely.** The only state they share and change
+  is in MVars and channels. A lazy list can be shared too: its cells are computed once, by
+  whichever thread forces them first. The examples run under Go's race detector in `check.sh`.
+- **A failure in any thread ends the program,** with `error:` and the reason, as in the main one.
+  Hago has no exceptions to catch, so there is nothing to hand to the thread that waits.
+- **Go cannot stop a goroutine from outside,** so there is no `killThread`, and `race` does not
+  cancel the action that loses: it runs to the end, and its result is dropped. A thread that
+  should stop early has to be told, through an MVar or a channel.
+- **When every thread is waiting for another,** Go stops the program with `fatal error: all
+  goroutines are asleep - deadlock!`. Go would add the trace of every goroutine, unless
+  `GOTRACEBACK=none` is set when the program starts, so a program that uses concurrency starts
+  itself again with it.
+- **Only programs that use concurrency pay for it.** A program gets the concurrent runtime when
+  it calls a function from these modules, or a Go function that is given a Hago function or
+  action, which Go could call from another goroutine.
 
 ## Performance
 
@@ -415,6 +471,8 @@ These numbers come from one machine, as a reference and not as a benchmark.
 | fifty million additions of a `newtype Meters = Meters Double` | 0.02 s | ~4 MB |
 | the same with `data Meters = Meters Double` | 0.02 s | ~4 MB |
 | parse and pretty print 3.7 MB of JSON with `examples/Data/Json.hgo` (`jq .`: 0.13 s) | 2.6 s | ~140 MB |
+| `fib 32` sixteen times with `map` | 0.11 s | — |
+| the same with `parMap`, on 8 processors | 0.02 s | — |
 | a million `Data.Map` inserts, then half a million deletes with `foldl`, and lookups | 1.45 s | ~170 MB |
 
 - **Strict code at concrete types** compiles to the Go you would write by hand, and runs like it.
@@ -498,7 +556,8 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
   local helper can be used at several types and have constraints. Go function literals cannot
   be generic, so such a function moves to the top level, taking the local variables it uses as
   extra parameters.
-- `foreign import go`.
+- `foreign import go`, and `foreign import go type`.
+- Threads, MVars, Go's channels and `select`, `async`, and `parMap`.
 
 **Missing**
 - **Polymorphic recursion through a constraint** (a function that calls itself at a bigger
@@ -539,7 +598,9 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `src/Hago/CodeGen.hs` | Go generation |
 | `src/Hago/Cache.hs` | separate compilation: what each module gives, kept on disk |
 | `src/Hago/Driver.hs` | finding modules, compiling each, then the whole program |
-| `runtime/runtime.go` | lists, thunks and trampolined IO, copied into every program |
+| `runtime/runtime.go` | lists and trampolined IO, copied into every program |
+| `runtime/thunk_sequential.go` | thunks for a program on one goroutine |
+| `runtime/concurrent.go` | thunks any goroutine can force, threads, MVars, channels, `select`, `parMap`, for a program that uses them |
 | `prelude/Prelude.hgo` | the prelude, written in Hago |
 | `lib/` | the standard library (`Control.Monad.State` and friends), written in Hago |
 

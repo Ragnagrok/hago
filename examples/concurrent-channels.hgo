@@ -1,0 +1,41 @@
+-- Go's channels: workers that take jobs from one channel and send results to
+-- another, and select.
+import Control.Concurrent
+import Control.Concurrent.Channel
+
+worker :: Channel Int -> Channel (Int, Int) -> IO ()
+worker jobs results = do
+  job <- receive jobs
+  case job of
+    Nothing -> pure ()
+    Just n -> send results (n, n * n) >> worker jobs results
+
+main :: IO ()
+main = do
+  jobs <- newChannel 0
+  results <- newChannel 100
+  mapM_ (const (forkIO (worker jobs results))) [1 .. 4 :: Int]
+  mapM_ (send jobs) [1 .. 20]
+  close jobs
+  answers <- mapM (const (receive results)) [1 .. 20 :: Int]
+  -- the workers finish in any order; the sum does not depend on it
+  print (sum [sq | Just (_, sq) <- answers])
+  -- a buffered channel keeps what was sent until it is received
+  buffer <- newChannel 3
+  mapM_ (send buffer) (unpack "abc")
+  close buffer
+  receiveAll buffer >>= putStrLn . pack
+  receive buffer >>= print
+  -- select: the case that can happen
+  a <- newChannel 1
+  b <- newChannel 1
+  send b "from b"
+  select [onReceive a (pure . show), onReceive b (pure . show)] >>= putStrLn
+  select [onSend a "to a" (pure "sent to a"), onReceive b (pure . show)] >>= putStrLn
+  receive a >>= print
+  -- a timer, when nothing else happens
+  never <- newChannel 0
+  select [onReceive never (\v -> pure (show (v :: Maybe Int))), after 2000 (pure "two milliseconds later")] >>= putStrLn
+  -- a closed channel is always ready, with Nothing
+  close a
+  select [onReceive a (pure . show), after 1000000 (pure "too late")] >>= putStrLn

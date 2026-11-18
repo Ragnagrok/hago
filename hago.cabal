@@ -9,7 +9,7 @@ build-type:      Simple
 extra-source-files:
   prelude/Prelude.hgo
   lib/**/*.hgo
-  runtime/runtime.go
+  runtime/*.go
 
 common comun
   default-language: Haskell2010

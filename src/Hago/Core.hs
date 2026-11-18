@@ -241,10 +241,10 @@ data ConInfo = ConInfo
 
 -- | A data type: its parameters, how many arguments each takes (0 for a
 -- plain type, 1 for the m of StateT s m a), and its constructors.
-data DataInfo = DataInfo {diParams :: [Name], diKinds :: [Int], diCons :: [Name], diNewtype :: Bool}
+data DataInfo = DataInfo {diParams :: [Name], diKinds :: [Int], diCons :: [Name], diNewtype :: Bool, diForeign :: Maybe String}
   deriving (Show, Data)
 
-data Foreign = Foreign {fSymbol :: String, fType :: Type, fArity :: Int}
+data Foreign = Foreign {fSymbol :: String, fVars :: [Name], fType :: Type, fArity :: Int}
   deriving (Show, Data)
 
 data ClassInfo = ClassInfo

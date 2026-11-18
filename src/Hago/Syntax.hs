@@ -113,6 +113,9 @@ data DataDecl = DataDecl
   , ddDeriving :: [Name]
   , ddNewtype :: Bool
   , ddLoc :: Loc
+  , ddForeign :: Maybe String
+    -- ^ a Go type declared with @foreign import go type@: no constructors,
+    -- and values only Go functions make
   }
   deriving (Eq, Show, Data)
 
