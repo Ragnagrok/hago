@@ -1,0 +1,9 @@
+-- expects: the guards do not cover every case
+-- at Double, n < 0 and n >= 0 are both false for NaN
+half :: Double -> Double
+half n
+  | n < 0 = 0
+  | n >= 0 = n / 2
+
+main :: IO ()
+main = print (half 3)

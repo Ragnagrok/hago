@@ -1,0 +1,35 @@
+-- Guards that complement each other cover every case, with no otherwise.
+
+sign :: Int -> Int
+sign n
+  | n > 0 = 1
+  | n < 0 = -1
+  | n == 0 = 0
+
+classify :: Int -> String
+classify n
+  | even n = "even"
+  | odd n = "odd"
+
+describe :: [Int] -> String
+describe xs
+  | null xs = "empty"
+  | not (null xs) = "not empty"
+
+clamp :: Int -> Int -> Int
+clamp limit x
+  | x <= limit = x
+  | limit < x = limit
+
+grade :: Char -> String
+grade c = case c of
+  _ | c < 'c' -> "good"
+    | c >= 'c' -> "bad"
+
+main :: IO ()
+main = do
+  print (map sign [-5, 0, 7])
+  print (map classify [1, 2])
+  print (describe [], describe [1])
+  print (map (clamp 10) [3, 30])
+  print (map grade (unpack "ad"))

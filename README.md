@@ -155,9 +155,12 @@ still lives with:
   `Maybe`, and so does `read`: `read "4x" :: Maybe Int` is `Nothing`, not a crash.
 - **Pattern matches cover every value,** or the program is rejected: the clauses of a function,
   a `case`, a lambda's patterns, `let Just x = ...` and `Just x <- ...` in `do`. The error shows
-  a value nothing matches (`nothing matches Nothing`, `nothing matches 0`). Guards count only if
-  the last one is `otherwise` (or `True`), since the compiler cannot know that `n > 0` and
-  `n <= 0` cover everything between them.
+  a value nothing matches (`nothing matches Nothing`, `nothing matches 0`). Guards count when one
+  is `otherwise` (or `True`), or when they complement each other: a condition and its `not`,
+  `even` and `odd` of the same number, or comparisons of the same two values that between them
+  cover less, equal and greater (`n > 0`, `n < 0`, `n == 0`) at `Int`, `Integer`, `Char`,
+  `String` or `Bool`. Not at `Double`, where `n < 0` and `n >= 0` are both false for NaN, nor
+  at a type whose `Ord` someone wrote, which need not be lawful.
 - **No `Foldable` instance for tuples,** so `length (1, 2)` is a type error, not `1`.
 - **`Enum` is total.** `toEnum`, `succ` and `pred` return `Maybe`, so `succ maxBound` is
   `Nothing` instead of a crash, and `[x ..]` on a bounded type stops at its last value.

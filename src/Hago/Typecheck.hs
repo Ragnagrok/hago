@@ -20,7 +20,7 @@ import qualified Data.List as L
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Hago.Core
-import Hago.Exhaustive (Witness (..), showWitness, uncovered)
+import Hago.Exhaustive (Witness (..), guardsTotal, showWitness, uncovered)
 import Hago.Syntax
 import Hago.TcMonad
 
@@ -1153,29 +1153,31 @@ covered env what rows n = coveredOr env what "add a case for it, or one that mat
 
 -- | The same, with what to suggest when a value is missing.
 coveredOr :: Env -> String -> String -> [CRow] -> Int -> TC ()
-coveredOr env what suggestion rows n = case uncovered (siblingsIn env) n rows of
-  Nothing -> pure ()
-  Just ws ->
-    let guarded = or [not (any total gs) | CRow _ _ gs <- rows]
-        total (g, _) = maybe True trivial g
-        trivial = \case
-          CVar "otherwise" _ _ -> True
-          CCon "True" _ _ -> True
-          _ -> False
-        -- when only the guards can fail, the values do not matter
-        onlyGuards = guarded && all isAny ws
-        isAny = \case
-          WAny -> True
-          _ -> False
-        value
-          | null ws || onlyGuards = ""
-          | otherwise = ": nothing matches " ++ unwords (map (showWitness (length ws > 1)) ws)
-        what' = if onlyGuards then "the guards do not cover every case" else what
-        hint
-          | guarded = "\nguards are not known to cover anything unless the last one is otherwise"
-          | null ws = ""
-          | otherwise = "\n" ++ suggestion
-     in throw (what' ++ value ++ hint)
+coveredOr env what suggestion rows n = do
+  sub <- gets stSub
+  let total (CRow ps bs gs) =
+        let binders = S.fromList ([x | CPVar x _ <- everything ps] ++ [x | CPAs x _ _ <- everything ps] ++ [x | CBind x _ _ _ <- bs])
+            global x = not (S.member x (envLocal env) || S.member x binders)
+         in guardsTotal global (everywhere (zonk sub) gs)
+      flagged = [(ps, total r) | r@(CRow ps _ _) <- rows]
+  case uncovered (siblingsIn env) n flagged of
+    Nothing -> pure ()
+    Just ws ->
+      let guarded = not (and (map snd flagged))
+          -- when only the guards can fail, the values do not matter
+          onlyGuards = guarded && all isAny ws
+          isAny = \case
+            WAny -> True
+            _ -> False
+          value
+            | null ws || onlyGuards = ""
+            | otherwise = ": nothing matches " ++ unwords (map (showWitness (length ws > 1)) ws)
+          what' = if onlyGuards then "the guards do not cover every case" else what
+          hint
+            | guarded = "\nguards are known to cover everything only when one is otherwise, or when they complement each other\n(c and not c, even and odd, comparisons of the same values covering <, == and >); add an otherwise at the end"
+            | null ws = ""
+            | otherwise = "\n" ++ suggestion
+       in throw (what' ++ value ++ hint)
 
 -- | The constructors of a constructor's type, in order, with their arities.
 siblingsIn :: Env -> Name -> [(Name, Int)]

@@ -3,7 +3,6 @@ sign :: Int -> Int
 sign n
   | n > 0 = 1
   | n < 0 = -1
-  | n == 0 = 0
 
 main :: IO ()
 main = print (sign 3)

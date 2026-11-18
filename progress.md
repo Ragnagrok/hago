@@ -135,7 +135,6 @@ Known rough edges, found on the way and not fixed yet:
 - [ ] **A binding a later guard uses is computed before the first guard,** even when the first
       guard holds and nothing uses it; guards could be split so that it is computed just
       before the first guard that needs it.
-- [ ] **Coverage does not look inside guards,** so complementary conditions need `otherwise`.
 - [ ] **A record update that changes a type parameter some other field fixes** is reported as the
       type mismatch it causes (`no instance for Num String`), not as the field that cannot change.
 

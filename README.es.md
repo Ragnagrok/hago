@@ -163,8 +163,11 @@ deshacer o con las que todavía convive:
 - **El pattern matching cubre todos los valores,** o el programa se rechaza: las cláusulas de
   una función, un `case`, los patrones de una lambda, `let Just x = ...` y `Just x <- ...` en un
   `do`. El error muestra un valor que nada cubre (`nothing matches Nothing`, `nothing matches 0`).
-  Las guardas cuentan sólo si la última es `otherwise` (o `True`), porque el compilador no puede
-  saber que `n > 0` y `n <= 0` cubren todo entre las dos.
+  Las guardas cuentan cuando una es `otherwise` (o `True`), o cuando se complementan: una
+  condición y su `not`, `even` y `odd` del mismo número, o comparaciones de los mismos dos
+  valores que entre todas cubren menor, igual y mayor (`n > 0`, `n < 0`, `n == 0`) en `Int`,
+  `Integer`, `Char`, `String` o `Bool`. No en `Double`, donde `n < 0` y `n >= 0` son falsas
+  las dos para NaN, ni en un tipo cuyo `Ord` escribió alguien, que puede no cumplir las leyes.
 - **Sin instancia de `Foldable` para tuplas,** así que `length (1, 2)` es un error de tipos, no
   `1`.
 - **`Enum` es total.** `toEnum`, `succ` y `pred` devuelven `Maybe`, así que `succ maxBound` es
