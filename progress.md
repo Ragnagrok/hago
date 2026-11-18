@@ -173,7 +173,8 @@ Next, concurrency (decided 2026-11-18), in this order:
       turns on the concurrent runtime. A Go function that returns only an `error` is an
       `Either String ()`. `examples/http-server.hgo` serves pages with `net/http` and asks for
       several at once, under the race detector too; `examples/foreign-types.hgo` has the rest.
-- [ ] **Chapter 15 of hago-book, "Concurrency".**
+- [x] **Chapter 15 of hago-book, "Concurrency".** On the way: `parMap` computes an element
+      only as far as it is strict, so a list element gets only its first cell; the chapter says so.
 
 Known rough edges, found on the way and not fixed yet:
 
