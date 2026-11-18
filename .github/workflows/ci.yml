@@ -13,5 +13,5 @@ jobs:
         with:
           go-version: '1.25'
       - run: cabal update
-      - run: (cd runtime && go vet runtime.go)
+      # check.sh vets the runtime, in both its versions
       - run: ./check.sh
