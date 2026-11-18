@@ -37,6 +37,7 @@ data Ctx = Ctx
   , cxSelf :: Maybe (Name, Int)   -- ^ function whose self tail calls become a loop
   , cxTParams :: [Name]
   , cxProg :: Program
+  , cxPending :: S.Set Name   -- ^ local variables declared but not assigned yet
   }
 
 data GS = GS {gsNext :: Int, gsLoop :: Bool}
@@ -71,6 +72,7 @@ generate runtime prog = unlines (header ++ [runtime] ++ tupleDecls ++ dataDecls 
       , cxSelf = Nothing
       , cxTParams = []
       , cxProg = prog
+      , cxPending = S.empty
       }
     -- a struct for each size of tuple the program uses
     tupleDecls =
@@ -190,7 +192,7 @@ goTy ctx = render . zonk (progSubst (cxProg ctx))
       TCon "()" [] -> "struct{}"
       TCon "[]" [t] -> "List[" ++ render t ++ "]"
       TCon "IO" [t] -> "IO[" ++ render t ++ "]"
-      TCon "Lazy" [t] -> "func() " ++ render t
+      TCon "Lazy" [t] -> "*rt_thunk[" ++ render t ++ "]"
       TCon c ts | Just n <- tupleArity c -> "Tup" ++ show n ++ "[" ++ commas (map render ts) ++ "]"
       TCon c ts
         | not (null (hkPositions (cxProg ctx) c)) ->
@@ -282,7 +284,7 @@ genHkData prog (c, canon) =
     s = M.fromList (zip hkParams canon)
     name = instName c canon
     marker = "is" ++ name
-    ctx = Ctx M.empty Nothing params prog
+    ctx = Ctx M.empty Nothing params prog S.empty
     recv k = name ++ "_" ++ suffix k ++ (if null params then "" else "[" ++ commas (map tyVar params) ++ "]")
     suffix = conSuffix
     con k =
@@ -300,7 +302,7 @@ genData prog (n, DataInfo ps _ ks _)
   where
     marker = "is" ++ typeName n
     recv k = conStruct prog k ++ (if null ps then "" else "[" ++ commas (map tyVar ps) ++ "]")
-    ctx = Ctx M.empty Nothing ps prog
+    ctx = Ctx M.empty Nothing ps prog S.empty
     con k =
       let ci = progCons prog M.! k
           fields = [ "F" ++ show i ++ " " ++ goTy ctx (if lz then tLazy t else t) | (i, (lz, t)) <- zip [0 :: Int ..] (ciFields ci)]
@@ -321,11 +323,11 @@ genTop ctx0 deferred (TopBind n tps dicts t ar body shared) = do
       let ty = goTy ctx t
           cell = mangle n ++ "__cell"
           wrapper = case zonk (progSubst (cxProg ctx)) t of
-            TFun a r -> "func(hg_arg " ++ goTy ctx a ++ ") " ++ goTy ctx r ++ " { return " ++ cell ++ "()(hg_arg) }"
-            TCon "IO" [r] -> "func() IOStep[" ++ goTy ctx r ++ "] { return " ++ cell ++ "()() }"
+            TFun a r -> "func(hg_arg " ++ goTy ctx a ++ ") " ++ goTy ctx r ++ " { return " ++ cell ++ ".force()(hg_arg) }"
+            TCon "IO" [r] -> "func() IOStep[" ++ goTy ctx r ++ "] { return " ++ cell ++ ".force()() }"
             _ -> error ("genTop: deferred value of type " ++ ty)
       pure
-        ( "var " ++ mangle n ++ " " ++ ty ++ "\nvar " ++ cell ++ " func() " ++ ty
+        ( "var " ++ mangle n ++ " " ++ ty ++ "\nvar " ++ cell ++ " *rt_thunk[" ++ ty ++ "]"
         , [cell ++ " = rt_lazy(func() " ++ ty ++ " { return " ++ e ++ " })", mangle n ++ " = " ++ wrapper] )
     (0, _) | shared -> do
       e <- genExpr ctx body
@@ -353,7 +355,9 @@ genFunction ctx self extra ps r inner = do
   pure (unlines (["(" ++ params ++ ") " ++ goTy ctx r ++ " {"] ++ body ++ ["}"]))
 
 bindLocals :: Ctx -> [(Name, Int)] -> Ctx
-bindLocals ctx bs = ctx {cxVars = foldr (\(n, a) -> M.insert n (VKLocal a)) (cxVars ctx) bs}
+bindLocals ctx bs =
+  ctx { cxVars = foldr (\(n, a) -> M.insert n (VKLocal a)) (cxVars ctx) bs
+      , cxPending = foldr (S.delete . fst) (cxPending ctx) bs }
 
 noSelf :: Ctx -> Ctx
 noSelf ctx = ctx {cxSelf = Nothing}
@@ -461,7 +465,7 @@ genPats ctx ((s, p) : rest) k = case p of
   CPForce q -> do
     n <- freshName "f"
     body <- genPats ctx ((n, q) : rest) k
-    pure ([n ++ " := " ++ s ++ "()", "_ = " ++ n] ++ body)
+    pure ([n ++ " := " ++ s ++ ".force()", "_ = " ++ n] ++ body)
   CPCon "True" _ _ -> cond s
   CPCon "False" _ _ -> cond ("!" ++ s)
   CPCon "()" _ _ -> genPats ctx rest k
@@ -498,14 +502,19 @@ genBinds ctx binds = do
         let (ps, r) = splitFun ar (zonk (progSubst (cxProg ctx)) t)
             ty = if ar == 0 then goTy ctx t else "func(" ++ commas (map (goTy ctx) ps) ++ ") " ++ goTy ctx r
          in "var " ++ mangle n ++ " " ++ ty
-  assigns <- forM ordered $ \(CBind n _ ar body) -> case body of
-    CLam ps r inner | ar > 0 -> do
-      fn <- genFunction (noSelf ctx') (Just (n, ar)) [] ps r inner
-      pure (mangle n ++ " = func" ++ fn)
-    _ -> do
-      e <- genExpr (noSelf ctx') body
-      pure (mangle n ++ " = " ++ e)
+  assigns <- forM (zip ordered (tails' (map (\(CBind n _ _ _) -> n) ordered))) $ \(CBind n _ ar body, pending) ->
+    let c = (noSelf ctx') {cxPending = S.union (S.fromList pending) (cxPending ctx')}
+     in case body of
+          CLam ps r inner | ar > 0 -> do
+            fn <- genFunction c (Just (n, ar)) [] ps r inner
+            pure (mangle n ++ " = func" ++ fn)
+          _ -> do
+            e <- genExpr c body
+            pure (mangle n ++ " = " ++ e)
   pure (ctx', map decl binds ++ assigns ++ ["_ = " ++ mangle n | n <- names])
+  where
+    -- each binding, with itself and the ones after it, which are not assigned yet
+    tails' xs = [drop i xs | i <- [0 .. length xs - 1]]
 
 -- Expressions -------------------------------------------------------------------------
 
@@ -532,15 +541,21 @@ genExpr ctx e = case e of
       h <- genExpr ctx f
       applyAll h args
   CLam ps r body -> genLam ctx ps r body
+  -- A value that is cheap to compute and cannot fail, such as a variable
+  -- already computed or a constructor applied to such values, is computed
+  -- now: a suspension that is already done is one allocation, and one that
+  -- is not is two (the thunk and the closure).
   CDelay t inner -> case inner of
+    _ | isValue inner -> do
+          v <- genExpr ctx inner
+          pure ("rt_ready[" ++ goTy ctx t ++ "](" ++ v ++ ")")
     CVar {} -> do
       v <- genExpr ctx inner
-      pure ("func() " ++ goTy ctx t ++ " { return " ++ v ++ " }")
-    CLit l -> pure ("func() " ++ goTy ctx t ++ " { return " ++ genLit l ++ " }")
+      pure ("rt_lazy(func() " ++ goTy ctx t ++ " { return " ++ v ++ " })")
     _ -> do
       ls <- genStmts (noSelf ctx) inner
       pure ("rt_lazy(func() " ++ goTy ctx t ++ " {\n" ++ unlines ls ++ "})")
-  CForce inner -> (++ "()") <$> genExpr ctx inner
+  CForce inner -> (++ ".force()") <$> genExpr ctx inner
   CDo _ _ r stmts -> genDo ctx r stmts
   CFrac x t _ -> pure $ case zonk (progSubst (cxProg ctx)) t of
     TCon "Double" [] -> show x
@@ -556,6 +571,25 @@ genExpr ctx e = case e of
       Just (VKPrim a) -> Just a
       Nothing -> Nothing
     conArity k = length (ciFields (progCons (cxProg ctx) M.! k))
+    -- computing it now does the same as later: it is total, cheap, and does
+    -- not read a variable that is still being defined
+    isValue = \case
+      CLit _ -> True
+      CNum {} -> True
+      CFrac {} -> True
+      CCon {} -> True
+      CLam {} -> True
+      CDelay {} -> True
+      CVar x _ _
+        | S.member x (cxPending ctx) -> False
+        | otherwise -> case M.lookup x (cxVars ctx) of
+            Just (VKLocal _) -> True
+            Just (VKTop a _ _) -> a > 0
+            Just (VKForeign f) -> fArity f > 0
+            Just (VKPrim a) -> a > 0
+            Nothing -> False
+      CApp (CCon _ _ _) as -> all isValue as
+      _ -> False
     iife t = do
       ls <- genStmts (noSelf ctx) e
       pure ("func() " ++ goTy ctx t ++ " {\n" ++ unlines ls ++ "}()")
@@ -643,7 +677,7 @@ genPrim ctx x targs as = case (x, as) of
   ("primRunIO", [a]) -> pure ("rt_run" ++ typeArgs ctx targs ++ "(" ++ a ++ ")")
   ("error", [a]) -> pure ("rt_error" ++ typeArgs ctx targs ++ "(" ++ a ++ ")")
   ("primAppend", [a, b]) -> case targs of
-    [TCon "String" []] -> pure ("(" ++ a ++ " + " ++ b ++ "())")
+    [TCon "String" []] -> pure ("(" ++ a ++ " + " ++ b ++ ".force())")
     [TCon "[]" [el]] -> pure (mangle "append" ++ typeArgs ctx [el] ++ "(" ++ a ++ ", " ++ b ++ ")")
     _ -> pure ("rt_error[" ++ goTy ctx (case targs of (t : _) -> t; [] -> tUnit) ++ "](\"primAppend needs a String or a list\")")
   ("pack", [a]) -> pure ("rt_pack(" ++ a ++ ")")

@@ -22,7 +22,7 @@ type List[T any] interface{ isList() }
 type Nil[T any] struct{}
 type Cons[T any] struct {
 	F0 T
-	F1 func() List[T]
+	F1 *rt_thunk[List[T]]
 }
 
 func (Nil[T]) isList()  {}
@@ -43,20 +43,30 @@ type rt_thunk[T any] struct {
 	state uint8 // 0 not computed, 1 computing, 2 computed
 }
 
+// A Lazy a is a *rt_thunk[a]: one allocation, and the closure that computes
+// it, which is dropped once it has run.
 func (t *rt_thunk[T]) force() T {
-	if t.state != 2 {
-		if t.state == 1 {
-			panic("a value is defined in terms of itself")
-		}
-		t.state = 1
-		t.v = t.f()
-		t.f = nil
-		t.state = 2
+	if t.state == 2 {
+		return t.v
 	}
+	return t.compute()
+}
+
+func (t *rt_thunk[T]) compute() T {
+	if t.state == 1 {
+		panic("a value is defined in terms of itself")
+	}
+	t.state = 1
+	t.v = t.f()
+	t.f = nil
+	t.state = 2
 	return t.v
 }
 
-func rt_lazy[T any](f func() T) func() T { return (&rt_thunk[T]{f: f}).force }
+func rt_lazy[T any](f func() T) *rt_thunk[T] { return &rt_thunk[T]{f: f} }
+
+// A suspension of a value already computed.
+func rt_ready[T any](v T) *rt_thunk[T] { return &rt_thunk[T]{v: v, state: 2} }
 
 var _ = rt_sync.OnceValue[int]
 var _ = rt_big.NewInt
@@ -99,8 +109,8 @@ func rt_pure[A any](v A) IO[A]         { return func() IOStep[A] { return IOStep
 func rt_bind[A, B any](m IO[A], k func(A) IO[B]) IO[B] {
 	return func() IOStep[B] { return IOStep[B]{next: k(rt_run(m))} }
 }
-func rt_then[A, B any](m IO[A], n func() IO[B]) IO[B] {
-	return func() IOStep[B] { rt_run(m); return IOStep[B]{next: n()} }
+func rt_then[A, B any](m IO[A], n *rt_thunk[IO[B]]) IO[B] {
+	return func() IOStep[B] { rt_run(m); return IOStep[B]{next: n.force()} }
 }
 
 var rt_stdin = rt_bufio.NewReader(rt_os.Stdin)
@@ -184,7 +194,7 @@ func rt_stringList(ss []string) List[string] {
 	var l List[string] = Nil[string]{}
 	for i := len(ss) - 1; i >= 0; i-- {
 		tail := l
-		l = Cons[string]{ss[i], func() List[string] { return tail }}
+		l = Cons[string]{ss[i], rt_ready(tail)}
 	}
 	return l
 }
@@ -223,7 +233,7 @@ func rt_concatStrings(l List[string]) string {
 			return sb.String()
 		}
 		sb.WriteString(c.F0)
-		l = c.F1()
+		l = c.F1.force()
 	}
 }
 
@@ -251,7 +261,7 @@ func rt_pack(l List[rune]) string {
 			return sb.String()
 		}
 		sb.WriteRune(c.F0)
-		l = c.F1()
+		l = c.F1.force()
 	}
 }
 
