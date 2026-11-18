@@ -47,6 +47,8 @@ libraryModules = M.fromList
   , ("Control.Concurrent.Channel", $(embedFile "lib/Control/Concurrent/Channel.hgo"))
   , ("Control.Concurrent.Async", $(embedFile "lib/Control/Concurrent/Async.hgo"))
   , ("Control.Parallel", $(embedFile "lib/Control/Parallel.hgo"))
+  , ("Data.Vector", $(embedFile "lib/Data/Vector.hgo"))
+  , ("Data.Iter", $(embedFile "lib/Data/Iter.hgo"))
   , ("Data.String", $(embedFile "lib/Data/String.hgo"))
   , ("Data.Char", $(embedFile "lib/Data/Char.hgo"))
   , ("Data.Monoid", $(embedFile "lib/Data/Monoid.hgo"))

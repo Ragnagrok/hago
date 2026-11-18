@@ -1,0 +1,26 @@
+-- Iterators: Go's iter.Seq, for pipelines that compute each value once and
+-- allocate nothing per value.
+import qualified Data.Iter as Iter
+
+collatz :: Int -> Int
+collatz n = if even n then n `div` 2 else 3 * n + 1
+
+main :: IO ()
+main = do
+  -- infinite iterators, cut short
+  print (Iter.toList (Iter.take 6 (Iter.from 10)))
+  print (Iter.toList (Iter.takeWhile (/= 1) (Iter.iterate collatz 6)))
+  print (Iter.find (\n -> n * n > 2000) (Iter.from 1))
+  print (Iter.toList (Iter.take 3 (Iter.repeat 'h')))
+  -- a pipeline in constant memory
+  print (Iter.sum (Iter.map (\x -> x * x) (Iter.filter odd (Iter.range 1 1000000))))
+  print (Iter.length (Iter.filter (\n -> n `mod` 7 == 0) (Iter.range 1 1000)))
+  print (Iter.maximum (Iter.map (\n -> n `mod` 17) (Iter.range 1 100)), Iter.minimum (Iter.fromList ([] :: [Int])))
+  print (Iter.toList (Iter.zip (Iter.from 1) (Iter.chars "hago")))
+  print (Iter.toList (Iter.concatMap (\n -> Iter.range 1 n) (Iter.range 1 3)))
+  print (Iter.toList (Iter.append (Iter.range 1 2) (Iter.range 8 9)))
+  print (Iter.toList (Iter.dropWhile (< 4) (Iter.range 1 6)), Iter.toList (Iter.drop 4 (Iter.range 1 6)))
+  print (Iter.any (> 3) (Iter.from 1), Iter.all even (Iter.range 2 2), Iter.elem 5 (Iter.range 1 4), Iter.null (Iter.range 2 1))
+  print (Iter.head (Iter.words "  strictly   functional "), Iter.toList (Iter.lines "one\ntwo\r\n"))
+  print (Iter.toList (fmap show (Iter.range 1 3)))
+  Iter.forM_ (Iter.range 1 3) (\n -> putStrLn (show n ++ " squared is " ++ show (n * n)))

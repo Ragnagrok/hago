@@ -248,6 +248,8 @@ del programa con el mismo nombre tiene prioridad):
 | `Data.Ord` | `comparing`, `Down`, `clamp` |
 | `Data.Map` | árboles de búsqueda balanceados de claves a valores, como en containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (sin `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` y `Foldable`; conviene importarlo calificado |
 | `Data.Set` | lo mismo para conjuntos: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; conviene importarlo calificado |
+| `Data.Vector` | `Vector a`, un slice de Go que Hago nunca modifica: `fromList`, `!?`, `generate`, `map`, `imap`, `filter`, `foldl`, `slice` (sin copiar), `sort`, `sortOn`, `zipWith`, `Foldable`; se importa calificado |
+| `Data.Iter` | `Iter a`, el `iter.Seq` de Go: `from`, `range`, `iterate`, `lines`, `words`, `map`, `filter`, `takeWhile`, `take`, `zipWith`, `foldl`, `sum`, `find`, `mapM_`; se importa calificado |
 | `System.Environment` | `getArgs`, `getProgName` |
 | `System.IO` | `stdin`, `stdout`, `stderr`, `hPutStrLn`, `hPrint`, `isEOF`, y el resto de los nombres de Haskell para los tres handles estándar |
 | `System.Exit` | `exitWith`, `exitSuccess`, `exitFailure` |
@@ -457,6 +459,35 @@ Go la puede llamar desde cualquier goroutine, así que un programa que le pasa u
 recibe el runtime concurrente (ver [Concurrencia](#concurrencia)). `examples/http-server.hgo`
 sirve páginas con `net/http` y se pide varias a sí mismo a la vez.
 
+## Listas, iteradores y vectores
+
+Hago tiene tres clases de secuencia, cada una para lo suyo:
+
+| | `[a]` | `Iter a` (`Data.Iter`) | `Vector a` (`Data.Vector`) |
+|---|---|---|---|
+| Qué es | celdas con cola perezosa | el `iter.Seq` de Go | un slice de Go |
+| Patrones (`x : xs`) y recursión | sí | no | no |
+| Agregar adelante compartiendo el resto | O(1) | no | copia |
+| Consumida dos veces | se calcula una vez y se comparte | se calcula dos veces | guardada |
+| Infinita | sí | sí | no |
+| Un pipeline sobre millones de valores | una allocation por celda | ninguna allocation por valor | los guarda todos |
+| Llegar al n-ésimo elemento | O(n) | O(n) | O(1) |
+
+- **Una lista es una estructura de datos:** para recursión y patrones, para armar un resultado de
+  a un elemento, y para valores que comparten partes (un zipper, una pila). Su cola es perezosa,
+  así que puede ser infinita, y lo que ya se calculó queda para el próximo que la lea.
+- **Un `Iter` es un cálculo:** un pipeline de `map`, `filter` y `takeWhile` sobre algo grande o
+  sin fin, que se consume una vez. No se puede desarmar con un patrón porque no tiene un "resto"
+  que dar: un `uncons` tendría que volver a correrlo desde el principio, o guardar lo calculado,
+  que es lo que hace una lista.
+- **Un `Vector` son datos ya calculados,** a los que se llega por posición, y el tipo que dan y
+  reciben las funciones de Go para slices:
+  `foreign import go "strings.Split" split :: String -> String -> Vector String`.
+
+Una función que se le pasa a una función de Go, como hacen `map`, `filter` y `foldl`, se genera
+como una función de Go de todos sus argumentos, así que un pipeline sobre un `Iter` corre como el
+loop de Go que representa (ver [Performance](#performance)).
+
 ## Concurrencia
 
 Un hilo de Hago es una goroutine: lanzar uno es barato, y pueden correr miles a la vez.
@@ -504,6 +535,8 @@ Son números de una sola máquina, como referencia y no como benchmark.
 | `nfib 40 :: Int -> Int`, Hago | 0,34 s | — |
 | `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, en `Int` | 0,35 s | — |
 | suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | 0,45 s | ~10 MB |
+| lo mismo con `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | 0,01 s | ~4 MB |
+| lo mismo sobre un `Data.Vector` de 3.000.000 de elementos | 0,01 s | ~60 MB |
 | `mapM_` sobre un millón de elementos en IO | 0,19 s | ~8 MB |
 | un loop recursivo en IO de cinco millones de iteraciones | 0,31 s | ~8 MB |
 | `mapM_` sobre un millón de elementos en `StateT Int IO` | 0,25 s | ~8 MB |
@@ -520,7 +553,7 @@ Son números de una sola máquina, como referencia y no como benchmark.
   no cuesta nada extra, porque se especializa. El precio es el tamaño del código: una copia por
   cada tipo con que se usa.
 - **La cadena de listas perezosas** corre en memoria constante, pero cada celda reserva un
-  thunk, así que es mucho más lenta que un loop de Go.
+  thunk, así que es mucho más lenta que un loop de Go. La misma cadena sobre un `Iter` es un loop de Go.
 - **Los combinadores de parsers** son lentos: cada paso devuelve un valor de un tipo suma (`Ok` o
   `Failed`) demasiado grande para guardarse por valor, así que cada uno reserva memoria, igual
   que cada thunk de una lista perezosa. La mayor parte del tiempo es del recolector de basura
@@ -604,6 +637,7 @@ Haskell 98.
   superior y recibe como parámetros extra las variables locales que usa.
 - `foreign import go` y `foreign import go type`.
 - Hilos, MVars, los canales de Go y `select`, `async` y `parMap`.
+- Vectores (slices de Go) e iteradores (el `iter.Seq` de Go).
 
 **Falta**
 - **La recursión polimórfica a través de una restricción** (una función que se llama a sí misma

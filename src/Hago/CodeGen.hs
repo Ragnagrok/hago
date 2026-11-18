@@ -72,7 +72,9 @@ generate runtime concurrentSymbols prog = unlines (header ++ [runtime concurrent
       , "rt_big \"math/big\""
       , "rt_filepath \"path/filepath\""
       , "rt_time \"time\""
-      , "rt_atomic \"sync/atomic\"" ]
+      , "rt_atomic \"sync/atomic\""
+      , "rt_iter \"iter\""
+      , "rt_slices \"slices\"" ]
         ++ (if concurrent then ["rt_reflect \"reflect\"", "rt_runtime \"runtime\"", "rt_syscall \"syscall\""] else [])
         ++ [show p | p <- foreignPkgs]
         ++ [")"]
@@ -82,7 +84,8 @@ generate runtime concurrentSymbols prog = unlines (header ++ [runtime concurrent
       [ "var _ = " ++ short | f <- M.elems (progForeign prog), fArity f > 0, null (fVars f)
       , take 1 (fSymbol f) /= "."
       , let (pkg, short) = splitSymbol (fSymbol f), pkg /= "" ]
-        ++ ["var _ " ++ goTypeSymbol s | di <- M.elems (progData prog), Just s <- [diForeign di], null (diParams di), '.' `elem` s]
+        ++ [ "var _ " ++ goTypeSymbol s ++ (if null (diParams di) then "" else "[" ++ commas (map (const "any") (diParams di)) ++ "]")
+           | di <- M.elems (progData prog), Just s <- [diForeign di], '.' `elem` s ]
     ctx0 = Ctx
       { cxVars = M.unions
           [ M.fromList [(tbName b, VKTop (tbArity b) (tbParams b) (tbShared b)) | b <- progBinds prog]
@@ -225,6 +228,7 @@ goTy ctx = render . zonk (progSubst (cxProg ctx))
         | not (null (hkPositions (cxProg ctx) c)) ->
             let (n, args) = dataInst (cxProg ctx) c ts
              in n ++ (if null args then "" else "[" ++ commas (map render args) ++ "]")
+      TCon c [t] | Just "[]" <- M.lookup c (progData (cxProg ctx)) >>= diForeign -> "[]" ++ render t
       TCon c ts | Just sym <- M.lookup c (progData (cxProg ctx)) >>= diForeign ->
         goTypeSymbol sym ++ (if null ts then "" else "[" ++ commas (map render ts) ++ "]")
       TCon c [] -> typeName c
@@ -853,7 +857,7 @@ numLit ctx n t = case zonk (progSubst (cxProg ctx)) t of
 -- Go code could call from another goroutine (net/http calls a handler on
 -- one per request).
 startsGoroutines :: Foreign -> Bool
-startsGoroutines f = any callable (fst (splitFun (fArity f) (fType f)))
+startsGoroutines f = not (isRuntimeSymbol f) && any callable (fst (splitFun (fArity f) (fType f)))
   where
     callable = \case
       TFun _ _ -> True

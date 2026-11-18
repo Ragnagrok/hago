@@ -176,6 +176,20 @@ Next, concurrency (decided 2026-11-18), in this order:
 - [x] **Chapter 15 of hago-book, "Concurrency".** On the way: `parMap` computes an element
       only as far as it is strict, so a list element gets only its first cell; the chapter says so.
 
+Next, sequences (decided 2026-11-18): lists stay as they are, lazy cells for recursion,
+patterns and sharing; two more kinds of sequence come from Go.
+
+- [x] **Functions given to Go as Go functions of all their arguments.** A lambda, a known
+      function, or one given some of its arguments becomes a direct Go function, without the
+      curried closures that would allocate on every call.
+- [x] **`Data.Vector`:** a Go slice Hago never changes, `Vector String` is Go's `[]string`
+      (`foreign import go type "[]" Vector a`), so `strings.Split` returns one.
+- [x] **`Data.Iter`:** Go's `iter.Seq`. The README's lazy list benchmark: 0.43 s, 10 MB with
+      lists; 0.01 s, 4 MB with `Iter`; 0.01 s, 60 MB with a `Vector`. Not `Foldable`: `foldr`
+      would need a lazy rest, which an `Iter` cannot give without running again or keeping
+      what it computed (a list).
+- [ ] **Ranges and comprehensions over `Iter`,** if code wants them: `[1 ..]` stays a list.
+
 Known rough edges, found on the way and not fixed yet:
 
 - [ ] **Errors in type signatures have no location** (a context with the wrong number of types, an

@@ -1,0 +1,15 @@
+fromList [21.5,19.0,23.25,18.5,22.0]
+(5,Just 23.25,Nothing)
+(Just 23.25,Just 18.5)
+20.85
+fromList [18.5,19.0,21.5,22.0,23.25]
+fromList [23.25,22.0,21.5,19.0,18.5]
+fromList [(0,21.5),(1,23.25),(2,22.0)]
+(fromList [19.0,23.25],fromList [21.5,19.0],fromList [18.5,22.0])
+fromList [0,1,4,9,16,25]
+fromList [11,12,13]
+(5,True,fromList [22,19,23,18,22])
+(fromList [1,2,3],True)
+fromList ['a','b','c']
+fromList ["red","green","blue"]
+blue < green < red

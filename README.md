@@ -237,6 +237,8 @@ program with the same name comes first):
 | `Data.Ord` | `comparing`, `Down`, `clamp` |
 | `Data.Map` | balanced search trees from keys to values, as in containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (no `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` and `Foldable`; import it qualified |
 | `Data.Set` | the same for sets: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; import it qualified |
+| `Data.Vector` | `Vector a`, a Go slice Hago never changes: `fromList`, `!?`, `generate`, `map`, `imap`, `filter`, `foldl`, `slice` (without copying), `sort`, `sortOn`, `zipWith`, `Foldable`; import it qualified |
+| `Data.Iter` | `Iter a`, Go's `iter.Seq`: `from`, `range`, `iterate`, `lines`, `words`, `map`, `filter`, `takeWhile`, `take`, `zipWith`, `foldl`, `sum`, `find`, `mapM_`; import it qualified |
 | `System.Environment` | `getArgs`, `getProgName` |
 | `System.IO` | `stdin`, `stdout`, `stderr`, `hPutStrLn`, `hPrint`, `isEOF`, and the rest of Haskell's names for the three standard handles |
 | `System.Exit` | `exitWith`, `exitSuccess`, `exitFailure` |
@@ -440,6 +442,34 @@ Go may call it from any goroutine, so a program that gives Go a function gets th
 runtime (see [Concurrency](#concurrency)). `examples/http-server.hgo` serves pages with
 `net/http`, and asks itself for several at once.
 
+## Lists, iterators and vectors
+
+Hago has three kinds of sequence, each for its own job:
+
+| | `[a]` | `Iter a` (`Data.Iter`) | `Vector a` (`Data.Vector`) |
+|---|---|---|---|
+| What it is | cells with a lazy tail | Go's `iter.Seq` | a Go slice |
+| Patterns (`x : xs`) and recursion | yes | no | no |
+| Adding in front, sharing the rest | O(1) | no | copies |
+| Consumed twice | computed once, shared | computed twice | stored |
+| Infinite | yes | yes | no |
+| A pipeline over millions of values | one allocation per cell | no allocation per value | stores them all |
+| Reaching the n-th element | O(n) | O(n) | O(1) |
+
+- **A list is a data structure:** for recursion and patterns, for building a result one element
+  at a time, and for values that share parts (a zipper, a stack). Its tail is lazy, so it can be
+  infinite, and what has been computed of it is kept for whoever reads it next.
+- **An `Iter` is a computation:** a pipeline of `map`, `filter` and `takeWhile` over something
+  big or endless, consumed once. It cannot be taken apart with a pattern, because it has no
+  "rest" to give: a `uncons` would have to run it again from the start, or keep what it computed,
+  which is what a list is.
+- **A `Vector` is data already computed,** reached by position, and the type Go functions give
+  and take for slices: `foreign import go "strings.Split" split :: String -> String -> Vector String`.
+
+A function given to a Go function, as `map`, `filter` and `foldl` give theirs, is generated as a
+Go function of all its arguments, so a pipeline over an `Iter` runs like the Go loop it stands
+for (see [Performance](#performance)).
+
 ## Concurrency
 
 A Hago thread is a goroutine: starting one is cheap, and thousands can run at once.
@@ -487,6 +517,8 @@ These numbers come from one machine, as a reference and not as a benchmark.
 | `nfib 40 :: Int -> Int`, Hago | 0.34 s | — |
 | `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, at `Int` | 0.35 s | — |
 | sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.45 s | ~10 MB |
+| the same with `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | 0.01 s | ~4 MB |
+| the same over a `Data.Vector` of 3,000,000 elements | 0.01 s | ~60 MB |
 | `mapM_` over a million elements in IO | 0.19 s | ~8 MB |
 | a recursive IO loop of five million iterations | 0.31 s | ~8 MB |
 | `mapM_` over a million elements in `StateT Int IO` | 0.25 s | ~8 MB |
@@ -501,7 +533,7 @@ These numbers come from one machine, as a reference and not as a benchmark.
 - **Constrained and constructor-polymorphic code** (`Num a =>`, `Monad m =>`) costs nothing
   extra, because it is specialised. The price is code size: one copy per type it is used at.
 - **The lazy list pipeline** streams in constant memory, but every cell allocates a thunk, so it
-  is much slower than a Go loop.
+  is much slower than a Go loop. The same pipeline over an `Iter` is a Go loop.
 - **Parser combinators** are slow: every step returns a value of a sum type (`Ok` or `Failed`)
   too big to be kept by value, so each one is allocated, and so is every thunk of a lazy list.
   Most of the time is Go's garbage collector. Parsing the input as a
@@ -580,6 +612,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
   extra parameters.
 - `foreign import go`, and `foreign import go type`.
 - Threads, MVars, Go's channels and `select`, `async`, and `parMap`.
+- Vectors (Go slices) and iterators (Go's `iter.Seq`).
 
 **Missing**
 - **Polymorphic recursion through a constraint** (a function that calls itself at a bigger

@@ -1,0 +1,133 @@
+-- Vectors: sequences of a fixed length, each element reached in constant
+-- time. A Vector a is a Go slice, []T, that Hago code never changes, so a
+-- Go function that takes or gives a slice takes or gives a Vector. Import
+-- it qualified: import qualified Data.Vector as Vector.
+--
+-- A vector is the right shape for data that is built once and then read,
+-- by position or from end to end. Adding one element copies the vector, so
+-- a sequence built one element at a time is better as a list first.
+module Data.Vector
+  ( Vector, fromList, toList, length, null, (!?), generate, replicate, empty, singleton
+  , map, imap, filter, foldl, sum, product, maximum, minimum, any, all, elem
+  , append, concat, slice, take, drop, reverse, sort, sortBy, sortOn, zipWith, zip
+  , toIter, fromIter
+  ) where
+
+import Prelude hiding
+  ( length, null, replicate, map, filter, foldl, sum, product, maximum, minimum, any, all
+  , elem, concat, take, drop, reverse, zipWith, zip, toList )
+import qualified Prelude
+import Data.Iter (Iter)
+
+foreign import go type "[]" Vector a
+
+foreign import go "rt_vecFromList" fromList :: [a] -> Vector a
+foreign import go "rt_vecToList" toList :: Vector a -> [a]
+foreign import go "rt_vecLength" length :: Vector a -> Int
+
+null :: Vector a -> Bool
+null v = length v == 0
+
+foreign import go "rt_vecIndex" index :: Vector a -> Int -> Either String a
+
+-- The element at a position, counting from 0, if there is one.
+(!?) :: Vector a -> Int -> Maybe a
+v !? i = either (const Nothing) Just (index v i)
+
+infixl 9 !?
+
+-- A vector of n elements, each computed from its position.
+foreign import go "rt_vecGenerate" generate :: Int -> (Int -> a) -> Vector a
+foreign import go "rt_vecReplicate" replicate :: Int -> a -> Vector a
+
+empty :: Vector a
+empty = fromList []
+
+singleton :: a -> Vector a
+singleton x = fromList [x]
+
+foreign import go "rt_vecMap" map :: (a -> b) -> Vector a -> Vector b
+
+-- map, with the position of each element.
+foreign import go "rt_vecImap" imap :: (Int -> a -> b) -> Vector a -> Vector b
+foreign import go "rt_vecFilter" filter :: (a -> Bool) -> Vector a -> Vector a
+foreign import go "rt_vecFoldl" foldl :: (b -> a -> b) -> b -> Vector a -> b
+
+sum :: Num a => Vector a -> a
+sum v = foldl (+) 0 v
+
+product :: Num a => Vector a -> a
+product v = foldl (*) 1 v
+
+maximum :: Ord a => Vector a -> Maybe a
+maximum v = foldl (\acc x -> Just (maybe x (\m -> max m x) acc)) Nothing v
+
+minimum :: Ord a => Vector a -> Maybe a
+minimum v = foldl (\acc x -> Just (maybe x (\m -> min m x) acc)) Nothing v
+
+any :: (a -> Bool) -> Vector a -> Bool
+any p v = foldl (\found x -> found || p x) False v
+
+all :: (a -> Bool) -> Vector a -> Bool
+all p v = foldl (\ok x -> ok && p x) True v
+
+elem :: Eq a => a -> Vector a -> Bool
+elem x v = any (== x) v
+
+foreign import go "rt_vecAppend" append :: Vector a -> Vector a -> Vector a
+foreign import go "rt_vecConcat" concat :: [Vector a] -> Vector a
+
+-- The n elements from a position on, or as many as there are. It shares
+-- the elements with the vector it comes from, without copying them.
+foreign import go "rt_vecSlice" slice :: Int -> Int -> Vector a -> Vector a
+
+take :: Int -> Vector a -> Vector a
+take n v = slice 0 n v
+
+drop :: Int -> Vector a -> Vector a
+drop n v = slice n (length v) v
+
+foreign import go "rt_vecReverse" reverse :: Vector a -> Vector a
+
+-- A stable sort, by a function that says whether one element goes first.
+foreign import go "rt_vecSortBy" sortWith :: (a -> a -> Bool) -> Vector a -> Vector a
+
+sort :: Ord a => Vector a -> Vector a
+sort v = sortWith (<) v
+
+sortBy :: (a -> a -> Ordering) -> Vector a -> Vector a
+sortBy cmp v = sortWith (\a b -> cmp a b == LT) v
+
+sortOn :: Ord b => (a -> b) -> Vector a -> Vector a
+sortOn key v = sortWith (\a b -> key a < key b) v
+
+foreign import go "rt_vecZipWith" zipWith :: (a -> b -> c) -> Vector a -> Vector b -> Vector c
+
+zip :: Vector a -> Vector b -> Vector (a, b)
+zip a b = zipWith (\x y -> (x, y)) a b
+
+foreign import go "rt_vecToIter" toIter :: Vector a -> Iter a
+foreign import go "rt_vecFromIter" fromIter :: Iter a -> Vector a
+
+instance Show a => Show (Vector a) where
+  show v = "fromList " ++ show (toList v)
+
+instance Eq a => Eq (Vector a) where
+  a == b = length a == length b && all id (zipWith (==) a b)
+
+instance Ord a => Ord (Vector a) where
+  compare a b = compare (toList a) (toList b)
+
+instance Functor Vector where
+  fmap f v = map f v
+
+instance Foldable Vector where
+  foldr f z v = Prelude.foldr f z (toList v)
+  foldl f z v = foldl f z v
+  toList v = toList v
+
+instance Semigroup (Vector a) where
+  a <> b = append a b
+
+instance Monoid (Vector a) where
+  mempty = empty

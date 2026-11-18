@@ -1,0 +1,30 @@
+-- Vectors: Go slices that Hago never changes.
+import qualified Data.Vector as Vector
+import Data.Vector (Vector)
+
+-- a Go function that gives a slice gives a Vector, with no conversion
+foreign import go "strings.Split" split :: String -> String -> Vector String
+foreign import go "strings.Join" join :: Vector String -> String -> String
+
+temperatures :: Vector Double
+temperatures = Vector.fromList [21.5, 19.0, 23.25, 18.5, 22.0]
+
+main :: IO ()
+main = do
+  print temperatures
+  print (Vector.length temperatures, temperatures Vector.!? 2, temperatures Vector.!? 9)
+  print (Vector.maximum temperatures, Vector.minimum temperatures)
+  print (Vector.sum temperatures / fromIntegral (Vector.length temperatures))
+  print (Vector.sort temperatures)
+  print (Vector.sortOn negate temperatures)
+  print (Vector.imap (\i t -> (i, t)) (Vector.filter (> 20) temperatures))
+  print (Vector.slice 1 2 temperatures, Vector.take 2 temperatures, Vector.drop 3 temperatures)
+  print (Vector.generate 6 (\i -> i * i))
+  print (Vector.zipWith (+) (Vector.fromList [1, 2, 3]) (Vector.replicate 5 (10 :: Int)))
+  -- the Prelude's Foldable functions, and the classes
+  print (length temperatures, elem 18.5 temperatures, fmap round temperatures :: Vector Int)
+  print (Vector.fromList [1, 2] <> Vector.fromList [3 :: Int], Vector.fromList ["ab"] == Vector.fromList ["ab"])
+  print (Vector.concat [Vector.singleton 'a', Vector.empty, Vector.fromList (unpack "bc")])
+  let fields = split "red,green,blue" ","
+  print fields
+  putStrLn (join (Vector.reverse fields) " < ")

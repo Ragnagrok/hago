@@ -6,10 +6,12 @@ package main
 import (
 	rt_bufio "bufio"
 	rt_fmt "fmt"
+	rt_iter "iter"
 	rt_big "math/big"
 	rt_filepath "path/filepath"
 	rt_time "time"
 	rt_os "os"
+	rt_slices "slices"
 	rt_strconv "strconv"
 	rt_strings "strings"
 	rt_sync "sync"
@@ -299,3 +301,347 @@ func rt_integerDivMod(a, b *rt_big.Int) (*rt_big.Int, *rt_big.Int) {
 
 func rt_integerDiv(a, b *rt_big.Int) *rt_big.Int { q, _ := rt_integerDivMod(a, b); return q }
 func rt_integerMod(a, b *rt_big.Int) *rt_big.Int { _, m := rt_integerDivMod(a, b); return m }
+
+// Data.Vector: a Vector a is a Go slice, []T, which Hago code never changes:
+// every operation that gives a vector makes a new slice.
+func rt_vecFromList[T any](l List[T]) []T {
+	var v []T
+	for ; l != nil; l = l.F1.force() {
+		v = append(v, l.F0)
+	}
+	return v
+}
+
+func rt_vecToList[T any](v []T) List[T] {
+	var l List[T]
+	for i := len(v) - 1; i >= 0; i-- {
+		l = &Cons[T]{v[i], rt_ready(l)}
+	}
+	return l
+}
+
+func rt_vecLength[T any](v []T) int { return len(v) }
+
+var rt_outOfRange = rt_fmt.Errorf("out of range")
+
+func rt_vecIndex[T any](v []T, i int) (T, error) {
+	if i < 0 || i >= len(v) {
+		var zero T
+		return zero, rt_outOfRange
+	}
+	return v[i], nil
+}
+
+func rt_vecGenerate[T any](n int, f func(int) T) []T {
+	v := make([]T, max(n, 0))
+	for i := range v {
+		v[i] = f(i)
+	}
+	return v
+}
+
+func rt_vecReplicate[T any](n int, x T) []T {
+	v := make([]T, max(n, 0))
+	for i := range v {
+		v[i] = x
+	}
+	return v
+}
+
+func rt_vecMap[A, B any](f func(A) B, v []A) []B {
+	w := make([]B, len(v))
+	for i, x := range v {
+		w[i] = f(x)
+	}
+	return w
+}
+
+func rt_vecImap[A, B any](f func(int, A) B, v []A) []B {
+	w := make([]B, len(v))
+	for i, x := range v {
+		w[i] = f(i, x)
+	}
+	return w
+}
+
+func rt_vecFilter[T any](p func(T) bool, v []T) []T {
+	var w []T
+	for _, x := range v {
+		if p(x) {
+			w = append(w, x)
+		}
+	}
+	return w
+}
+
+func rt_vecFoldl[B, A any](f func(B, A) B, z B, v []A) B {
+	for _, x := range v {
+		z = f(z, x)
+	}
+	return z
+}
+
+func rt_vecAppend[T any](a, b []T) []T {
+	return append(append(make([]T, 0, len(a)+len(b)), a...), b...)
+}
+
+func rt_vecConcat[T any](vs List[[]T]) []T {
+	var w []T
+	for ; vs != nil; vs = vs.F1.force() {
+		w = append(w, vs.F0...)
+	}
+	return w
+}
+
+// The n elements from i on, or as many as there are. The slice shares the
+// array, which nothing ever changes.
+func rt_vecSlice[T any](i, n int, v []T) []T {
+	i = min(max(i, 0), len(v))
+	return v[i:min(i+max(n, 0), len(v))]
+}
+
+func rt_vecReverse[T any](v []T) []T {
+	w := rt_slices.Clone(v)
+	rt_slices.Reverse(w)
+	return w
+}
+
+// A stable sort, by a function that says whether one element goes before
+// another.
+func rt_vecSortBy[T any](before func(T, T) bool, v []T) []T {
+	w := rt_slices.Clone(v)
+	rt_slices.SortStableFunc(w, func(a, b T) int {
+		switch {
+		case before(a, b):
+			return -1
+		case before(b, a):
+			return 1
+		}
+		return 0
+	})
+	return w
+}
+
+func rt_vecZipWith[A, B, C any](f func(A, B) C, a []A, b []B) []C {
+	w := make([]C, min(len(a), len(b)))
+	for i := range w {
+		w[i] = f(a[i], b[i])
+	}
+	return w
+}
+
+func rt_vecToIter[T any](v []T) rt_iter.Seq[T] { return rt_slices.Values(v) }
+
+func rt_vecFromIter[T any](s rt_iter.Seq[T]) []T { return rt_slices.Collect(s) }
+
+// Data.Iter: an Iter a is Go's iter.Seq[T], a function that gives its values
+// one by one to a function of the consumer's, which says whether it wants
+// more. Each stage of a pipeline is one function; no value is allocated per
+// element. Consuming an Iter twice computes it twice.
+func rt_iterFrom(n int) rt_iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for i := n; yield(i); i++ {
+		}
+	}
+}
+
+// From a to b, both included.
+func rt_iterRange(a, b int) rt_iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for i := a; i <= b && yield(i); i++ {
+		}
+	}
+}
+
+func rt_iterIterate[T any](f func(T) T, x T) rt_iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for v := x; yield(v); v = f(v) {
+		}
+	}
+}
+
+func rt_iterRepeat[T any](x T) rt_iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for yield(x) {
+		}
+	}
+}
+
+func rt_iterFromList[T any](l List[T]) rt_iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for c := l; c != nil && yield(c.F0); c = c.F1.force() {
+		}
+	}
+}
+
+func rt_iterToList[T any](s rt_iter.Seq[T]) List[T] {
+	return rt_vecToList(rt_slices.Collect(s))
+}
+
+func rt_iterMap[A, B any](f func(A) B, s rt_iter.Seq[A]) rt_iter.Seq[B] {
+	return func(yield func(B) bool) {
+		for x := range s {
+			if !yield(f(x)) {
+				return
+			}
+		}
+	}
+}
+
+func rt_iterFilter[T any](p func(T) bool, s rt_iter.Seq[T]) rt_iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for x := range s {
+			if p(x) && !yield(x) {
+				return
+			}
+		}
+	}
+}
+
+func rt_iterTakeWhile[T any](p func(T) bool, s rt_iter.Seq[T]) rt_iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for x := range s {
+			if !p(x) || !yield(x) {
+				return
+			}
+		}
+	}
+}
+
+func rt_iterDropWhile[T any](p func(T) bool, s rt_iter.Seq[T]) rt_iter.Seq[T] {
+	return func(yield func(T) bool) {
+		dropping := true
+		for x := range s {
+			if dropping && p(x) {
+				continue
+			}
+			dropping = false
+			if !yield(x) {
+				return
+			}
+		}
+	}
+}
+
+func rt_iterTake[T any](n int, s rt_iter.Seq[T]) rt_iter.Seq[T] {
+	return func(yield func(T) bool) {
+		if n <= 0 {
+			return
+		}
+		i := 0
+		for x := range s {
+			i++
+			if !yield(x) || i >= n {
+				return
+			}
+		}
+	}
+}
+
+func rt_iterDrop[T any](n int, s rt_iter.Seq[T]) rt_iter.Seq[T] {
+	return func(yield func(T) bool) {
+		i := 0
+		for x := range s {
+			i++
+			if i > n && !yield(x) {
+				return
+			}
+		}
+	}
+}
+
+func rt_iterConcatMap[A, B any](f func(A) rt_iter.Seq[B], s rt_iter.Seq[A]) rt_iter.Seq[B] {
+	return func(yield func(B) bool) {
+		for x := range s {
+			for y := range f(x) {
+				if !yield(y) {
+					return
+				}
+			}
+		}
+	}
+}
+
+func rt_iterAppend[T any](a, b rt_iter.Seq[T]) rt_iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for x := range a {
+			if !yield(x) {
+				return
+			}
+		}
+		for x := range b {
+			if !yield(x) {
+				return
+			}
+		}
+	}
+}
+
+// The second Iter is read with iter.Pull, which runs it as a coroutine, so
+// zipWith costs more per element than the other stages.
+func rt_iterZipWith[A, B, C any](f func(A, B) C, a rt_iter.Seq[A], b rt_iter.Seq[B]) rt_iter.Seq[C] {
+	return func(yield func(C) bool) {
+		next, stop := rt_iter.Pull(b)
+		defer stop()
+		for x := range a {
+			y, ok := next()
+			if !ok || !yield(f(x, y)) {
+				return
+			}
+		}
+	}
+}
+
+func rt_iterFoldl[B, A any](f func(B, A) B, z B, s rt_iter.Seq[A]) B {
+	for x := range s {
+		z = f(z, x)
+	}
+	return z
+}
+
+var rt_notFound = rt_fmt.Errorf("not found")
+
+// The first value that satisfies p; the rest is not computed.
+func rt_iterFind[T any](p func(T) bool, s rt_iter.Seq[T]) (T, error) {
+	for x := range s {
+		if p(x) {
+			return x, nil
+		}
+	}
+	var zero T
+	return zero, rt_notFound
+}
+
+func rt_iterMapM_[T any](f func(T) IO[struct{}], s rt_iter.Seq[T]) {
+	for x := range s {
+		rt_run(f(x))
+	}
+}
+
+func rt_iterLines(s string) rt_iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for len(s) > 0 {
+			i := rt_strings.IndexByte(s, '\n')
+			if i < 0 {
+				yield(s)
+				return
+			}
+			if !yield(rt_strings.TrimSuffix(s[:i], "\r")) {
+				return
+			}
+			s = s[i+1:]
+		}
+	}
+}
+
+func rt_iterWords(s string) rt_iter.Seq[string] { return rt_strings.FieldsSeq(s) }
+
+func rt_iterChars(s string) rt_iter.Seq[rune] {
+	return func(yield func(rune) bool) {
+		for _, c := range s {
+			if !yield(c) {
+				return
+			}
+		}
+	}
+}

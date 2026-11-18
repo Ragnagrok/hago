@@ -1,0 +1,100 @@
+-- Iterators: Go's iter.Seq. An Iter a gives its values one by one, as they
+-- are asked for, and can go on forever: from 1 is every number from 1 on.
+-- A pipeline of map, filter and takeWhile over an Iter computes each value
+-- once and allocates nothing per value, so it is much faster than the same
+-- pipeline over a list, and runs in constant memory. Import it qualified:
+-- import qualified Data.Iter as Iter.
+--
+-- An Iter is a computation, not a structure: consuming one twice computes
+-- it twice, and it cannot be taken apart with patterns. For that, toList
+-- makes it a list. Functions that consume a whole Iter (length, sum, foldl)
+-- never end on an infinite one.
+module Data.Iter
+  ( Iter, from, range, iterate, repeat, fromList, toList, lines, words, chars
+  , map, filter, takeWhile, dropWhile, take, drop, concatMap, append, zipWith, zip
+  , foldl, length, sum, product, maximum, minimum, find, head, any, all, elem, null
+  , mapM_, forM_
+  ) where
+
+import Prelude hiding
+  ( iterate, repeat, toList, lines, words, map, filter, takeWhile, dropWhile, take, drop
+  , concatMap, zipWith, zip, foldl, length, sum, product, maximum, minimum, any, all
+  , elem, null, mapM_, forM_ )
+
+foreign import go type "iter.Seq" Iter a
+
+-- Every number from n on.
+foreign import go "rt_iterFrom" from :: Int -> Iter Int
+
+-- The numbers from a to b, both included.
+foreign import go "rt_iterRange" range :: Int -> Int -> Iter Int
+
+-- x, f x, f (f x)...
+foreign import go "rt_iterIterate" iterate :: (a -> a) -> a -> Iter a
+foreign import go "rt_iterRepeat" repeat :: a -> Iter a
+foreign import go "rt_iterFromList" fromList :: [a] -> Iter a
+foreign import go "rt_iterToList" toList :: Iter a -> [a]
+
+-- The lines, words and characters of a text, without copying it.
+foreign import go "rt_iterLines" lines :: String -> Iter String
+foreign import go "rt_iterWords" words :: String -> Iter String
+foreign import go "rt_iterChars" chars :: String -> Iter Char
+
+foreign import go "rt_iterMap" map :: (a -> b) -> Iter a -> Iter b
+foreign import go "rt_iterFilter" filter :: (a -> Bool) -> Iter a -> Iter a
+foreign import go "rt_iterTakeWhile" takeWhile :: (a -> Bool) -> Iter a -> Iter a
+foreign import go "rt_iterDropWhile" dropWhile :: (a -> Bool) -> Iter a -> Iter a
+foreign import go "rt_iterTake" take :: Int -> Iter a -> Iter a
+foreign import go "rt_iterDrop" drop :: Int -> Iter a -> Iter a
+foreign import go "rt_iterConcatMap" concatMap :: (a -> Iter b) -> Iter a -> Iter b
+foreign import go "rt_iterAppend" append :: Iter a -> Iter a -> Iter a
+foreign import go "rt_iterZipWith" zipWith :: (a -> b -> c) -> Iter a -> Iter b -> Iter c
+
+zip :: Iter a -> Iter b -> Iter (a, b)
+zip a b = zipWith (\x y -> (x, y)) a b
+
+foreign import go "rt_iterFoldl" foldl :: (b -> a -> b) -> b -> Iter a -> b
+
+length :: Iter a -> Int
+length s = foldl (\n _ -> n + 1) 0 s
+
+sum :: Num a => Iter a -> a
+sum s = foldl (+) 0 s
+
+product :: Num a => Iter a -> a
+product s = foldl (*) 1 s
+
+maximum :: Ord a => Iter a -> Maybe a
+maximum s = foldl (\acc x -> Just (maybe x (\m -> max m x) acc)) Nothing s
+
+minimum :: Ord a => Iter a -> Maybe a
+minimum s = foldl (\acc x -> Just (maybe x (\m -> min m x) acc)) Nothing s
+
+foreign import go "rt_iterFind" goFind :: (a -> Bool) -> Iter a -> Either String a
+
+-- The first value that satisfies p; what comes after it is not computed.
+find :: (a -> Bool) -> Iter a -> Maybe a
+find p s = either (const Nothing) Just (goFind p s)
+
+head :: Iter a -> Maybe a
+head s = find (const True) s
+
+any :: (a -> Bool) -> Iter a -> Bool
+any p s = maybe False (const True) (find p s)
+
+all :: (a -> Bool) -> Iter a -> Bool
+all p s = not (any (not . p) s)
+
+elem :: Eq a => a -> Iter a -> Bool
+elem x s = any (== x) s
+
+null :: Iter a -> Bool
+null s = not (any (const True) s)
+
+foreign import go "rt_iterMapM_" mapM_ :: (a -> IO ()) -> Iter a -> IO ()
+
+forM_ :: Iter a -> (a -> IO ()) -> IO ()
+forM_ s f = mapM_ f s
+
+instance Functor Iter where
+  fmap f s = map f s
