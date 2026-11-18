@@ -173,7 +173,7 @@ Next, concurrency (decided 2026-11-18), in this order:
       turns on the concurrent runtime. A Go function that returns only an `error` is an
       `Either String ()`. `examples/http-server.hgo` serves pages with `net/http` and asks for
       several at once, under the race detector too; `examples/foreign-types.hgo` has the rest.
-- [x] **Chapter 15 of hago-book, "Concurrency".** On the way: `parMap` computes an element
+- [x] **Chapter 16 of hago-book, "Concurrency"** (first written as 15). On the way: `parMap` computes an element
       only as far as it is strict, so a list element gets only its first cell; the chapter says so.
 
 Next, sequences (decided 2026-11-18): lists stay as they are, lazy cells for recursion,
@@ -188,6 +188,8 @@ patterns and sharing; two more kinds of sequence come from Go.
       lists; 0.01 s, 4 MB with `Iter`; 0.01 s, 60 MB with a `Vector`. Not `Foldable`: `foldr`
       would need a lazy rest, which an `Iter` cannot give without running again or keeping
       what it computed (a list).
+- [x] **Chapter 15 of hago-book, "Data structures":** lists, vectors, iterators, maps and sets,
+      and when each fits.
 - [ ] **Ranges and comprehensions over `Iter`,** if code wants them: `[1 ..]` stays a list.
 
 Known rough edges, found on the way and not fixed yet:
