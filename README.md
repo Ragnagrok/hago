@@ -351,22 +351,29 @@ data Tree a = Leaf | Node (Tree a) a (Tree a)
 
 ## What the Go looks like
 
-`map` compiles to a generic Go function. Data types become a Go interface with one struct per
-constructor:
+`map` compiles to a generic Go function. A list is a pointer to its first cell, `nil` when it is
+empty, and a `Lazy` value is a pointer to a thunk:
 
 ```go
 func map_[T_a any, T_b any](_arg0 func(T_a) T_b, _arg1 List[T_a]) List[T_b] {
 	...
-		if hg_v9, hg_ok := _arg1.(Cons[T_a]); hg_ok {
-			x := hg_v9.F0
-			xs := hg_v9.F1
-			return Cons[T_b]{f(x), rt_lazy(func() List[T_b] {
-				return map_[T_a, T_b](f, xs())
+		if _arg1 != nil {
+			x := _arg1.F0
+			xs := _arg1.F1
+			return &Cons[T_b]{g(x), rt_lazy(func() List[T_b] {
+				return map_[T_a, T_b](g, xs.force())
 			})}
 		}
 	...
 }
 ```
+
+- **Data types** are kept the cheapest way their shape allows. One with a single constructor
+  is that constructor's struct, passed by value, so `data Meters = Meters Double` costs what
+  `newtype` does. A small sum that does not contain itself (`Maybe`, `Either`, `Ordering`) is
+  one struct with a tag, also by value. One with two constructors, one without fields (a list,
+  `Data.Map`'s trees), is a pointer, `nil` for the empty one. Anything else is a Go interface
+  with a struct per constructor.
 
 - **Polymorphism** becomes Go generics.
 - **Calls** to known functions are direct Go calls. Partial application and function values use
@@ -406,16 +413,18 @@ These numbers come from one machine, as a reference and not as a benchmark.
 | a recursive IO loop of five million iterations | 0.31 s | ~8 MB |
 | `mapM_` over a million elements in `StateT Int IO` | 0.25 s | ~8 MB |
 | fifty million additions of a `newtype Meters = Meters Double` | 0.02 s | ~4 MB |
-| the same with `data Meters = Meters Double` | 0.36 s | ~10 MB |
-| parse and pretty print 3.7 MB of JSON with `examples/Data/Json.hgo` (`jq .`: 0.13 s) | 3.5 s | ~140 MB |
+| the same with `data Meters = Meters Double` | 0.02 s | ~4 MB |
+| parse and pretty print 3.7 MB of JSON with `examples/Data/Json.hgo` (`jq .`: 0.13 s) | 2.6 s | ~140 MB |
+| a million `Data.Map` inserts, then half a million deletes with `foldl`, and lookups | 1.45 s | ~170 MB |
 
 - **Strict code at concrete types** compiles to the Go you would write by hand, and runs like it.
 - **Constrained and constructor-polymorphic code** (`Num a =>`, `Monad m =>`) costs nothing
   extra, because it is specialised. The price is code size: one copy per type it is used at.
 - **The lazy list pipeline** streams in constant memory, but every cell allocates a thunk, so it
   is much slower than a Go loop.
-- **Parser combinators** are slow: every step returns a small value of a sum type (`Ok` or
-  `Failed`), and a sum type is a Go interface, so each one is allocated. Parsing the input as a
+- **Parser combinators** are slow: every step returns a value of a sum type (`Ok` or `Failed`)
+  too big to be kept by value, so each one is allocated, and so is every thunk of a lazy list.
+  Most of the time is Go's garbage collector. Parsing the input as a
   `[Char]` (with `unpack`) was four times slower again; `Data.String.uncons` reads a `String`
   without a list.
 

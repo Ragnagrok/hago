@@ -367,22 +367,30 @@ data Tree a = Leaf | Node (Tree a) a (Tree a)
 
 ## Cómo queda el Go
 
-`map` se compila a una función genérica de Go. Los tipos de datos son una interfaz de Go con un
-struct por constructor:
+`map` se compila a una función genérica de Go. Una lista es un puntero a su primera celda, `nil`
+si está vacía, y un valor `Lazy` es un puntero a un thunk:
 
 ```go
 func map_[T_a any, T_b any](_arg0 func(T_a) T_b, _arg1 List[T_a]) List[T_b] {
 	...
-		if hg_v9, hg_ok := _arg1.(Cons[T_a]); hg_ok {
-			x := hg_v9.F0
-			xs := hg_v9.F1
-			return Cons[T_b]{f(x), rt_lazy(func() List[T_b] {
-				return map_[T_a, T_b](f, xs())
+		if _arg1 != nil {
+			x := _arg1.F0
+			xs := _arg1.F1
+			return &Cons[T_b]{g(x), rt_lazy(func() List[T_b] {
+				return map_[T_a, T_b](g, xs.force())
 			})}
 		}
 	...
 }
 ```
+
+- **Los tipos de datos** se guardan de la forma más barata que su forma permite. Uno con un solo
+  constructor es el struct de ese constructor, pasado por valor, así que
+  `data Meters = Meters Double` cuesta lo mismo que un `newtype`. Un tipo suma chico que no se
+  contiene a sí mismo (`Maybe`, `Either`, `Ordering`) es un struct con una etiqueta, también
+  por valor. Uno con dos constructores, uno sin campos (una lista, los árboles de `Data.Map`),
+  es un puntero, `nil` para el vacío. Cualquier otro es una interfaz de Go con un struct por
+  constructor.
 
 - **El polimorfismo** se traduce a genéricos de Go.
 - **Las llamadas** a funciones conocidas son llamadas directas de Go. La aplicación parcial y las
@@ -422,8 +430,9 @@ Son números de una sola máquina, como referencia y no como benchmark.
 | un loop recursivo en IO de cinco millones de iteraciones | 0,31 s | ~8 MB |
 | `mapM_` sobre un millón de elementos en `StateT Int IO` | 0,25 s | ~8 MB |
 | cincuenta millones de sumas de un `newtype Meters = Meters Double` | 0,02 s | ~4 MB |
-| lo mismo con `data Meters = Meters Double` | 0,36 s | ~10 MB |
-| parsear e imprimir con formato 3,7 MB de JSON con `examples/Data/Json.hgo` (`jq .`: 0,13 s) | 3,5 s | ~140 MB |
+| lo mismo con `data Meters = Meters Double` | 0,02 s | ~4 MB |
+| parsear e imprimir con formato 3,7 MB de JSON con `examples/Data/Json.hgo` (`jq .`: 0,13 s) | 2,6 s | ~140 MB |
+| un millón de inserciones en un `Data.Map`, después medio millón de borrados con `foldl`, y búsquedas | 1,45 s | ~170 MB |
 
 - **El código estricto en tipos concretos** se compila al Go que escribirías a mano, y rinde
   igual.
@@ -432,8 +441,10 @@ Son números de una sola máquina, como referencia y no como benchmark.
   cada tipo con que se usa.
 - **La cadena de listas perezosas** corre en memoria constante, pero cada celda reserva un
   thunk, así que es mucho más lenta que un loop de Go.
-- **Los combinadores de parsers** son lentos: cada paso devuelve un valor chico de un tipo suma
-  (`Ok` o `Failed`), y un tipo suma es una interfaz de Go, así que cada uno reserva memoria.
+- **Los combinadores de parsers** son lentos: cada paso devuelve un valor de un tipo suma (`Ok` o
+  `Failed`) demasiado grande para guardarse por valor, así que cada uno reserva memoria, igual
+  que cada thunk de una lista perezosa. La mayor parte del tiempo es del recolector de basura
+  de Go.
   Parsear la entrada como `[Char]` (con `unpack`) era cuatro veces más lento todavía;
   `Data.String.uncons` lee un `String` sin armar una lista.
 

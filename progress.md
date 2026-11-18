@@ -96,7 +96,8 @@ From easiest to hardest, which is the order we take them in.
 - [x] **`Data.List`, `Data.Char`, `Data.Ord`, `Data.Map`, `Data.Set`,** for the book's chapter on
       modules. Maps and sets are weight-balanced trees, as in containers; nothing partial
       (`!?` instead of `!`, `maximumBy` returns `Maybe`). `intercalate` joins any `Monoid`.
-      A million inserts, half a million deletes and lookups take 2.6 s and 590 MB.
+      A million inserts, half a million deletes and lookups took 2.6 s and 590 MB at first
+      (see below for now).
 
 - [x] **What the book's chapter on types needed.** `:kind` at the prompt; constructors that
       are operators take applied types on both sides (`a :+: Chain a`), and a derived `Show`
@@ -118,9 +119,27 @@ From easiest to hardest, which is the order we take them in.
 
 Next, found by the JSON program:
 
-- [ ] **Small sum types without allocation.** A non-recursive sum type (`Maybe`, `Either`, a
-      parser's `Ok | Failed`) is a Go interface, so building one allocates; as a struct with a
-      tag, passed by value, it would not. Allocation and GC are most of the JSON parser's time.
+- [x] **Data types without allocation, where their shape allows it.** One constructor: its
+      struct, by value. A small sum that does not contain itself (up to eight words): one
+      struct with a tag, by value. Two constructors, one without fields (lists, trees): a
+      pointer, nil for the empty one. A `Lazy` is one pointer to a thunk instead of a closure
+      over one, a suspension of a value that is already computed costs one allocation instead
+      of three, and the Prelude's `&&` and `||` are Go's. Measured on one machine, each program
+      three times, before and after:
+
+      | Program | Before | After |
+      | --- | --- | --- |
+      | JSON, 3.7 MB, parse and pretty print | 3.6 s, 150 MB | 2.6 s, 145 MB |
+      | `Data.Map`: 1M inserts, 500k deletes with `foldr`, lookups | 2.6 s, 570 MB | 1.65 s, 410 MB |
+      | the same, deleting with `foldl` | 2.5 s, 220 MB | 1.45 s, 170 MB |
+      | `data Meters = Meters Double`, 50M additions | 0.38 s, 10 MB | 0.02 s, 4 MB |
+
+      Most of what is left is Go's garbage collector (half of the CPU time in both). The
+      `foldr` version's extra memory is the stack: `foldr` with a strict function recurses
+      500k deep.
+- [ ] **A parser's `Ok | Failed` is still an interface:** its fields are more than eight words.
+      Overlapping the constructors' fields in one struct would need unsafe tricks Go does not
+      allow.
 - [ ] **Runs of characters in one step.** `Data.String.span`/`takeWhile` over a `String`, and a
       parser that takes a run (`takeWhileP`), instead of one `satisfy` per character.
 - [ ] **Decide whether `Text.Parser` and `Text.Pretty` belong in the library.**
