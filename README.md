@@ -52,7 +52,9 @@ branches use (of an `if`, a `case` or guards) is computed in those branches, and
 uses is not computed at all. So `safeDiv a b | b == 0 = Nothing | otherwise = Just q where
 q = a `div` b` does not divide by zero, as it would if `q` were computed before the guards. The
 code is pure, so computing a binding on fewer paths can only avoid failures, never change a
-result. What a guard, a condition or a scrutinee uses is computed before it.
+result. What a guard, a condition or a scrutinee uses is computed before it, and what only a
+later guard uses, after the guards before it fail (unless an earlier guard needs some of the
+same bindings, which would then be computed twice).
 
 ## Type classes
 

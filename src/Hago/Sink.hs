@@ -12,7 +12,8 @@
 -- would divide by zero before looking at the guards. Since the code is
 -- pure, computing a binding on fewer paths can only stop a program from
 -- failing or looping where it did not have to. What a guard, a condition or
--- a scrutinee uses is still computed before it.
+-- a scrutinee uses is still computed before it, but a binding that only a
+-- later guard uses is computed after the guards before it have failed.
 module Hago.Sink (sinkLocals) where
 
 import Data.Data (Data)
@@ -25,7 +26,7 @@ sinkLocals = everywhere step
   where
     step = \case
       CLet bs body t -> letIn bs body t
-      CMatch ss rows t -> CMatch ss (map (sinkRow t) rows) t
+      CMatch ss rows t -> CMatch ss (concatMap (sinkRow t) rows) t
       e -> e
 
 -- | The bindings placed as close as they can be to their uses in body.
@@ -41,7 +42,7 @@ letIn bs body t = case body of
         let keep = needed bs (foldMap refsIn ss)
             rest = without keep bs
             into row@(CRow ps rbs gs) = sinkRow t' (CRow ps (needed rest (refsIn row) ++ rbs) gs)
-         in wrap keep (CMatch ss (map into rows) t') t
+         in wrap keep (CMatch ss (concatMap into rows) t') t
   _ -> wrap (needed bs (refsIn body)) body t
   where
     -- a row that binds a name the bindings use, or define, would see its own
@@ -50,12 +51,26 @@ letIn bs body t = case body of
           used = foldMap refsIn moving `S.union` S.fromList (map bindName moving)
        in not (S.null (S.intersection bound used))
 
--- | The row's bindings that no guard uses move into the bodies that use them.
-sinkRow :: Type -> CRow -> CRow
-sinkRow t (CRow ps bs gs) =
-  let keep = needed bs (foldMap refsIn [g | (Just g, _) <- gs])
-      rest = without keep bs
-   in CRow ps keep [(g, letIn (needed rest (refsIn e)) e t) | (g, e) <- gs]
+-- | The row's bindings that no guard uses move into the bodies that use
+-- them. When the first guards do not need a binding a later guard does,
+-- the row is split in two with the same patterns: the second one, tried
+-- when the first one's guards all fail, computes it. That is only done
+-- when the two need nothing in common, which would be computed twice.
+sinkRow :: Type -> CRow -> [CRow]
+sinkRow t (CRow ps bs gs) = case [k | k <- [1 .. length gs - 1], splits k] of
+  k : _ -> finish (take k gs) : sinkRow t (CRow ps bs (drop k gs))
+  [] -> [finish gs]
+  where
+    forGuards gs' = needed bs (foldMap refsIn [g | (Just g, _) <- gs'])
+    names = S.fromList . map bindName
+    splits k =
+      let before = names (forGuards (take k gs))
+          after = names (forGuards (drop k gs))
+       in not (S.null after) && S.null (S.intersection before after)
+    finish gs' =
+      let keep = forGuards gs'
+          rest = without keep bs
+       in CRow ps keep [(g, letIn (needed rest (refsIn e)) e t) | (g, e) <- gs']
 
 -- | Those of the bindings that the names need, directly or through each
 -- other, in their order.

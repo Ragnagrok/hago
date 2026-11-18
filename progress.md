@@ -132,9 +132,10 @@ Known rough edges, found on the way and not fixed yet:
 - [ ] **The check for values defined in terms of each other counts every branch** of an `if` or
       `case` as evaluated, so it could reject a value whose cycle only goes through a branch
       that is never taken.
-- [ ] **A binding a later guard uses is computed before the first guard,** even when the first
-      guard holds and nothing uses it; guards could be split so that it is computed just
-      before the first guard that needs it.
+- [ ] **A binding a later guard uses is computed before the first guard when an earlier guard
+      shares a binding with it** (otherwise it is computed after the earlier guards fail).
+      Splitting there would compute the shared binding twice; doing better needs bindings
+      between guards in the core.
 - [ ] **A record update that changes a type parameter some other field fixes** is reported as the
       type mismatch it causes (`no instance for Num String`), not as the field that cannot change.
 

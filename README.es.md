@@ -53,7 +53,9 @@ algunas ramas (de un `if`, un `case` o unas guardas) se calcula en esas ramas, y
 no se calcula. Así, `safeDiv a b | b == 0 = Nothing | otherwise = Just q where q = a `div` b`
 no divide por cero, como pasaría si `q` se calculara antes de las guardas. El código es puro, así
 que calcular una ligadura en menos caminos sólo puede evitar fallas, nunca cambiar un resultado.
-Lo que usa una guarda, una condición o lo que se analiza en un `case` se calcula antes.
+Lo que usa una guarda, una condición o lo que se analiza en un `case` se calcula antes, y lo que
+usa sólo una guarda posterior, después de que fallan las anteriores (salvo que una guarda
+anterior necesite alguna de las mismas ligaduras, que entonces se calcularían dos veces).
 
 ## Type classes
 

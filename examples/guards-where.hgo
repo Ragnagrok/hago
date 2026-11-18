@@ -1,0 +1,23 @@
+-- A binding that only a later guard uses is computed after the guards before it fail.
+
+
+safeRatio :: Int -> Int -> Int
+safeRatio a b
+  | b == 0 = 0
+  | q > 10 = 10
+  | otherwise = q
+  where
+    q = a `div` b
+
+describe :: [Int] -> String
+describe xs
+  | null xs = "empty"
+  | h > 0 = "starts positive"
+  | otherwise = "starts with " ++ show h
+  where
+    h = 10 `div` length xs
+
+main :: IO ()
+main = do
+  print (map (uncurry safeRatio) [(7, 0), (100, 2), (9, 3)])
+  print (map describe [[], [3], [-2, 1]])
