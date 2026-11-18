@@ -1,0 +1,46 @@
+-- Go's types, their fields and methods, and Hago functions given to Go.
+
+-- a type Hago only passes around: Go functions make it and look inside
+foreign import go type "*net/url.URL" URL
+foreign import go "net/url.Parse" parseURL :: String -> Either String URL
+
+-- a selector on the first argument: a field, or a method with its arguments
+foreign import go ".Scheme" scheme :: URL -> String
+foreign import go ".Hostname()" hostname :: URL -> String
+foreign import go ".Port()" port :: URL -> String
+foreign import go ".Query().Get" queryParam :: URL -> String -> String
+foreign import go ".String()" urlString :: URL -> String
+
+-- a Hago function given to Go becomes a Go function
+foreign import go "strings.Map" mapRunes :: (Char -> Char) -> String -> String
+foreign import go "strings.IndexFunc" indexWhere :: String -> (Char -> Bool) -> Int
+foreign import go "strings.TrimFunc" trimWhere :: String -> (Char -> Bool) -> String
+
+-- a Go function that returns only an error is an Either String ()
+foreign import go "os.Chdir" chdir :: String -> IO (Either String ())
+
+rot13 :: Char -> Char
+rot13 c
+  | c >= 'a' && c <= 'z' = shift 'a'
+  | c >= 'A' && c <= 'Z' = shift 'A'
+  | otherwise = c
+  where
+    shift base = toEnum' (fromEnum base + (fromEnum c - fromEnum base + 13) `mod` 26)
+    toEnum' n = maybe c id (toEnum n)
+
+main :: IO ()
+main = do
+  case parseURL "https://example.com:8443/search?q=hago&lang=en" of
+    Left err -> putStrLn err
+    Right u -> do
+      putStrLn (scheme u)
+      putStrLn (hostname u)
+      putStrLn (port u)
+      putStrLn (queryParam u "q")
+      putStrLn (urlString u)
+  either putStrLn (const (putStrLn "parsed")) (parseURL "http://[::1")
+  putStrLn (mapRunes rot13 "Hello, Hago!")
+  print (indexWhere "strictly functional" (== 'f'))
+  putStrLn (trimWhere "...hago!!!" (\c -> c == '.' || c == '!'))
+  chdir "/" >>= print
+  chdir "/no/such/directory" >>= print

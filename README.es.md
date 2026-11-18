@@ -416,7 +416,8 @@ foreign import go "math.MaxInt32"  maxInt32     :: Int
 - `Int`, `Bool`, `Char` y `String` son `int`, `bool`, `rune` y `string` de Go, así que los
   valores cruzan la frontera sin conversión. `Integer` es un `*big.Int` que nunca se modifica.
 - Una función de Go que devuelve `(T, error)` se declara como `Either String T`, o
-  `IO (Either String T)` si tiene efectos.
+  `IO (Either String T)` si tiene efectos. Una que devuelve sólo un `error` es un
+  `Either String ()`.
 - `IO ()` significa que se la llama por sus efectos y se ignoran sus resultados.
 - El paquete se importa desde la ruta anterior al último punto: `"path/filepath.Join"` importa
   `path/filepath`.
@@ -434,7 +435,27 @@ foreign import go type "*rt_MVar" MVar a       -- el del runtime, genérico: *rt
 ```
 
 No tiene constructores, así que el código de Hago no puede mirar adentro ni armar uno; eso lo
-hacen funciones de Go.
+hacen funciones de Go, y sus campos y métodos. Un símbolo que empieza con un punto es un selector
+sobre el primer argumento, seguido de los demás argumentos si los hay:
+
+```haskell
+foreign import go ".Scheme"          scheme     :: URL -> String            -- u.Scheme
+foreign import go ".Hostname()"      hostname   :: URL -> String            -- u.Hostname()
+foreign import go ".Query().Get"     queryParam :: URL -> String -> String  -- u.Query().Get(k)
+```
+
+Una función o acción de Hago que se le pasa a una función de Go se convierte en la función de Go
+que espera, que toma todos sus argumentos juntos y ejecuta la acción que arma:
+
+```haskell
+foreign import go "strings.Map" mapRunes :: (Char -> Char) -> String -> String
+foreign import go ".HandleFunc" handleFunc
+  :: ServeMux -> String -> (ResponseWriter -> Request -> IO ()) -> IO ()
+```
+
+Go la puede llamar desde cualquier goroutine, así que un programa que le pasa una función a Go
+recibe el runtime concurrente (ver [Concurrencia](#concurrencia)). `examples/http-server.hgo`
+sirve páginas con `net/http` y se pide varias a sí mismo a la vez.
 
 ## Concurrencia
 

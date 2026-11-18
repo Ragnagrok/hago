@@ -166,8 +166,13 @@ Next, concurrency (decided 2026-11-18), in this order:
       foreign imports, which call a generic Go function with its types given. The concurrent
       examples run under Go's race detector in `check.sh`, and `failing/` holds programs that
       must fail at run time with a given message.
-- [ ] **More of Go:** methods and fields of Go types, Hago functions passed to Go as callbacks,
-      and an HTTP server as the example that puts all of it to work, one goroutine per request.
+- [x] **More of Go.** A foreign symbol that starts with a dot is a selector on the first
+      argument (`".Query().Get"`), so fields and methods of Go types are reachable. A Hago
+      function or action given to a Go function from outside the runtime becomes the Go
+      function it expects (all arguments at once, the action run, `defer rt_failed()`), and
+      turns on the concurrent runtime. A Go function that returns only an `error` is an
+      `Either String ()`. `examples/http-server.hgo` serves pages with `net/http` and asks for
+      several at once, under the race detector too; `examples/foreign-types.hgo` has the rest.
 - [ ] **Chapter 15 of hago-book, "Concurrency".**
 
 Known rough edges, found on the way and not fixed yet:

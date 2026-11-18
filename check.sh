@@ -35,7 +35,7 @@ done
 
 # the concurrent examples again under Go's race detector, which fails a
 # program that touches memory from two goroutines without synchronising
-for f in examples/concurrent-*.hgo examples/parallel.hgo; do
+for f in examples/concurrent-*.hgo examples/parallel.hgo examples/http-server.hgo; do
   name=$(basename "$f" .hgo)
   if actual=$(cd "$out/$name" && go run -race main.go 2>&1) && [ "$actual" == "$(cat "examples/$name.out")" ]; then
     echo "ok   $f under the race detector"

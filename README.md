@@ -400,7 +400,8 @@ foreign import go "math.MaxInt32"  maxInt32     :: Int
 - `Int`, `Bool`, `Char` and `String` are Go's `int`, `bool`, `rune` and `string`, so values cross
   the boundary unchanged. `Integer` is a `*big.Int` that is never modified.
 - A Go function that returns `(T, error)` is declared as returning `Either String T`, or
-  `IO (Either String T)` if it has effects.
+  `IO (Either String T)` if it has effects. One that returns only an `error` is an
+  `Either String ()`.
 - `IO ()` means the Go function is called for its effects and its results are ignored.
 - The package is imported from the path before the last dot: `"path/filepath.Join"` imports
   `path/filepath`.
@@ -416,7 +417,28 @@ foreign import go "net/url.Parse" parseURL :: String -> Either String URL
 foreign import go type "*rt_MVar" MVar a       -- the runtime's, generic: *rt_MVar[T]
 ```
 
-It has no constructors, so Hago code cannot look inside it or make one; Go functions do that.
+It has no constructors, so Hago code cannot look inside it or make one; Go functions do that, and
+so do its fields and methods. A symbol that starts with a dot is a selector on the first
+argument, followed by the other arguments if there are any:
+
+```haskell
+foreign import go ".Scheme"          scheme     :: URL -> String            -- u.Scheme
+foreign import go ".Hostname()"      hostname   :: URL -> String            -- u.Hostname()
+foreign import go ".Query().Get"     queryParam :: URL -> String -> String  -- u.Query().Get(k)
+```
+
+A Hago function or action given to a Go function becomes the Go function it expects, taking all
+its arguments at once and running the action it makes:
+
+```haskell
+foreign import go "strings.Map" mapRunes :: (Char -> Char) -> String -> String
+foreign import go ".HandleFunc" handleFunc
+  :: ServeMux -> String -> (ResponseWriter -> Request -> IO ()) -> IO ()
+```
+
+Go may call it from any goroutine, so a program that gives Go a function gets the concurrent
+runtime (see [Concurrency](#concurrency)). `examples/http-server.hgo` serves pages with
+`net/http`, and asks itself for several at once.
 
 ## Concurrency
 

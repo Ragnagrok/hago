@@ -103,17 +103,17 @@ func rt_readFile(path string) (string, error) {
 	b, err := rt_os.ReadFile(path)
 	return string(b), err
 }
-func rt_writeFile(path string, s string) (struct{}, error) {
-	return struct{}{}, rt_os.WriteFile(path, []byte(s), 0o644)
+func rt_writeFile(path string, s string) error {
+	return rt_os.WriteFile(path, []byte(s), 0o644)
 }
-func rt_appendFile(path string, s string) (struct{}, error) {
+func rt_appendFile(path string, s string) error {
 	f, err := rt_os.OpenFile(path, rt_os.O_APPEND|rt_os.O_CREATE|rt_os.O_WRONLY, 0o644)
 	if err != nil {
-		return struct{}{}, err
+		return err
 	}
 	defer f.Close()
 	_, err = f.WriteString(s)
-	return struct{}{}, err
+	return err
 }
 
 // Whether standard input has nothing more to read.
