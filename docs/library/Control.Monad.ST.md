@@ -1,0 +1,32 @@
+# Control.Monad.ST
+
+Computations with mutable state that are pure from outside. An ST s a
+reads and writes structures of its own (Data.STRef, Data.Vector.Mutable,
+Data.HashTable), and runST runs it and gives its result:
+
+  sumST :: [Int] -> Int
+  sumST xs = runST (do
+    ref <- newSTRef 0
+    mapM_ (\x -> modifySTRef' ref (+ x)) xs
+    readSTRef ref)
+
+runST is pure because nothing made inside it can be used outside: its
+argument must work for a state s of its own, which the type checker
+makes up for each runST, and which may appear neither in its result nor
+in the types of the variables it uses. So runST (newSTRef 0) is rejected,
+and the same argument gives the same result every time.
+
+Haskell writes runST's type as (forall s. ST s a) -> a. Hago has no such
+types, and checks runST with a rule of its own, as GHC once did: runST
+must be applied to its argument (runST (do ...) or runST $ do ...), and
+cannot be passed around as a function.
+
+Its source is [`lib/Control/Monad/ST.hgo`](../../lib/Control/Monad/ST.hgo).
+
+```haskell
+runST :: ST s a -> a
+```
+
+## Re-exported
+
+- From [Control.Monad.ST.Unsafe](Control.Monad.ST.Unsafe.md): `PrimMonad`.

@@ -15,6 +15,8 @@ above each declaration. Do not edit these files; edit the sources and run `hago 
 | [Control.Monad](Control.Monad.md) | Functions on monads beyond the Prelude's (which has when, unless, join, guard, forever, mapM_, forM_ and sequence, and which this module also exports, so that importing it works as it does in Haskell). |
 | [Control.Monad.Except](Control.Monad.Except.md) | Errors over any monad, and the MonadError class, as in mtl. |
 | [Control.Monad.Reader](Control.Monad.Reader.md) | An environment over any monad, and the MonadReader class, as in mtl. |
+| [Control.Monad.ST](Control.Monad.ST.md) | Computations with mutable state that are pure from outside. |
+| [Control.Monad.ST.Unsafe](Control.Monad.ST.Unsafe.md) | What the library's mutable structures are built on: ST, and the class of the monads their operations run in. |
 | [Control.Monad.State](Control.Monad.State.md) | State over any monad, and the MonadState class, as in mtl. |
 | [Control.Monad.Trans](Control.Monad.Trans.md) | Lifting through monad transformers. |
 | [Control.Monad.Writer](Control.Monad.Writer.md) | A computation that also writes something on the side, such as a log: tell adds to it with <>, so what is written can be any Monoid. |
@@ -23,17 +25,21 @@ above each declaration. Do not edit these files; edit the sources and run `hago 
 | [Data.Char](Data.Char.md) | Characters: what kind each is, and changing case. |
 | [Data.Encoding](Data.Encoding.md) | Writing any bytes with a few safe characters, and back: base64 (RFC 4648, with padding) and hexadecimal. |
 | [Data.Functor.Identity](Data.Functor.Identity.md) | The identity monad, trampolined: it runs on the same machinery as IO, so a long chain of binds runs in constant stack, and so does every transformer over it (State s is StateT s Identity). |
+| [Data.HashTable](Data.HashTable.md) | Mutable hash tables, on Go's maps: insert, lookup and delete in constant time on average. |
+| [Data.IORef](Data.IORef.md) | Mutable references in IO. |
 | [Data.Iter](Data.Iter.md) | Iterators: Go's iter.Seq. |
 | [Data.List](Data.List.md) | More functions on lists than the Prelude has: sorting, grouping, sets kept as lists, searching, and the ways of cutting a list up. |
 | [Data.Map](Data.Map.md) | Finite maps from keys to values, kept as a balanced binary search tree, as in Haskell's containers: a tree whose subtrees' sizes never differ by more than a factor of three (Adams, "Efficient sets: a balancing act", 1993). |
 | [Data.Monoid](Data.Monoid.md) | Monoids beyond the Prelude's Sum, Product, Any and All, which this module also exports: the first and the last value that is there, the smallest and the largest. |
 | [Data.Ord](Data.Ord.md) | Orderings: comparing by a part of a value, and an order turned around. |
 | [Data.Ratio](Data.Ratio.md) | Fractions, exact: 1 % 3 + 1 % 6 is 1 % 2, never 0.49999. |
+| [Data.STRef](Data.STRef.md) | Mutable references in ST: see Control.Monad.ST. |
 | [Data.Set](Data.Set.md) | Finite sets, kept as a balanced binary search tree, as Data.Map is: membership, inserting and deleting take time logarithmic in the size. |
 | [Data.String](Data.String.md) | Functions on String, which is Go's string: taking the first character off slices it without copying, so a String can be read from the front as a list would, without making one. |
 | [Data.String.Builder](Data.String.Builder.md) | Building a long String from many pieces. |
 | [Data.Time](Data.Time.md) | Points in time, Go's time.Time: the current time, the seconds between two, and dates written and read. |
 | [Data.Vector](Data.Vector.md) | Vectors: sequences of a fixed length, each element reached in constant time. |
+| [Data.Vector.Mutable](Data.Vector.Mutable.md) | Mutable vectors: a fixed number of elements, each read and written in constant time. |
 | [Network.HTTP](Network.HTTP.md) | Asking web servers for pages, with Go's net/http: get and post, with the whole answer read. |
 | [System.Environment](System.Environment.md) | The command line. |
 | [System.Exit](System.Exit.md) | Ending the program with a status: 0 for success, anything else for a failure, which the shell sees in $?. |
