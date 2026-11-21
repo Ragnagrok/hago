@@ -238,7 +238,7 @@ program with the same name comes first):
 | `Data.Map` | balanced search trees from keys to values, as in containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (no `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` and `Foldable`; import it qualified |
 | `Data.Set` | the same for sets: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; import it qualified |
 | `Data.Vector` | `Vector a`, a Go slice Hago never changes: `fromList`, `!?`, `generate`, `map`, `imap`, `filter`, `foldl`, `slice` (without copying), `sort`, `sortOn`, `zipWith`, `Foldable`; import it qualified |
-| `Data.Iter` | `Iter a`, Go's `iter.Seq`: `from`, `range`, `iterate`, `lines`, `words`, `map`, `filter`, `takeWhile`, `take`, `zipWith`, `foldl`, `sum`, `find`, `mapM_`; import it qualified |
+| `Data.Iter` | `Iter a`, Go's `iter.Seq`: `from`, `range`, `iterate`, `lines`, `words`, `map`, `filter`, `takeWhile`, `take`, `zipWith`, `foldl`, `sum`, `find`, `mapM_`, `singleton`; a `Monad` and a `Monoid`; import it qualified |
 | `Data.Ratio` | `Rational` (Go's `*big.Rat`), exact: `%`, `numerator`, `denominator`, `Num`, `Fractional`, `fromRational`, `toRational` |
 | `Data.String.Builder` | `Builder`, a `Monoid` of pieces joined in one pass by `toString`, for long texts built from many pieces |
 | `Text.Regex` | Go's `regexp` (RE2, linear time): `compile`, `matches`, `find`, `findAll`, `groups`, `replaceAll` (with `$1`), `replaceAllWith`, `split`; import it qualified |
@@ -477,6 +477,25 @@ A function given to a Go function, as `map`, `filter` and `foldl` give theirs, i
 Go function of all its arguments, so a pipeline over an `Iter` runs like the Go loop it stands
 for (see [Performance](#performance)).
 
+`Iter` is a `Monad`, an `Alternative` and a `Monoid`, as lists are, so `do` over iterators is a
+comprehension that builds no list:
+
+```haskell
+triples :: Int -> Iter (Int, Int, Int)
+triples n = do
+  c <- Iter.range 1 n
+  b <- Iter.range 1 c
+  a <- Iter.range 1 b
+  guard (a * a + b * b == c * c)
+  pure (a, b, c)
+```
+
+It runs twice as fast as the same list comprehension, but each value still allocates the
+`Iter` its step returns (`pure`, `guard`); a `map` and a `filter` where they are enough are
+twenty times faster again (see [Performance](#performance)). Comprehensions and ranges
+(`[x | x <- xs]`, `[1 ..]`) are always lists: making them `Iter`s when the type asks for one
+would make their type a choice that most uses (`length`, `sum`, `mapM_`) leave open.
+
 ## Concurrency
 
 A Hago thread is a goroutine: starting one is cheap, and thousands can run at once.
@@ -526,6 +545,9 @@ These numbers come from one machine, as a reference and not as a benchmark.
 | sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.45 s | ~10 MB |
 | the same with `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | 0.01 s | ~4 MB |
 | the same over a `Data.Vector` of 3,000,000 elements | 0.01 s | ~60 MB |
+| Pythagorean triples up to 400, as a list comprehension | 1.34 s | ~10 MB |
+| the same as `do` over `Iter` | 0.63 s | ~10 MB |
+| the same with `Iter.filter` for the last generator and the guard | 0.03 s | ~7 MB |
 | `mapM_` over a million elements in IO | 0.19 s | ~8 MB |
 | a recursive IO loop of five million iterations | 0.31 s | ~8 MB |
 | `mapM_` over a million elements in `StateT Int IO` | 0.25 s | ~8 MB |

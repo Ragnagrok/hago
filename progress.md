@@ -190,7 +190,20 @@ patterns and sharing; two more kinds of sequence come from Go.
       what it computed (a list).
 - [x] **Chapter 15 of hago-book, "Data structures":** lists, vectors, iterators, maps and sets,
       and when each fits.
-- [ ] **Ranges and comprehensions over `Iter`,** if code wants them: `[1 ..]` stays a list.
+- [x] **`do` over `Iter`, instead of ranges and comprehensions.** `Iter` is a `Monad`
+      (`>>=` is `concatMap`, `pure` is `singleton`), an `Applicative`, an `Alternative` and a
+      `MonadFail` (`empty`, `append`), and a `Semigroup` and `Monoid`, so `do` with `guard` is a
+      comprehension that builds no list. Pythagorean triples up to 400 (10.7 million inner
+      steps): 1.34 s as a list comprehension, 0.63 s as `do` over `Iter`, 0.03 s with
+      `Iter.filter` for the last generator and the guard, all in ~10 MB. The `do` still
+      allocates per value the `Iter` each step returns (`pure`, `guard`) and the closures over
+      the bound variables. Comprehensions and ranges stay lists, on purpose: they are desugared
+      by the parser, and to give an `Iter` they would need either GHC's monad comprehensions,
+      which make every comprehension over a parameter of unknown type
+      `(Monad m, Alternative m) => m a -> ...` (in inferred types, at the REPL's `:type`, and in
+      errors), or a choice made by the type checker that most uses leave open (`length`,
+      `sum`, `mapM_` take any `Foldable`), so it would need a defaulting rule of its own. A
+      pattern that can fail on the left of `<-` is still rejected, for `Iter` as for lists.
 
 Next, more of Go's library (decided 2026-11-18), the easy ones first:
 

@@ -249,7 +249,7 @@ del programa con el mismo nombre tiene prioridad):
 | `Data.Map` | árboles de búsqueda balanceados de claves a valores, como en containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (sin `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` y `Foldable`; conviene importarlo calificado |
 | `Data.Set` | lo mismo para conjuntos: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; conviene importarlo calificado |
 | `Data.Vector` | `Vector a`, un slice de Go que Hago nunca modifica: `fromList`, `!?`, `generate`, `map`, `imap`, `filter`, `foldl`, `slice` (sin copiar), `sort`, `sortOn`, `zipWith`, `Foldable`; se importa calificado |
-| `Data.Iter` | `Iter a`, el `iter.Seq` de Go: `from`, `range`, `iterate`, `lines`, `words`, `map`, `filter`, `takeWhile`, `take`, `zipWith`, `foldl`, `sum`, `find`, `mapM_`; se importa calificado |
+| `Data.Iter` | `Iter a`, el `iter.Seq` de Go: `from`, `range`, `iterate`, `lines`, `words`, `map`, `filter`, `takeWhile`, `take`, `zipWith`, `foldl`, `sum`, `find`, `mapM_`, `singleton`; es `Monad` y `Monoid`; se importa calificado |
 | `Data.Ratio` | `Rational` (el `*big.Rat` de Go), exacto: `%`, `numerator`, `denominator`, `Num`, `Fractional`, `fromRational`, `toRational` |
 | `Data.String.Builder` | `Builder`, un `Monoid` de pedazos que `toString` une en una pasada, para textos largos armados de muchos pedazos |
 | `Text.Regex` | el `regexp` de Go (RE2, tiempo lineal): `compile`, `matches`, `find`, `findAll`, `groups`, `replaceAll` (con `$1`), `replaceAllWith`, `split`; se importa calificado |
@@ -495,6 +495,25 @@ Una función que se le pasa a una función de Go, como hacen `map`, `filter` y `
 como una función de Go de todos sus argumentos, así que un pipeline sobre un `Iter` corre como el
 loop de Go que representa (ver [Performance](#performance)).
 
+`Iter` es una `Monad`, un `Alternative` y un `Monoid`, como las listas, así que un `do` sobre
+iteradores es una comprensión que no arma ninguna lista:
+
+```haskell
+triples :: Int -> Iter (Int, Int, Int)
+triples n = do
+  c <- Iter.range 1 n
+  b <- Iter.range 1 c
+  a <- Iter.range 1 b
+  guard (a * a + b * b == c * c)
+  pure (a, b, c)
+```
+
+Corre al doble de velocidad que la misma comprensión de listas, pero cada valor todavía reserva
+el `Iter` que devuelve su paso (`pure`, `guard`); un `map` y un `filter`, donde alcanzan, son
+veinte veces más rápidos todavía (ver [Performance](#performance)). Las comprensiones y los
+rangos (`[x | x <- xs]`, `[1 ..]`) son siempre listas: hacerlos `Iter` cuando el tipo lo pide
+volvería su tipo una elección que la mayoría de los usos (`length`, `sum`, `mapM_`) deja abierta.
+
 ## Concurrencia
 
 Un hilo de Hago es una goroutine: lanzar uno es barato, y pueden correr miles a la vez.
@@ -544,6 +563,9 @@ Son números de una sola máquina, como referencia y no como benchmark.
 | suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | 0,45 s | ~10 MB |
 | lo mismo con `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | 0,01 s | ~4 MB |
 | lo mismo sobre un `Data.Vector` de 3.000.000 de elementos | 0,01 s | ~60 MB |
+| ternas pitagóricas hasta 400, como comprensión de listas | 1,34 s | ~10 MB |
+| lo mismo como `do` sobre `Iter` | 0,63 s | ~10 MB |
+| lo mismo con `Iter.filter` para el último generador y la guarda | 0,03 s | ~7 MB |
 | `mapM_` sobre un millón de elementos en IO | 0,19 s | ~8 MB |
 | un loop recursivo en IO de cinco millones de iteraciones | 0,31 s | ~8 MB |
 | `mapM_` sobre un millón de elementos en `StateT Int IO` | 0,25 s | ~8 MB |

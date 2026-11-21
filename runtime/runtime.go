@@ -459,6 +459,14 @@ func rt_iterIterate[T any](f func(T) T, x T) rt_iter.Seq[T] {
 	}
 }
 
+// An Iter with no values: a generic function, which Go makes an iter.Seq of
+// once its type is given, so it needs no allocation.
+func rt_iterEmpty[T any](yield func(T) bool) {}
+
+func rt_iterSingleton[T any](x T) rt_iter.Seq[T] {
+	return func(yield func(T) bool) { yield(x) }
+}
+
 func rt_iterRepeat[T any](x T) rt_iter.Seq[T] {
 	return func(yield func(T) bool) {
 		for yield(x) {
