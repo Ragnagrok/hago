@@ -129,7 +129,7 @@ type FunDep = ([Name], [Name])
 data Decl
   = DData DataDecl
   | DType Name [Name] SType                -- ^ a type synonym
-  | DSig [Name] Context SType
+  | DSig Loc [Name] Context SType          -- ^ where, names, context, type
   | DClass Context Name [Name] [FunDep] [Decl]   -- ^ superclasses, class, variables, dependencies, signatures and defaults
   | DInstance (Maybe Loc) Context Name [SType] [Decl]   -- ^ where, context, class, instance types, methods
   | DBind Name [Clause]

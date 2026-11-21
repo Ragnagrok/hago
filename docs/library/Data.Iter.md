@@ -7,6 +7,15 @@ once and allocates nothing per value, so it is much faster than the same
 pipeline over a list, and runs in constant memory. Import it qualified:
 import qualified Data.Iter as Iter.
 
+Iter is a Monad, an Alternative and a Monoid, as lists are, so do notation
+over Iters is a comprehension that makes no list:
+
+  do x <- range 1 10; guard (odd x); pure (x * x)
+
+is [x * x | x <- [1 .. 10], odd x] computed as it is consumed. Each value
+that goes through such a do allocates the Iter its step returns (pure x,
+guard), so map and filter are faster where they are enough.
+
 An Iter is a computation, not a structure: consuming one twice computes
 it twice, and it cannot be taken apart with patterns. For that, toList
 makes it a list. Functions that consume a whole Iter (length, sum, foldl)
@@ -17,7 +26,13 @@ Its source is [`lib/Data/Iter.hgo`](../../lib/Data/Iter.hgo).
 ```haskell
 foreign import go type "iter.Seq" Iter a
 
+instance Alternative Iter
+instance Applicative Iter
 instance Functor Iter
+instance Monad Iter
+instance MonadFail Iter
+instance Monoid (Iter a)
+instance Semigroup (Iter a)
 ```
 
 ```haskell
@@ -31,6 +46,12 @@ range :: Int -> Int -> Iter Int
 ```
 
 The numbers from a to b, both included.
+
+```haskell
+singleton :: a -> Iter a
+```
+
+One value.
 
 ```haskell
 iterate :: (a -> a) -> a -> Iter a

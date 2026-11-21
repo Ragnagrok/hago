@@ -724,7 +724,7 @@ doStmts env m = \case
 -- again inside.
 localBinds :: Env -> [Decl] -> TC (Env, [CBind])
 localBinds env0 ds = do
-  let sigs = M.fromList [(n, t) | DSig ns _ t <- ds, n <- ns]
+  let sigs = M.fromList [(n, (l, ctx, t)) | DSig l ns ctx t <- ds, n <- ns]
       binds = [(n, cs) | DBind n cs <- ds]
       names = map fst binds
       sccs = stronglyConnComp [(b, n, filter (`elem` names) (clausesRefs cs)) | b@(n, cs) <- binds]
@@ -736,7 +736,9 @@ localBinds env0 ds = do
       tys <- forM members $ \(n, _) -> case M.lookup n sigs of
         -- local signatures are checked monomorphically: their variables are
         -- unification variables, not rigid ones
-        Just st -> do
+        Just (l, ctx, st) -> withLoc l $ withCtx n $ do
+          -- the context only has to make sense
+          _ <- contextPreds env (M.fromList [(v, TVar v) | v <- stypeVars st ++ contextVars ctx]) ctx
           vs <- mapM (\v -> (,) v <$> fresh) (stypeVars st)
           fromSType env (M.fromList vs) st
         Nothing -> fresh
@@ -965,7 +967,7 @@ tcModule interactive modName' before ds = do
       envC = envD {envCons = cons, envRecords = M.union (ckRecords before) ownRecords}
   -- classes
   let classDecls = [(sup, c, vs, deps, body) | DClass sup c vs deps body <- ds]
-      kindOf body v = maximum (0 : [M.findWithDefault 0 v (stypeArities st) | DSig _ _ st <- body])
+      kindOf body v = maximum (0 : [M.findWithDefault 0 v (stypeArities st) | DSig _ _ _ st <- body])
   keys <- fmap M.fromList . forM classDecls $ \(_, c, vs, deps, _) -> withCtx c $ do
     forM_ (take 1 (vs \\ nub vs)) $ \v -> throw ("the class parameter " ++ v ++ " appears twice")
     k <- case (vs, deps) of
@@ -986,7 +988,7 @@ tcModule interactive modName' before ds = do
         _ -> throw "a superclass must constrain the class variables"
     let supNames = [s | IsIn s _ <- supers]
     forM_ (take 1 (supNames \\ nub supNames)) $ \n -> throw ("the superclass " ++ n ++ " appears twice")
-    methods <- fmap concat . forM [(ns, ctx, st) | DSig ns ctx st <- body] $ \(ns, ctx, st) -> do
+    methods <- fmap concat . forM [(l, ns, ctx, st) | DSig l ns ctx st <- body] $ \(l, ns, ctx, st) -> withLoc l $ withCtx (unwords ns) $ do
       let own = filter (`notElem` vs) (stypeVars st)
       -- a dictionary of a class over plain types is a Go struct at run time,
       -- and struct fields cannot be generic
@@ -1036,7 +1038,7 @@ tcModule interactive modName' before ds = do
   foreigns <- forM [(s, n, st) | DForeign s n st <- ds] $ \(s, n, st) -> withCtx n $ do
     t <- fromSType env0 (rigid st) st
     pure (n, (Forall (stypeVars st) [] t, Foreign s (stypeVars st) t (arrows t)))
-  let sigs = M.fromList [(n, (ctx, st)) | DSig ns ctx st <- ds, n <- ns]
+  let sigs = M.fromList [(n, (l, ctx, st)) | DSig l ns ctx st <- ds, n <- ns]
       binds = [(n, cs) | DBind n cs <- ds]
       names = map fst binds
       methodSchemes = [(m, sc) | ci <- M.elems classes, (m, sc) <- clsMethods ci]
@@ -1044,7 +1046,7 @@ tcModule interactive modName' before ds = do
   case [n | (n, k) <- M.toList (M.fromListWith (+) [(n, 1 :: Int) | n <- names ++ map fst methodSchemes]), k > 1] of
     (n : _) -> throw ("in " ++ n ++ ": defined more than once")
     [] -> pure ()
-  sigSchemes <- forM (M.toList sigs) $ \(n, (ctx, st)) -> withCtx n $ do
+  sigSchemes <- forM (M.toList sigs) $ \(n, (l, ctx, st)) -> withLoc l $ withCtx n $ do
     -- a variable only in the context is fixed by a dependency, as s in
     -- MonadState s m => m ()
     let vs = nub (stypeVars st ++ contextVars ctx)
@@ -1064,7 +1066,7 @@ tcModule interactive modName' before ds = do
   (env2, groupBinds) <- foldM tcGroup (env1, []) (zip [1 :: Int ..] sccs)
   -- bindings with signatures
   signedBinds <- forM [b | b@(n, _) <- binds, n `M.member` sigs] $ \(n, cs) -> withCtx n $ do
-    let (_, st) = sigs M.! n
+    let (_, _, st) = sigs M.! n
         Forall vs preds _ = M.fromList sigSchemes M.! n
     t <- fromSType env0 (rigid st) st
     let envG = withGivens env2 preds

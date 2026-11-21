@@ -1,6 +1,17 @@
 -- Iterators: Go's iter.Seq, for pipelines that compute each value once and
 -- allocate nothing per value.
 import qualified Data.Iter as Iter
+import Data.Iter (Iter)
+
+-- do over Iters is a comprehension that makes no list: every c, b and a, in
+-- order, kept where the guard holds
+pythagorean :: Int -> Iter (Int, Int, Int)
+pythagorean n = do
+  c <- Iter.range 1 n
+  b <- Iter.range 1 c
+  a <- Iter.range 1 b
+  guard (a * a + b * b == c * c)
+  pure (a, b, c)
 
 collatz :: Int -> Int
 collatz n = if even n then n `div` 2 else 3 * n + 1
@@ -24,3 +35,10 @@ main = do
   print (Iter.head (Iter.words "  strictly   functional "), Iter.toList (Iter.lines "one\ntwo\r\n"))
   print (Iter.toList (fmap show (Iter.range 1 3)))
   Iter.forM_ (Iter.range 1 3) (\n -> putStrLn (show n ++ " squared is " ++ show (n * n)))
+  -- Monad, Applicative, Alternative and Monoid, as for lists
+  print (Iter.toList (pythagorean 20))
+  print (Iter.toList (Iter.take 4 (do x <- Iter.from 1; y <- Iter.range 1 x; pure (x, y))))
+  print (Iter.toList ((,) <$> Iter.range 1 2 <*> Iter.chars "ab"))
+  print (Iter.toList (Iter.fromList [Just 1, Nothing, Just 3] >>= maybe empty pure))
+  print (Iter.toList (Iter.range 1 3 <> Iter.range 7 8), Iter.toList (mempty :: Iter Int))
+  print (Iter.toList (mconcat [Iter.range 1 2, Iter.singleton 5, Iter.range 1 2 <|> pure 9]))

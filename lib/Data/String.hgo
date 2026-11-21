@@ -3,7 +3,8 @@
 -- list would, without making one. Most names are also the Prelude's names
 -- for lists, so this module is meant to be imported qualified.
 module Data.String
-  ( uncons, null, length, elem, isPrefixOf, stripPrefix, concat, intercalate, replicate
+  ( uncons, null, length, elem, isPrefixOf, stripPrefix, stripSuffix, concat, intercalate, replicate
+  , span, break, takeWhile, dropWhile
   ) where
 
 foreign import go "rt_firstRune" firstRune :: String -> Char
@@ -15,7 +16,15 @@ foreign import go "strings.Repeat" repeatString :: String -> Int -> String
 foreign import go "unicode/utf8.RuneCountInString" length :: String -> Int
 
 foreign import go "strings.HasPrefix" hasPrefix :: String -> String -> Bool
+foreign import go "strings.HasSuffix" hasSuffix :: String -> String -> Bool
+foreign import go "strings.TrimSuffix" trimSuffix :: String -> String -> String
 foreign import go "strings.ContainsRune" containsRune :: String -> Char -> Bool
+
+-- How many bytes the characters at the front that satisfy f take, and the
+-- text before and after that many bytes: slices, without copying.
+foreign import go "rt_spanBytes" spanBytes :: (Char -> Bool) -> String -> Int
+foreign import go "rt_takeBytes" takeBytes :: Int -> String -> String
+foreign import go "rt_dropBytes" dropBytes :: Int -> String -> String
 
 -- Joins the strings in one pass.
 foreign import go "rt_concatStrings" concat :: [String] -> String
@@ -36,6 +45,12 @@ isPrefixOf p s = hasPrefix s p
 stripPrefix :: String -> String -> Maybe String
 stripPrefix p s = if hasPrefix s p then Just (trimPrefix s p) else Nothing
 
+-- s without the suffix, if it ends with it. When the suffix is what is
+-- left of s after reading some of it, this takes constant time: comparing
+-- a String with itself is immediate.
+stripSuffix :: String -> String -> Maybe String
+stripSuffix suffix s = if hasSuffix s suffix then Just (trimSuffix s suffix) else Nothing
+
 intercalate :: String -> [String] -> String
 intercalate sep xs = concat (go xs)
   where
@@ -45,3 +60,17 @@ intercalate sep xs = concat (go xs)
 
 replicate :: Int -> String -> String
 replicate n s = repeatString s n
+
+-- The longest run of characters at the front that satisfy f, and the rest,
+-- in one pass and without copying: both share the text.
+span :: (Char -> Bool) -> String -> (String, String)
+span f s = let n = spanBytes f s in (takeBytes n s, dropBytes n s)
+
+break :: (Char -> Bool) -> String -> (String, String)
+break f s = span (\c -> not (f c)) s
+
+takeWhile :: (Char -> Bool) -> String -> String
+takeWhile f s = takeBytes (spanBytes f s) s
+
+dropWhile :: (Char -> Bool) -> String -> String
+dropWhile f s = dropBytes (spanBytes f s) s

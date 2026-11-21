@@ -200,8 +200,31 @@ func rt_dropRune(s string) string {
 	}
 	return ""
 }
+// Data.String.span: the bytes the runes at the front that satisfy f take.
+func rt_spanBytes(f func(rune) bool, s string) int {
+	for i, r := range s {
+		if !f(r) {
+			return i
+		}
+	}
+	return len(s)
+}
+
+func rt_takeBytes(n int, s string) string { return s[:n] }
+
+func rt_dropBytes(n int, s string) string { return s[n:] }
+
 func rt_concatStrings(l List[string]) string {
+	if l == nil {
+		return ""
+	}
+	// one string is itself, without a copy
+	first, l := l.F0, l.F1.force()
+	if l == nil {
+		return first
+	}
 	var sb rt_strings.Builder
+	sb.WriteString(first)
 	for l != nil {
 		sb.WriteString(l.F0)
 		l = l.F1.force()
@@ -457,6 +480,14 @@ func rt_iterIterate[T any](f func(T) T, x T) rt_iter.Seq[T] {
 		for v := x; yield(v); v = f(v) {
 		}
 	}
+}
+
+// An Iter with no values: a generic function, which Go makes an iter.Seq of
+// once its type is given, so it needs no allocation.
+func rt_iterEmpty[T any](yield func(T) bool) {}
+
+func rt_iterSingleton[T any](x T) rt_iter.Seq[T] {
+	return func(yield func(T) bool) { yield(x) }
 }
 
 func rt_iterRepeat[T any](x T) rt_iter.Seq[T] {

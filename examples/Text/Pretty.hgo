@@ -47,38 +47,48 @@ punctuate p (d : ds) = (d <> p) : punctuate p ds
 
 data Mode = Flat | Break
 
--- Whether the rest of the line holds everything up to the next break.
-fits :: Int -> [(Int, Mode, Doc)] -> Bool
-fits w _ | w < 0 = False
-fits _ [] = True
-fits w ((i, m, d) : z) = case d of
-  Nil -> fits w z
-  Text s -> fits (w - S.length s) z
-  Line s -> case m of
-    Flat -> fits (w - S.length s) z
-    Break -> True
-  Cat a b -> fits w ((i, m, a) : (i, m, b) : z)
-  Nest j x -> fits w ((i + j, m, x) : z)
-  Group x -> fits w ((i, Flat, x) : z)
+-- What is left to print after the document at hand, each with its
+-- indentation and mode: a type of its own instead of a list of triples, so a
+-- push is one allocation (a list's cell would take another for the rest,
+-- suspended). The document at hand is kept apart, so only the second half
+-- of a Cat is pushed.
+data Stack = Done | Push Int Mode Doc Stack
+
+-- Whether the rest of the line holds everything up to the next break: d at
+-- indentation i in mode m, then z.
+fits :: Int -> Int -> Mode -> Doc -> Stack -> Bool
+fits w i m d z
+  | w < 0 = False
+  | otherwise = case d of
+      Nil -> case z of
+        Done -> True
+        Push i' m' d' z' -> fits w i' m' d' z'
+      Text s -> fits (w - S.length s) i m Nil z
+      Line s -> case m of
+        Flat -> fits (w - S.length s) i m Nil z
+        Break -> True
+      Cat a b -> fits w i m a (Push i m b z)
+      Nest j x -> fits w (i + j) m x z
+      Group x -> fits w i Flat x z
 
 -- The pieces of the text, in order; the list is built as it is consumed.
 layout :: Int -> Doc -> [String]
-layout w d = go 0 [(0, Break, d)]
+layout w d = go 0 0 Break d Done
   where
-    go _ [] = []
-    go k ((i, m, x) : z) = case x of
-      Nil -> go k z
-      Text s -> s : go (k + S.length s) z
+    -- at column k, x at indentation i in mode m, then z
+    go k i m x z = case x of
+      Nil -> case z of
+        Done -> []
+        Push i' m' x' z' -> go k i' m' x' z'
+      Text s -> s : go (k + S.length s) i m Nil z
       Line s -> case m of
-        Flat -> s : go (k + S.length s) z
-        Break -> ("\n" ++ S.replicate i " ") : go i z
-      Cat a b -> go k ((i, m, a) : (i, m, b) : z)
-      Nest j y -> go k ((i + j, m, y) : z)
+        Flat -> s : go (k + S.length s) i m Nil z
+        Break -> ("\n" ++ S.replicate i " ") : go i i m Nil z
+      Cat a b -> go k i m a (Push i m b z)
+      Nest j y -> go k (i + j) m y z
       Group y -> case m of
-        Flat -> go k ((i, Flat, y) : z)
-        Break ->
-          let flat = (i, Flat, y)
-           in if fits (w - k) (flat : z) then go k (flat : z) else go k ((i, Break, y) : z)
+        Flat -> go k i Flat y z
+        Break -> if fits (w - k) i Flat y z then go k i Flat y z else go k i Break y z
 
 render :: Int -> Doc -> String
 render w d = S.concat (layout w d)

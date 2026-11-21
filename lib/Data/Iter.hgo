@@ -5,12 +5,21 @@
 -- pipeline over a list, and runs in constant memory. Import it qualified:
 -- import qualified Data.Iter as Iter.
 --
+-- Iter is a Monad, an Alternative and a Monoid, as lists are, so do notation
+-- over Iters is a comprehension that makes no list:
+--
+--   do x <- range 1 10; guard (odd x); pure (x * x)
+--
+-- is [x * x | x <- [1 .. 10], odd x] computed as it is consumed. Each value
+-- that goes through such a do allocates the Iter its step returns (pure x,
+-- guard), so map and filter are faster where they are enough.
+--
 -- An Iter is a computation, not a structure: consuming one twice computes
 -- it twice, and it cannot be taken apart with patterns. For that, toList
 -- makes it a list. Functions that consume a whole Iter (length, sum, foldl)
 -- never end on an infinite one.
 module Data.Iter
-  ( Iter, from, range, iterate, repeat, fromList, toList, lines, words, chars
+  ( Iter, from, range, singleton, iterate, repeat, fromList, toList, lines, words, chars
   , map, filter, takeWhile, dropWhile, take, drop, concatMap, append, zipWith, zip
   , foldl, length, sum, product, maximum, minimum, find, head, any, all, elem, null
   , mapM_, forM_
@@ -28,6 +37,12 @@ foreign import go "rt_iterFrom" from :: Int -> Iter Int
 
 -- The numbers from a to b, both included.
 foreign import go "rt_iterRange" range :: Int -> Int -> Iter Int
+
+-- One value.
+foreign import go "rt_iterSingleton" singleton :: a -> Iter a
+
+-- No values: mempty and empty.
+foreign import go "rt_iterEmpty" none :: Iter a
 
 -- x, f x, f (f x)...
 foreign import go "rt_iterIterate" iterate :: (a -> a) -> a -> Iter a
@@ -98,3 +113,27 @@ forM_ s f = mapM_ f s
 
 instance Functor Iter where
   fmap f s = map f s
+
+-- As for lists: <*> and >>= are concatMap, so a do over Iters gives every
+-- combination of the values it binds, in order.
+instance Applicative Iter where
+  pure x = singleton x
+  fs <*> xs = concatMap (\f -> map f xs) fs
+
+instance Monad Iter where
+  xs >>= k = concatMap k xs
+
+-- fail gives no values, as for lists.
+instance MonadFail Iter where
+  fail _ = none
+
+instance Alternative Iter where
+  empty = none
+  a <|> b = append a b
+
+-- One after the other.
+instance Semigroup (Iter a) where
+  a <> b = append a b
+
+instance Monoid (Iter a) where
+  mempty = none

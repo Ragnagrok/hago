@@ -30,6 +30,30 @@ null :: String -> Bool
 elem :: Char -> String -> Bool
 isPrefixOf :: String -> String -> Bool
 stripPrefix :: String -> String -> Maybe String
+```
+
+```haskell
+stripSuffix :: String -> String -> Maybe String
+```
+
+s without the suffix, if it ends with it. When the suffix is what is
+left of s after reading some of it, this takes constant time: comparing
+a String with itself is immediate.
+
+```haskell
 intercalate :: String -> [String] -> String
 replicate :: Int -> String -> String
+```
+
+```haskell
+span :: (Char -> Bool) -> String -> (String, String)
+```
+
+The longest run of characters at the front that satisfy f, and the rest,
+in one pass and without copying: both share the text.
+
+```haskell
+break :: (Char -> Bool) -> String -> (String, String)
+takeWhile :: (Char -> Bool) -> String -> String
+dropWhile :: (Char -> Bool) -> String -> String
 ```

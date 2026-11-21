@@ -230,7 +230,7 @@ every name each one exports, with its type and what it does:
 | `Control.Monad.Writer` | `WriterT`, `Writer`, `MonadWriter` (`tell`), `runWriter`, `execWriter` |
 | `Control.Monad.Trans` | `MonadTrans` (`lift`), `MonadIO` (`liftIO`) |
 | `Data.Functor.Identity` | `Identity`, trampolined |
-| `Data.String` | `uncons` in constant time (a Go string is sliced, not copied), `length`, `elem`, `isPrefixOf`, `stripPrefix`, `concat` in one pass, `intercalate`, `replicate`; import it qualified |
+| `Data.String` | `uncons` in constant time (a Go string is sliced, not copied), `length`, `elem`, `isPrefixOf`, `stripPrefix`, `stripSuffix`, `span`, `break`, `takeWhile` and `dropWhile` (slices, in one pass), `concat` in one pass, `intercalate`, `replicate`; import it qualified |
 | `Data.List` | `sort` (a stable merge sort), `sortBy`, `sortOn`, `nub`, `group`, `partition`, `intercalate` (of any `Monoid`, so of `String`s too), `intersperse`, `transpose`, `isPrefixOf` and friends, `tails`, `inits`, `subsequences`, `permutations`, `delete`, `\\`, `union`, `intersect`, `elemIndex`, `findIndex`, `unfoldr`, `maximumBy` and `minimumBy` (with `Maybe`) |
 | `Data.Char` | `toUpper`, `toLower`, Unicode's tests (`isPunctuation`, `isSymbol`...), `digitToInt` and `intToDigit` (with `Maybe`) |
 | `Control.Applicative` | `ZipList`, `liftA3`, `optional` (`Applicative` and `Alternative` are in the Prelude) |
@@ -239,7 +239,7 @@ every name each one exports, with its type and what it does:
 | `Data.Map` | balanced search trees from keys to values, as in containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (no `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` and `Foldable`; import it qualified |
 | `Data.Set` | the same for sets: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; import it qualified |
 | `Data.Vector` | `Vector a`, a Go slice Hago never changes: `fromList`, `!?`, `generate`, `map`, `imap`, `filter`, `foldl`, `slice` (without copying), `sort`, `sortOn`, `zipWith`, `Foldable`; import it qualified |
-| `Data.Iter` | `Iter a`, Go's `iter.Seq`: `from`, `range`, `iterate`, `lines`, `words`, `map`, `filter`, `takeWhile`, `take`, `zipWith`, `foldl`, `sum`, `find`, `mapM_`; import it qualified |
+| `Data.Iter` | `Iter a`, Go's `iter.Seq`: `from`, `range`, `iterate`, `lines`, `words`, `map`, `filter`, `takeWhile`, `take`, `zipWith`, `foldl`, `sum`, `find`, `mapM_`, `singleton`; a `Monad` and a `Monoid`; import it qualified |
 | `Data.Ratio` | `Rational` (Go's `*big.Rat`), exact: `%`, `numerator`, `denominator`, `Num`, `Fractional`, `fromRational`, `toRational` |
 | `Data.String.Builder` | `Builder`, a `Monoid` of pieces joined in one pass by `toString`, for long texts built from many pieces |
 | `Text.Regex` | Go's `regexp` (RE2, linear time): `compile`, `matches`, `find`, `findAll`, `groups`, `replaceAll` (with `$1`), `replaceAllWith`, `split`; import it qualified |
@@ -373,7 +373,8 @@ data Tree a = Leaf | Node (Tree a) a (Tree a)
 ## What the Go looks like
 
 `map` compiles to a generic Go function. A list is a pointer to its first cell, `nil` when it is
-empty, and a `Lazy` value is a pointer to a thunk:
+empty, and a `Lazy` value is a pointer to a thunk. A cell and the thunk of its tail are one
+allocation (the closure that computes the tail is another):
 
 ```go
 func map_[T_a any, T_b any](_arg0 func(T_a) T_b, _arg1 List[T_a]) List[T_b] {
@@ -381,9 +382,16 @@ func map_[T_a any, T_b any](_arg0 func(T_a) T_b, _arg1 List[T_a]) List[T_b] {
 		if _arg1 != nil {
 			x := _arg1.F0
 			xs := _arg1.F1
-			return &Cons[T_b]{g(x), rt_lazy(func() List[T_b] {
-				return map_[T_a, T_b](g, xs.force())
-			})}
+			return func() List[T_b] {
+				hg_c := &struct {
+					c  Cons[T_b]
+					t1 rt_thunk[List[T_b]]
+				}{c: Cons[T_b]{F0: g(x)}, t1: rt_thunk[List[T_b]]{f: func() List[T_b] {
+					return map_[T_a, T_b](g, xs.force())
+				}}}
+				hg_c.c.F1 = &hg_c.t1
+				return &hg_c.c
+			}()
 		}
 	...
 }
@@ -394,7 +402,8 @@ func map_[T_a any, T_b any](_arg0 func(T_a) T_b, _arg1 List[T_a]) List[T_b] {
   `newtype` does. A small sum that does not contain itself (`Maybe`, `Either`, `Ordering`) is
   one struct with a tag, also by value. One with two constructors, one without fields (a list,
   `Data.Map`'s trees), is a pointer, `nil` for the empty one. Anything else is a Go interface
-  with a struct per constructor.
+  with a struct per constructor. A field of a type that contains itself counts as the pointer
+  or interface it is, so a record with a `Map` in it is still kept by value.
 
 - **Polymorphism** becomes Go generics.
 - **Calls** to known functions are direct Go calls. Partial application and function values use
@@ -481,6 +490,25 @@ Hago has three kinds of sequence, each for its own job:
 A function given to a Go function, as `map`, `filter` and `foldl` give theirs, is generated as a
 Go function of all its arguments, so a pipeline over an `Iter` runs like the Go loop it stands
 for (see [Performance](#performance)).
+
+`Iter` is a `Monad`, an `Alternative` and a `Monoid`, as lists are, so `do` over iterators is a
+comprehension that builds no list:
+
+```haskell
+triples :: Int -> Iter (Int, Int, Int)
+triples n = do
+  c <- Iter.range 1 n
+  b <- Iter.range 1 c
+  a <- Iter.range 1 b
+  guard (a * a + b * b == c * c)
+  pure (a, b, c)
+```
+
+It runs twice as fast as the same list comprehension, but each value still allocates the
+`Iter` its step returns (`pure`, `guard`); a `map` and a `filter` where they are enough are
+thirty times faster again (see [Performance](#performance)). Comprehensions and ranges
+(`[x | x <- xs]`, `[1 ..]`) are always lists: making them `Iter`s when the type asks for one
+would make their type a choice that most uses (`length`, `sum`, `mapM_`) leave open.
 
 ## Concurrency
 
@@ -587,25 +615,29 @@ main = do
 
 ## Performance
 
-These numbers come from one machine, as a reference and not as a benchmark.
+These numbers come from one machine (an i7-12700K, Go 1.27, on its eight performance cores),
+as a reference and not as a benchmark: each is the median of nine runs.
 
 | Program | Time | Peak memory |
 |---|---|---|
 | `nfib 40`, hand-written Go | 0.34 s | — |
-| `nfib 40 :: Int -> Int`, Hago | 0.34 s | — |
-| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, at `Int` | 0.35 s | — |
-| sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.45 s | ~10 MB |
-| the same with `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | 0.01 s | ~4 MB |
-| the same over a `Data.Vector` of 3,000,000 elements | 0.01 s | ~60 MB |
-| `mapM_` over a million elements in IO | 0.19 s | ~8 MB |
-| a recursive IO loop of five million iterations | 0.31 s | ~8 MB |
-| `mapM_` over a million elements in `StateT Int IO` | 0.25 s | ~8 MB |
-| fifty million additions of a `newtype Meters = Meters Double` | 0.02 s | ~4 MB |
-| the same with `data Meters = Meters Double` | 0.02 s | ~4 MB |
-| parse and pretty print 3.7 MB of JSON with `examples/Data/Json.hgo` (`jq .`: 0.13 s) | 2.6 s | ~140 MB |
+| `nfib 40 :: Int -> Int`, Hago | 0.33 s | — |
+| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, at `Int` | 0.33 s | — |
+| sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.21 s | ~9 MB |
+| the same with `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | 0.01 s | ~2 MB |
+| the same over a `Data.Vector` of 3,000,000 elements | 0.02 s | ~60 MB |
+| Pythagorean triples up to 400, as a list comprehension | 1.21 s | ~10 MB |
+| the same as `do` over `Iter` | 0.60 s | ~10 MB |
+| the same with `Iter.filter` for the last generator and the guard | 0.02 s | ~7 MB |
+| `mapM_` over a million elements in IO | 0.08 s | ~8 MB |
+| a recursive IO loop of five million iterations | 0.09 s | ~8 MB |
+| `mapM_` over a million elements in `StateT Int IO` | 0.17 s | ~8 MB |
+| fifty million additions of a `newtype Meters = Meters Double` | 0.02 s | ~2 MB |
+| the same with `data Meters = Meters Double` | 0.02 s | ~2 MB |
+| parse and pretty print 3.7 MB of JSON with `examples/json.hgo` (`jq .`: 0.09 s, 28 MB) | 0.32 s | ~85 MB |
 | `fib 32` sixteen times with `map` | 0.11 s | — |
-| the same with `parMap`, on 8 processors | 0.02 s | — |
-| a million `Data.Map` inserts, then half a million deletes with `foldl`, and lookups | 1.45 s | ~170 MB |
+| the same with `parMap`, on 16 processors | 0.02 s | — |
+| a million `Data.Map` inserts, then half a million deletes with `foldl`, and lookups | 1.57 s | ~96 MB |
 | the primes up to a million, sieve of Eratosthenes on an `STVector` (`examples/sieve.hgo`) | 0.26 s | ~9 MB |
 | the same with a `Data.Map` (the incremental sieve) | 1.65 s | ~20 MB |
 | the primes up to ten million, on an `STVector` | 2.3 s | ~25 MB |
@@ -614,16 +646,23 @@ These numbers come from one machine, as a reference and not as a benchmark.
 | how often each of a million numbers appears, in a `HashTable` in ST (`examples/frequencies.hgo`) | 0.33 s | ~17 MB |
 | the same with a `Data.Map` | 1.0 s | ~25 MB |
 
+The JSON is the one `bench/json-input.go` writes, always the same:
+`go run bench/json-input.go > input.json`, then `hago run examples/json.hgo input.json`.
+
 - **Strict code at concrete types** compiles to the Go you would write by hand, and runs like it.
 - **Constrained and constructor-polymorphic code** (`Num a =>`, `Monad m =>`) costs nothing
   extra, because it is specialised. The price is code size: one copy per type it is used at.
-- **The lazy list pipeline** streams in constant memory, but every cell allocates a thunk, so it
-  is much slower than a Go loop. The same pipeline over an `Iter` is a Go loop.
-- **Parser combinators** are slow: every step returns a value of a sum type (`Ok` or `Failed`)
-  too big to be kept by value, so each one is allocated, and so is every thunk of a lazy list.
-  Most of the time is Go's garbage collector. Parsing the input as a
-  `[Char]` (with `unpack`) was four times slower again; `Data.String.uncons` reads a `String`
-  without a list.
+- **The lazy list pipeline** streams in constant memory, but every cell allocates its thunk with
+  it, and the closure that computes the rest, so it is much slower than a Go loop. The same
+  pipeline over an `Iter` is a Go loop.
+- **Parser combinators** need care. `Text.Parser`'s reply to each step is one constructor small
+  enough to be kept by value (the value as a `Maybe`, the input left, what was expected there),
+  so a step allocates nothing; whether it consumed input is whether what it left is what it was
+  given, and the line and column of an error are only counted when `parse` returns one. A run of
+  characters is one step (`takeWhileP`, on `Data.String.span`), and what a parser consumed is a
+  slice of the input (`match`), so a number is never put together from its pieces. That took
+  the JSON benchmark from 1.86 s to 0.32 s; most of what is left is the pretty printer's
+  documents and lists, and Go's garbage collector.
 - **Mutable structures** are faster than the trees of `Data.Map` for what they are for, but each
   operation is an action, a closure and a step of IO's trampoline, so a loop over a mutable
   vector is still far from Go's. In a program with threads, a vector made in IO also takes a
@@ -722,7 +761,8 @@ monads (State, Maybe, Either, lists, reader, writer, Traversable), monad transfo
 records, newtypes, tuples, ranges, list comprehensions, calls to Go, files, and loops.
 `examples/json.hgo` is a bigger program: a JSON parser with errors that say where and what was
 expected (`examples/Text/Parser.hgo`, Parsec-style combinators) and a pretty printer
-(`examples/Text/Pretty.hgo`, Wadler's, in Lindig's strict form). Each example has an `.out` file with its expected output. The `rejected/` folder has
+(`examples/Text/Pretty.hgo`, Wadler's, in Lindig's strict form); given a file
+(`hago run examples/json.hgo FILE`), it pretty prints it, as `jq .` does. Each example has an `.out` file with its expected output. The `rejected/` folder has
 programs the type checker must refuse, each with the error it expects.
 
 An error says where it is, quotes the line and marks the place:
@@ -807,6 +847,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `lib/` | the standard library (`Control.Monad.State` and friends), written in Hago |
 | `docs/library/` | the library's reference, made by `hago doc` |
 | `editors/vscode/` | the VS Code extension: the TextMate grammar, and `hago check` on save |
+| `bench/json-input.go` | writes the JSON of the benchmark in [Performance](#performance) |
 
 ## License
 

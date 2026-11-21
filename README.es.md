@@ -242,7 +242,7 @@ tipo y lo que hace:
 | `Control.Monad.Writer` | `WriterT`, `Writer`, `MonadWriter` (`tell`), `runWriter`, `execWriter` |
 | `Control.Monad.Trans` | `MonadTrans` (`lift`), `MonadIO` (`liftIO`) |
 | `Data.Functor.Identity` | `Identity`, con trampolín |
-| `Data.String` | `uncons` en tiempo constante (un string de Go se recorta, no se copia), `length`, `elem`, `isPrefixOf`, `stripPrefix`, `concat` en una pasada, `intercalate`, `replicate`; se importa calificado |
+| `Data.String` | `uncons` en tiempo constante (un string de Go se recorta, no se copia), `length`, `elem`, `isPrefixOf`, `stripPrefix`, `stripSuffix`, `span`, `break`, `takeWhile` y `dropWhile` (recortes, en una pasada), `concat` en una pasada, `intercalate`, `replicate`; se importa calificado |
 | `Data.List` | `sort` (un merge sort estable), `sortBy`, `sortOn`, `nub`, `group`, `partition`, `intercalate` (de cualquier `Monoid`, así que también de `String`s), `intersperse`, `transpose`, `isPrefixOf` y parecidas, `tails`, `inits`, `subsequences`, `permutations`, `delete`, `\\`, `union`, `intersect`, `elemIndex`, `findIndex`, `unfoldr`, `maximumBy` y `minimumBy` (con `Maybe`) |
 | `Data.Char` | `toUpper`, `toLower`, las pruebas de Unicode (`isPunctuation`, `isSymbol`...), `digitToInt` e `intToDigit` (con `Maybe`) |
 | `Control.Applicative` | `ZipList`, `liftA3`, `optional` (`Applicative` y `Alternative` están en el Prelude) |
@@ -251,7 +251,7 @@ tipo y lo que hace:
 | `Data.Map` | árboles de búsqueda balanceados de claves a valores, como en containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (sin `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` y `Foldable`; conviene importarlo calificado |
 | `Data.Set` | lo mismo para conjuntos: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; conviene importarlo calificado |
 | `Data.Vector` | `Vector a`, un slice de Go que Hago nunca modifica: `fromList`, `!?`, `generate`, `map`, `imap`, `filter`, `foldl`, `slice` (sin copiar), `sort`, `sortOn`, `zipWith`, `Foldable`; se importa calificado |
-| `Data.Iter` | `Iter a`, el `iter.Seq` de Go: `from`, `range`, `iterate`, `lines`, `words`, `map`, `filter`, `takeWhile`, `take`, `zipWith`, `foldl`, `sum`, `find`, `mapM_`; se importa calificado |
+| `Data.Iter` | `Iter a`, el `iter.Seq` de Go: `from`, `range`, `iterate`, `lines`, `words`, `map`, `filter`, `takeWhile`, `take`, `zipWith`, `foldl`, `sum`, `find`, `mapM_`, `singleton`; es `Monad` y `Monoid`; se importa calificado |
 | `Data.Ratio` | `Rational` (el `*big.Rat` de Go), exacto: `%`, `numerator`, `denominator`, `Num`, `Fractional`, `fromRational`, `toRational` |
 | `Data.String.Builder` | `Builder`, un `Monoid` de pedazos que `toString` une en una pasada, para textos largos armados de muchos pedazos |
 | `Text.Regex` | el `regexp` de Go (RE2, tiempo lineal): `compile`, `matches`, `find`, `findAll`, `groups`, `replaceAll` (con `$1`), `replaceAllWith`, `split`; se importa calificado |
@@ -389,7 +389,8 @@ data Tree a = Leaf | Node (Tree a) a (Tree a)
 ## Cómo queda el Go
 
 `map` se compila a una función genérica de Go. Una lista es un puntero a su primera celda, `nil`
-si está vacía, y un valor `Lazy` es un puntero a un thunk:
+si está vacía, y un valor `Lazy` es un puntero a un thunk. Una celda y el thunk de su cola son
+una sola reserva de memoria (la clausura que calcula la cola es otra):
 
 ```go
 func map_[T_a any, T_b any](_arg0 func(T_a) T_b, _arg1 List[T_a]) List[T_b] {
@@ -397,9 +398,16 @@ func map_[T_a any, T_b any](_arg0 func(T_a) T_b, _arg1 List[T_a]) List[T_b] {
 		if _arg1 != nil {
 			x := _arg1.F0
 			xs := _arg1.F1
-			return &Cons[T_b]{g(x), rt_lazy(func() List[T_b] {
-				return map_[T_a, T_b](g, xs.force())
-			})}
+			return func() List[T_b] {
+				hg_c := &struct {
+					c  Cons[T_b]
+					t1 rt_thunk[List[T_b]]
+				}{c: Cons[T_b]{F0: g(x)}, t1: rt_thunk[List[T_b]]{f: func() List[T_b] {
+					return map_[T_a, T_b](g, xs.force())
+				}}}
+				hg_c.c.F1 = &hg_c.t1
+				return &hg_c.c
+			}()
 		}
 	...
 }
@@ -411,7 +419,8 @@ func map_[T_a any, T_b any](_arg0 func(T_a) T_b, _arg1 List[T_a]) List[T_b] {
   contiene a sí mismo (`Maybe`, `Either`, `Ordering`) es un struct con una etiqueta, también
   por valor. Uno con dos constructores, uno sin campos (una lista, los árboles de `Data.Map`),
   es un puntero, `nil` para el vacío. Cualquier otro es una interfaz de Go con un struct por
-  constructor.
+  constructor. Un campo de un tipo que se contiene a sí mismo cuenta como el puntero o la
+  interfaz que es, así que un record con un `Map` adentro se sigue guardando por valor.
 
 - **El polimorfismo** se traduce a genéricos de Go.
 - **Las llamadas** a funciones conocidas son llamadas directas de Go. La aplicación parcial y las
@@ -500,6 +509,25 @@ Hago tiene tres clases de secuencia, cada una para lo suyo:
 Una función que se le pasa a una función de Go, como hacen `map`, `filter` y `foldl`, se genera
 como una función de Go de todos sus argumentos, así que un pipeline sobre un `Iter` corre como el
 loop de Go que representa (ver [Performance](#performance)).
+
+`Iter` es una `Monad`, un `Alternative` y un `Monoid`, como las listas, así que un `do` sobre
+iteradores es una comprensión que no arma ninguna lista:
+
+```haskell
+triples :: Int -> Iter (Int, Int, Int)
+triples n = do
+  c <- Iter.range 1 n
+  b <- Iter.range 1 c
+  a <- Iter.range 1 b
+  guard (a * a + b * b == c * c)
+  pure (a, b, c)
+```
+
+Corre al doble de velocidad que la misma comprensión de listas, pero cada valor todavía reserva
+el `Iter` que devuelve su paso (`pure`, `guard`); un `map` y un `filter`, donde alcanzan, son
+treinta veces más rápidos todavía (ver [Performance](#performance)). Las comprensiones y los
+rangos (`[x | x <- xs]`, `[1 ..]`) son siempre listas: hacerlos `Iter` cuando el tipo lo pide
+volvería su tipo una elección que la mayoría de los usos (`length`, `sum`, `mapM_`) deja abierta.
 
 ## Concurrencia
 
@@ -610,25 +638,29 @@ main = do
 
 ## Performance
 
-Son números de una sola máquina, como referencia y no como benchmark.
+Son números de una sola máquina (un i7-12700K, Go 1.27, en sus ocho núcleos de rendimiento),
+como referencia y no como benchmark: cada uno es la mediana de nueve corridas.
 
 | Programa | Tiempo | Memoria máxima |
 |---|---|---|
 | `nfib 40`, Go escrito a mano | 0,34 s | — |
-| `nfib 40 :: Int -> Int`, Hago | 0,34 s | — |
-| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, en `Int` | 0,35 s | — |
-| suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | 0,45 s | ~10 MB |
-| lo mismo con `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | 0,01 s | ~4 MB |
-| lo mismo sobre un `Data.Vector` de 3.000.000 de elementos | 0,01 s | ~60 MB |
-| `mapM_` sobre un millón de elementos en IO | 0,19 s | ~8 MB |
-| un loop recursivo en IO de cinco millones de iteraciones | 0,31 s | ~8 MB |
-| `mapM_` sobre un millón de elementos en `StateT Int IO` | 0,25 s | ~8 MB |
-| cincuenta millones de sumas de un `newtype Meters = Meters Double` | 0,02 s | ~4 MB |
-| lo mismo con `data Meters = Meters Double` | 0,02 s | ~4 MB |
-| parsear e imprimir con formato 3,7 MB de JSON con `examples/Data/Json.hgo` (`jq .`: 0,13 s) | 2,6 s | ~140 MB |
+| `nfib 40 :: Int -> Int`, Hago | 0,33 s | — |
+| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, en `Int` | 0,33 s | — |
+| suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | 0,21 s | ~9 MB |
+| lo mismo con `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | 0,01 s | ~2 MB |
+| lo mismo sobre un `Data.Vector` de 3.000.000 de elementos | 0,02 s | ~60 MB |
+| ternas pitagóricas hasta 400, como comprensión de listas | 1,21 s | ~10 MB |
+| lo mismo como `do` sobre `Iter` | 0,60 s | ~10 MB |
+| lo mismo con `Iter.filter` para el último generador y la guarda | 0,02 s | ~7 MB |
+| `mapM_` sobre un millón de elementos en IO | 0,08 s | ~8 MB |
+| un loop recursivo en IO de cinco millones de iteraciones | 0,09 s | ~8 MB |
+| `mapM_` sobre un millón de elementos en `StateT Int IO` | 0,17 s | ~8 MB |
+| cincuenta millones de sumas de un `newtype Meters = Meters Double` | 0,02 s | ~2 MB |
+| lo mismo con `data Meters = Meters Double` | 0,02 s | ~2 MB |
+| parsear e imprimir con formato 3,7 MB de JSON con `examples/json.hgo` (`jq .`: 0,09 s, 28 MB) | 0,32 s | ~85 MB |
 | `fib 32` dieciséis veces con `map` | 0,11 s | — |
-| lo mismo con `parMap`, en 8 procesadores | 0,02 s | — |
-| un millón de inserciones en un `Data.Map`, después medio millón de borrados con `foldl`, y búsquedas | 1,45 s | ~170 MB |
+| lo mismo con `parMap`, en 16 procesadores | 0,02 s | — |
+| un millón de inserciones en un `Data.Map`, después medio millón de borrados con `foldl`, y búsquedas | 1,57 s | ~96 MB |
 | los primos hasta un millón, criba de Eratóstenes sobre un `STVector` (`examples/sieve.hgo`) | 0,26 s | ~9 MB |
 | lo mismo con un `Data.Map` (la criba incremental) | 1,65 s | ~20 MB |
 | los primos hasta diez millones, sobre un `STVector` | 2,3 s | ~25 MB |
@@ -637,19 +669,26 @@ Son números de una sola máquina, como referencia y no como benchmark.
 | cuántas veces aparece cada uno de un millón de números, en una `HashTable` en ST (`examples/frequencies.hgo`) | 0,33 s | ~17 MB |
 | lo mismo con un `Data.Map` | 1,0 s | ~25 MB |
 
+El JSON es el que escribe `bench/json-input.go`, siempre el mismo:
+`go run bench/json-input.go > input.json`, y después `hago run examples/json.hgo input.json`.
+
 - **El código estricto en tipos concretos** se compila al Go que escribirías a mano, y rinde
   igual.
 - **El código con restricciones o polimórfico sobre constructores** (`Num a =>`, `Monad m =>`)
   no cuesta nada extra, porque se especializa. El precio es el tamaño del código: una copia por
   cada tipo con que se usa.
-- **La cadena de listas perezosas** corre en memoria constante, pero cada celda reserva un
-  thunk, así que es mucho más lenta que un loop de Go. La misma cadena sobre un `Iter` es un loop de Go.
-- **Los combinadores de parsers** son lentos: cada paso devuelve un valor de un tipo suma (`Ok` o
-  `Failed`) demasiado grande para guardarse por valor, así que cada uno reserva memoria, igual
-  que cada thunk de una lista perezosa. La mayor parte del tiempo es del recolector de basura
-  de Go.
-  Parsear la entrada como `[Char]` (con `unpack`) era cuatro veces más lento todavía;
-  `Data.String.uncons` lee un `String` sin armar una lista.
+- **La cadena de listas perezosas** corre en memoria constante, pero cada celda reserva su thunk
+  junto con ella, y la clausura que calcula el resto, así que es mucho más lenta que un loop de
+  Go. La misma cadena sobre un `Iter` es un loop de Go.
+- **Los combinadores de parsers** piden cuidado. La respuesta de `Text.Parser` a cada paso es un
+  solo constructor, lo bastante chico para guardarse por valor (el valor como un `Maybe`, la
+  entrada que queda, lo que se esperaba ahí), así que un paso no reserva memoria; si consumió
+  entrada es si lo que dejó no es lo que recibió, y la línea y la columna de un error sólo se
+  cuentan cuando `parse` devuelve uno. Una tirada de caracteres es un solo paso (`takeWhileP`,
+  sobre `Data.String.span`), y lo que un parser consumió es un recorte de la entrada (`match`),
+  así que un número nunca se arma con sus pedazos. Eso llevó el benchmark de JSON de 1,86 s a
+  0,32 s; casi todo lo que queda son los documentos y las listas del pretty-printer, y el
+  recolector de basura de Go.
 - **Las estructuras mutables** son más rápidas que los árboles de `Data.Map` para lo que sirven,
   pero cada operación es una acción, una clausura y un paso del trampolín de IO, así que un loop
   sobre un vector mutable sigue lejos del de Go. En un programa con hilos, un vector creado en
@@ -755,7 +794,8 @@ En `examples/` hay listas perezosas, ADTs con pattern matching y guardas, type c
 records, newtypes, tuplas, rangos, listas por comprensión, llamadas a Go, archivos y loops.
 `examples/json.hgo` es un programa más grande: un parser de JSON con errores que dicen dónde y qué
 se esperaba (`examples/Text/Parser.hgo`, combinadores al estilo de Parsec) y un pretty-printer
-(`examples/Text/Pretty.hgo`, el de Wadler, en la forma estricta de Lindig).
+(`examples/Text/Pretty.hgo`, el de Wadler, en la forma estricta de Lindig); dado un archivo
+(`hago run examples/json.hgo ARCHIVO`), lo imprime con formato, como `jq .`.
 Cada ejemplo tiene un `.out` con la salida esperada. En `rejected/` hay programas que el type
 checker tiene que rechazar, cada uno con el error que espera.
 
@@ -845,6 +885,7 @@ Haskell 98.
 | `lib/` | la biblioteca estándar (`Control.Monad.State` y compañía), escrita en Hago |
 | `docs/library/` | la referencia de la biblioteca, hecha por `hago doc` |
 | `editors/vscode/` | la extensión de VS Code: la gramática TextMate, y `hago check` al guardar |
+| `bench/json-input.go` | escribe el JSON del benchmark de [Performance](#performance) |
 
 ## Licencia
 

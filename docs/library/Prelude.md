@@ -398,11 +398,12 @@ class Foldable t where
   foldMap :: Monoid m => (a -> m) -> t a -> m
   foldl :: (b -> a -> b) -> b -> t a -> b
   toList :: t a -> [a]
+  null :: t a -> Bool
 ```
 
 foldr's accumulator is lazy, so it can stop early on infinite structures.
 
-Methods with a default definition: `foldMap`, `toList`, `foldl`.
+Methods with a default definition: `foldMap`, `toList`, `foldl`, `null`.
 
 ```haskell
 class (Functor t, Foldable t) => Traversable t where
@@ -410,7 +411,6 @@ class (Functor t, Foldable t) => Traversable t where
 ```
 
 ```haskell
-null :: Foldable t => t a -> Bool
 length :: Foldable t => t a -> Int
 sum :: (Foldable t, Num a) => t a -> a
 product :: (Foldable t, Num a) => t a -> a

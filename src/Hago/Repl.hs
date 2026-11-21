@@ -274,7 +274,7 @@ endLine s = do
 declValues :: Decl -> [Name]
 declValues = \case
   DBind n _ -> [n]
-  DSig ns _ _ -> ns
+  DSig _ ns _ _ -> ns
   DData d -> [c | ConDecl c _ _ <- ddCons d] ++ concat [fs | ConDecl _ _ fs <- ddCons d]
   DClass _ _ _ _ ds -> concatMap declValues ds
   DForeign _ n _ -> [n]

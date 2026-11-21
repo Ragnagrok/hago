@@ -48,31 +48,29 @@ constant :: Parser Json
 constant = (JNull <$ string "null") <|> (JBool True <$ string "true") <|> (JBool False <$ string "false")
 
 -- The grammar is stricter than ParseFloat's, so it is checked here first:
--- no leading zeros, no "+", digits on both sides of the point.
+-- no leading zeros, no "+", digits on both sides of the point. What it
+-- matched is given to ParseFloat as it is, a slice of the input.
 number :: Parser Json
 number = do
-  sign <- option "" (string "-")
-  int <- string "0" <|> fmap pack (liftA2 (:) (oneOf "123456789") (many digit))
-  frac <- option "" (fmap (\ds -> "." ++ pack ds) ((char '.' <?> "a fraction") *> some digit))
-  ex <- option "" exponent
-  case parseFloat (sign ++ int ++ frac ++ ex) 64 of
+  (text, _) <- match (option () (() <$ string "-") *> int *> option () frac *> option () exponent)
+  case parseFloat text 64 of
     Right x -> pure (JNumber x)
     Left err -> fail err
   where
-    digit = satisfy isDigit <?> "a digit"
-    exponent = do
-      e <- oneOf "eE" <?> "an exponent"
-      s <- option "" (fmap (\c -> pack [c]) (oneOf "+-"))
-      ds <- some digit
-      pure (pack [e] ++ s ++ pack ds)
+    digits = takeWhileP (Just "a digit") isDigit
+    int = (() <$ string "0") <|> (oneOf "123456789" *> (() <$ digits))
+    frac = (char '.' <?> "a fraction") *> (() <$ takeWhile1P (Just "a digit") isDigit)
+    exponent = (oneOf "eE" <?> "an exponent") *> option ' ' (oneOf "+-") *> (() <$ takeWhile1P (Just "a digit") isDigit)
 
 instance MonadFail Parser where
   fail msg = empty <?> msg
 
+-- A run of plain characters is taken in one step, and joined to the escapes
+-- around it without a copy when there are none.
 stringLiteral :: Parser String
-stringLiteral = fmap pack (char '"' *> many character <* (char '"' <?> "the closing quote"))
+stringLiteral = fmap S.concat (char '"' *> many piece <* (char '"' <?> "the closing quote"))
   where
-    character = (char '\\' *> escape) <|> satisfy plain <?> "a character"
+    piece = fmap (\c -> pack [c]) (char '\\' *> escape) <|> takeWhile1P Nothing plain <?> "a character"
     plain c = c /= '"' && c /= '\\' && ord c >= 32
     escape = simple <|> (char 'u' *> unicode) <?> "an escape"
     simple = do
@@ -122,13 +120,21 @@ pretty width j = render width (doc j)
 doc :: Json -> Doc
 doc x = case x of
   JArray [] -> text "[]"
-  JArray xs -> block "[" "]" (map doc xs)
+  JArray (y : ys) -> block "[" "]" (doc y) (items ys)
   JObject [] -> text "{}"
-  JObject ms -> block "{" "}" [text (quote k ++ ": ") <> doc v | (k, v) <- ms]
+  JObject (m : ms) -> block "{" "}" (member m) (members ms)
   _ -> text (scalar x)
   where
-    block open close ds =
-      group (text open <> nest 2 (linebreak <> mconcat (punctuate (text "," <> line) ds)) <> linebreak <> text close)
+    -- the items after the first, each after a comma, joined as they are
+    -- made instead of through lists of documents
+    items [] = mempty
+    items (y : ys) = comma <> doc y <> items ys
+    members [] = mempty
+    members (m : ms) = comma <> member m <> members ms
+    member (k, v) = text (quoteThen k ": ") <> doc v
+    comma = text "," <> line
+    block open close first rest =
+      group (text open <> nest 2 (linebreak <> first <> rest) <> linebreak <> text close)
 
 scalar :: Json -> String
 scalar x = case x of
@@ -145,8 +151,20 @@ scalar x = case x of
       | otherwise = show n
 
 quote :: String -> String
-quote s = S.concat ("\"" : map escape (unpack s) ++ ["\""])
+quote s = quoteThen s ""
+
+-- s in quotes, then after. Most strings need no escape, and are joined to
+-- the quotes at once; in the others, the runs of characters that need none
+-- are kept as they are, slices of s, and the pieces joined once.
+quoteThen :: String -> String -> String
+quoteThen s after
+  | S.null (S.dropWhile (\c -> not (needsEscape c)) s) = "\"" ++ s ++ "\"" ++ after
+  | otherwise = S.concat ("\"" : pieces s)
   where
+    pieces t = case S.break needsEscape t of
+      (run, rest) -> run : case S.uncons rest of
+        Nothing -> ["\"", after]
+        Just (c, rest') -> escape c : pieces rest'
     escape c = case c of
       '"' -> "\\\""
       '\\' -> "\\\\"
@@ -156,3 +174,6 @@ quote s = S.concat ("\"" : map escape (unpack s) ++ ["\""])
       _ | ord c < 32 -> pack ['\\', 'u', '0', '0', hexDigit (ord c `div` 16), hexDigit (ord c `mod` 16)]
         | otherwise -> pack [c]
     hexDigit n = if n < 10 then chr (ord '0' + n) else chr (ord 'a' + n - 10)
+
+needsEscape :: Char -> Bool
+needsEscape c = c == '"' || c == '\\' || ord c < 32
