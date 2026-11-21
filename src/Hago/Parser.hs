@@ -277,11 +277,12 @@ decl :: Parser [Decl]
 decl = fixity <|> try sig <|> patBinding <|> (pure <$> binding)
   where
     sig = do
+      l <- here
       names <- var `sepBy1` special ","
       key "::"
       ctx <- context
       t <- pType
-      pure [DSig names ctx t]
+      pure [DSig l names ctx t]
     fixity = do
       assoc <- (AssocL <$ key "infixl") <|> (AssocR <$ key "infixr") <|> (AssocN <$ key "infix")
       prec <- option 9 (satisfyT (\t -> case t of TInt n -> Just (fromInteger n); _ -> Nothing))

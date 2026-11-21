@@ -1,0 +1,7 @@
+-- expects: rejected/signature-unknown-type.hgo:4:3: in Container, in empty: unknown type: Lsit
+class Container f where
+  -- a method's signature, with a misspelt type
+  empty :: f (Lsit a)
+
+main :: IO ()
+main = pure ()

@@ -1,0 +1,7 @@
+-- expects: rejected/signature-unknown-class.hgo:6:5: in main, in total: unknown class: Summable
+main :: IO ()
+main = print (total [1, 2, 3])
+  where
+    -- a local signature, with a class that does not exist
+    total :: Summable a => [a] -> a
+    total xs = foldr (+) 0 xs

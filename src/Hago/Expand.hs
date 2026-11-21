@@ -39,7 +39,7 @@ expandSynonyms before ds = do
       _ -> False
     where_ = \case
       DData d -> showLoc (ddLoc d) ++ ": in type " ++ unqual (ddName d)
-      DSig ns _ _ -> "in " ++ intercalate ", " (map unqual ns)
+      DSig l ns _ _ -> showLoc l ++ ": in " ++ intercalate ", " (map unqual ns)
       DBind n _ -> "in " ++ unqual n
       DClass _ c _ _ _ -> "in class " ++ unqual c
       DInstance l _ c _ _ -> maybe "" ((++ ": ") . showLoc) l ++ "in instance " ++ unqual c

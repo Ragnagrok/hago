@@ -53,12 +53,12 @@ tableOf m = Table vals types children
     vals = M.fromList [(n, q n) | n <- valueNames]
     types = M.fromList [(n, q n) | n <- [ddName d | DData d <- ds] ++ [t | DType t _ _ <- ds] ++ [c | DClass _ c _ _ _ <- ds]]
     valueNames = nub $
-      [n | DBind n _ <- ds] ++ [n | DSig ns _ _ <- ds, n <- ns] ++ [n | DForeign _ n _ <- ds]
+      [n | DBind n _ <- ds] ++ [n | DSig _ ns _ _ <- ds, n <- ns] ++ [n | DForeign _ n _ <- ds]
         ++ [k | DData d <- ds, ConDecl k _ _ <- ddCons d] ++ methods
-    methods = [n | DClass _ _ _ _ body <- ds, DSig ns _ _ <- body, n <- ns]
+    methods = [n | DClass _ _ _ _ body <- ds, DSig _ ns _ _ <- body, n <- ns]
     children = M.fromList $
       [(ddName d, [k | ConDecl k _ _ <- ddCons d]) | DData d <- ds]
-        ++ [(c, [n | DSig ns _ _ <- body, n <- ns]) | DClass _ c _ _ body <- ds]
+        ++ [(c, [n | DSig _ ns _ _ <- body, n <- ns]) | DClass _ c _ _ body <- ds]
 
 -- | The part of a table a module lets others see: its own names, the names
 -- it imports, and whole modules it imports (@module M@). Children maps a
@@ -244,12 +244,12 @@ topDecl sc = \case
     derivs <- mapM (resolveType sc') (ddDeriving d)
     pure (DData d {ddName = own sc (ddName d), ddCons = cons', ddDeriving = derivs})
   DType n ps t -> DType (own sc n) ps <$> rnType sc t
-  DSig ns ctx t -> DSig (map (own sc) ns) <$> rnContext sc ctx <*> rnType sc t
+  DSig l ns ctx t -> let sc' = sc {scLoc = Just l} in DSig l (map (own sc) ns) <$> rnContext sc' ctx <*> rnType sc' t
   DBind n cs -> DBind (own sc n) <$> mapM (rnClause sc) cs
   DClass sup c vs deps body -> do
     sup' <- rnContext sc sup
     body' <- forM body $ \case
-      DSig ns ctx t -> DSig (map (own sc) ns) <$> rnContext sc ctx <*> rnType sc t
+      DSig l ns ctx t -> let sc' = sc {scLoc = Just l} in DSig l (map (own sc) ns) <$> rnContext sc' ctx <*> rnType sc' t
       DBind n cs -> DBind (own sc n) <$> mapM (rnClause sc) cs
       d -> pure d
     pure (DClass sup' (own sc c) vs deps body')
@@ -312,7 +312,7 @@ rnLocals sc ds = do
   let sc' = bind sc [n | DBind n _ <- ds]
   ds' <- forM ds $ \case
     DBind n cs -> DBind n <$> mapM (rnClause sc') cs
-    DSig ns ctx t -> DSig ns <$> rnContext sc' ctx <*> rnType sc' t
+    DSig l ns ctx t -> let sc'' = sc' {scLoc = Just l} in DSig l ns <$> rnContext sc'' ctx <*> rnType sc'' t
     d -> pure d
   pure (sc', ds')
 

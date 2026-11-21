@@ -1,0 +1,7 @@
+-- expects: rejected/signature-class-arity.hgo:3:1: in describe: the class Show takes 1 type(s), and is given 2
+-- one class, given two types
+describe :: Show a b => a -> String
+describe x = show x
+
+main :: IO ()
+main = putStrLn (describe 1)

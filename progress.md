@@ -211,8 +211,11 @@ Next, more of Go's library (decided 2026-11-18), the easy ones first:
 
 Known rough edges, found on the way and not fixed yet:
 
-- [ ] **Errors in type signatures have no location** (a context with the wrong number of types, an
-      unknown class), only the file and the definition's name.
+- [x] **Errors in type signatures have a location.** A signature keeps where it starts, as the
+      other declarations do, so a context with the wrong number of types, an unknown class or an
+      unknown type is reported at `file:line:column` and quoted, in a top-level, local or
+      method signature (`rejected/signature-*.hgo`). Fixed on the way: a local signature's
+      context was not checked at all, so an unknown class there compiled.
 - [ ] **The check for values defined in terms of each other counts every branch** of an `if` or
       `case` as evaluated, so it could reject a value whose cycle only goes through a branch
       that is never taken.
