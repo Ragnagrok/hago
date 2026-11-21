@@ -3,7 +3,7 @@
 -- | From a source file to Go source: loading modules, renaming, type
 -- synonyms, deriving, type checking, specialisation, newtype erasure, code
 -- generation.
-module Hago.Driver (Virtual, compileFile, checkFile, checkProgram, generateProgram, quoteSource, quoteIn, libraryModules, preludeSource) where
+module Hago.Driver (Virtual, compileFile, checkFile, checkProgram, generateProgram, quoteSource, quoteIn, libraryInterfaces) where
 
 import Control.Applicative ((<|>))
 import Control.Monad (foldM)
@@ -208,6 +208,26 @@ checkFile file = do
       (a, '.' : rest) -> a : splitOn rest
       (a, _) -> [a]
 
+-- | The Prelude and every module of the standard library, as compiled into
+-- hago, dependencies first: each module's name, file, source, and what it
+-- gives. For hago doc.
+libraryInterfaces :: IO (Either String [(Name, FilePath, String, Iface)])
+libraryInterfaces = do
+  let path n = "lib" </> moduleFile n
+      importer = unlines (["module Main where"] ++ ["import " ++ n ++ " ()" | n <- M.keys libraryModules] ++ ["main :: IO ()", "main = pure ()"])
+      virtual = M.insert "Main" ("<library>", importer) (M.mapWithKey (\n src -> (path n, src)) libraryModules)
+  loaded <- loadAll virtual "Main" "." "<library>"
+  stamp <- compilerStamp
+  cache <- cacheDirectory
+  case loaded of
+    Left e -> pure (Left e)
+    Right mods -> do
+      let mods' = [(p, modName m, src, m) | (p, src, m) <- mods, modName m /= "Main"]
+          units = Unit "Prelude.hgo" "Prelude" (preludeSource ++ tupleInstances) Nothing : [Unit p n src (Just m) | (p, n, src, m) <- mods']
+          sources = M.fromList (("Prelude", ("prelude/Prelude.hgo", preludeSource)) : [(n, (p, src)) | (p, n, src, _) <- mods'])
+      result <- compileUnits stamp cache units
+      pure (fmap (\done -> [(n, p, src, iface) | (n, iface) <- done, Just (p, src) <- [M.lookup n sources]]) result)
+
 -- | Two modules that do not import each other can still give the same
 -- instance, which only the whole program sees.
 duplicateInstances :: FilePath -> [Checked] -> Either String ()
@@ -333,4 +353,7 @@ loadAll virtual first root firstFile
                         let deps = [(impModule i, root </> moduleFile (impModule i), Just (impLoc i)) | i <- modImports m, impModule i /= "Prelude"]
                         r <- foldM (load (name : stack)) (Right (seen, done)) deps
                         pure (fmap (\(seen', done') -> (M.insert name () seen', (path', src, m {modName = name}) : done')) r)
-    moduleFile n = map (\c -> if c == '.' then '/' else c) n <.> "hgo"
+
+-- | The file module A.B lives in: A/B.hgo.
+moduleFile :: Name -> FilePath
+moduleFile n = map (\c -> if c == '.' then '/' else c) n <.> "hgo"

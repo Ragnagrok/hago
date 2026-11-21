@@ -6,7 +6,8 @@
 # with the error announced on its "-- expects:" line, with hago build and with
 # hago check, which must pass every example and module of the library. Modules
 # are compiled with an empty cache, and every example again with the cache
-# full, which must give the same Go.
+# full, which must give the same Go. The reference in docs/library must be
+# what hago doc makes.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -87,6 +88,14 @@ for f in rejected/*.hgo; do
   fi
 done
 [ $checked == 1 ] && echo "ok   hago check passes every example and module, and fails every rejected program"
+
+# the library's reference in docs/library is what hago doc makes now
+"$hago" doc -o "$out/docs"
+if diff -r "$out/docs" docs/library >/dev/null; then
+  echo "ok   docs/library is up to date"
+else
+  echo "FAIL docs/library is not what hago doc makes; run it:"; diff -r "$out/docs" docs/library | head -20 || true; failures=1
+fi
 
 # a session at the prompt: the lines after "hago> " and "hago| " are typed,
 # and the transcript must come out the same

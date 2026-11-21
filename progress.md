@@ -215,6 +215,13 @@ Next, tools around the language, in this order:
       the Prelude, with what it imports, and generates no Go: about 0.05 s with the cache full,
       for editors to run on save. The first error only, as the compiler stops there.
       `check.sh` runs it over every example and module, and over `rejected/`.
+- [x] **`hago doc`:** the reference of the Prelude and the library in `docs/library/`, a page per
+      module and an index. What is exported and every type come from the type checker; the text
+      from the comment above each declaration, read from the source text since the lexer drops
+      comments, with sections from `-- Title -----` lines and instances listed under their
+      type. Synonyms appear expanded (`runState :: StateT s Identity a -> ...`): the checker
+      does not keep them. The Prelude has no export list, so its helpers (`readParens`,
+      `goAtoi`) are listed too. `check.sh` regenerates the pages and compares.
 
 Known rough edges, found on the way and not fixed yet:
 
@@ -276,5 +283,6 @@ with an `.out` next to it; the rest are modules) comparing its output with that 
 the REPL sessions in `repl/`, and checks that every program in `rejected/` fails with the error on its
 `-- expects:` line. It compiles with an empty cache, then compiles every example again with the
 cache full and checks the Go is the same. `hago check` must pass every example and module of the
-library, and fail every program in `rejected/` with its error.
+library, and fail every program in `rejected/` with its error. The pages in `docs/library` must be
+what `hago doc` makes.
 CI runs the same script on every push.

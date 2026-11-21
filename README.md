@@ -218,7 +218,8 @@ module Geometry (module Geometry.Shapes, scale) where   -- re-exports Geometry.S
 ### The standard library
 
 Some modules come with the compiler, and a program imports them like its own (a module of the
-program with the same name comes first):
+program with the same name comes first). [The library's reference](docs/library/README.md) has
+every name each one exports, with its type and what it does:
 
 | Module | What it has |
 | --- | --- |
@@ -556,6 +557,7 @@ cabal build
 cabal run -v0 hago -- run examples/lazy.hgo                 # compile and run
 cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # just compile
 cabal run -v0 hago -- check examples/lazy.hgo              # just type check
+cabal run -v0 hago -- doc                                   # the library's reference, into docs/library
 cabal run -v0 hago -- repl                                  # evaluate expressions as you type them
 ./check.sh                                                  # every example and rejected program
 ```
@@ -567,6 +569,15 @@ every save. The file can be a program, one of its modules (`hago check examples/
 looks for `Data.Json`'s imports from `examples/`, since the module lives in `Data/Json.hgo`), a
 module of the standard library (its imports are read from `lib/` next to it, so a library being
 edited is checked as it is on disk) or the Prelude.
+
+`hago doc` writes the reference of the Prelude and the standard library into `docs/library`
+(`-o DIR` puts it elsewhere): a Markdown file per module and an index. Each page lists what the
+module exports, in the order of its source and under the sections the source marks with
+`-- Title -----` lines: functions with their types, data types with their exported
+constructors and every instance of them, classes with their methods. The names and types are the
+type checker's, so they are exact (a synonym appears expanded, as `StateT s Identity`). The text
+is the comment block right above each declaration, and the comment at the top of the file
+introduces the module. `check.sh` fails if the committed pages are not what `hago doc` makes.
 
 ### The REPL
 
@@ -669,12 +680,14 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `src/Hago/CodeGen.hs` | Go generation |
 | `src/Hago/Cache.hs` | separate compilation: what each module gives, kept on disk |
 | `src/Hago/Driver.hs` | finding modules, compiling each, then the whole program |
+| `src/Hago/Doc.hs` | `hago doc`: the library's reference, from the type checker and the comments |
 | `runtime/runtime.go` | lists and trampolined IO, copied into every program |
 | `runtime/thunk_sequential.go` | thunks for a program on one goroutine |
 | `runtime/concurrent.go` | thunks any goroutine can force, threads, MVars, channels, `select`, `parMap`, for a program that uses them |
 | `runtime/lib_*.go` | what hashes, encodings, processes and the HTTP client need, copied only into a program that uses it, so that every program does not import `net/http` or `crypto` |
 | `prelude/Prelude.hgo` | the prelude, written in Hago |
 | `lib/` | the standard library (`Control.Monad.State` and friends), written in Hago |
+| `docs/library/` | the library's reference, made by `hago doc` |
 
 ## License
 
