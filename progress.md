@@ -137,11 +137,50 @@ Next, found by the JSON program:
       Most of what is left is Go's garbage collector (half of the CPU time in both). The
       `foldr` version's extra memory is the stack: `foldr` with a strict function recurses
       500k deep.
-- [ ] **A parser's `Ok | Failed` is still an interface:** its fields are more than eight words.
-      Overlapping the constructors' fields in one struct would need unsafe tricks Go does not
-      allow.
-- [ ] **Runs of characters in one step.** `Data.String.span`/`takeWhile` over a `String`, and a
-      parser that takes a run (`takeWhileP`), instead of one `satisfy` per character.
+- [x] **A parser's reply without allocation.** Not by overlapping `Ok`'s and `Failed`'s fields
+      (Go has no unions), but by needing fewer: `Reply (Maybe a) String [String]`, one
+      constructor of seven words, kept by value. Whether a parser consumed input is whether what
+      it left is what it was given (both are suffixes of the input, so `/=` is immediate), and
+      the line and column of an error are counted from the input only when `parse` returns it,
+      so the parser carries no position. `liftA2`, `*>` and `<*` run both parsers directly
+      instead of through `>>=`, which made a parser on every run.
+- [x] **Runs of characters in one step.** `Data.String.span`, `break`, `takeWhile`,
+      `dropWhile` (slices, found by one Go loop) and `stripSuffix`; `takeWhileP` and
+      `takeWhile1P` in `Text.Parser`, which name what was expected where the run stops, as
+      `many (satisfy f <?> name)` did, and `match`, what a parser consumed, as a slice.
+- [x] **The JSON benchmark, measured with pprof and taken from 1.86 s to 0.32 s.** The input is
+      `bench/json-input.go`'s, always the same (3.7 MB of records, with escapes, characters
+      outside ASCII, numbers of every form, nesting); `examples/json.hgo FILE` pretty prints a
+      file. Each change measured on its own, on an i7-12700K pinned to its performance cores, the
+      median of nine runs, all in one interleaved round:
+
+      | Change | Time | CPU | Peak memory |
+      | --- | --- | --- | --- |
+      | before | 1.86 s | 5.6 s | 98 MB |
+      | the reply by value; `liftA2`, `*>`, `<*` without `>>=` (library) | 1.00 s | 3.2 s | 97 MB |
+      | runs: white space, the characters of a string, digits (library) | 0.85 s | 2.8 s | 113 MB |
+      | `quote` by runs, instead of a `String` per character (library) | 0.60 s | 1.7 s | 87 MB |
+      | `null` a method of `Foldable`, without `foldr`'s suspension for lists (Prelude) | 0.53 s | 1.5 s | 84 MB |
+      | the pretty printer's stack a type of its own, not a list of triples (library) | 0.51 s | 1.4 s | 89 MB |
+      | a list cell and the thunk of its tail in one allocation (compiler) | 0.47 s | 1.3 s | 82 MB |
+      | what a parser expects made once, with the parser (library) | 0.43 s | 1.2 s | 83 MB |
+      | a number as the slice it matched; the document at hand apart from the printer's stack; documents joined without lists; a string without escapes quoted at once (library) | 0.32 s | 0.8 s | 82 MB |
+      | `jq .` | 0.09 s | 0.1 s | 28 MB |
+
+      pprof showed the garbage collector at more than half of the CPU time at first, from 2.2 GB
+      allocated (a reply per step, a thunk per list cell, a `String` per character quoted); now
+      270 MB. What is left is mostly the pretty printer's documents and lists of pieces, and
+      merging what is expected at a choice (`e1 ++ e2`, 10%). On the way, the compiler counted a
+      field of a type that contains itself as too big to keep by value, so a record with a `Map`
+      or a tree in it was an interface; it now counts as the pointer or interface it is. The
+      README's Performance programs were measured before and after on the same machine: the
+      lazy list pipeline went from 0.23 s to 0.21 s, the rest did not change.
+
+      **`debug.SetGCPercent(200)` was measured and left out.** It took a third of the CPU and an
+      eighth of the time off JSON (0.49 s → 0.43 s) and `Data.Map` (1.30 s → 1.09 s), for half
+      again as much memory at the peak (86 → 129 MB, 94 → 145 MB), but made the small IO loops
+      up to twice as slow (`mapM_` 0.08 → 0.12 s, the recursive loop 0.09 → 0.17 s, a few KB
+      alive in both). Go's default stays; `GOGC=200` can be given to one program.
 - [ ] **Decide whether `Text.Parser` and `Text.Pretty` belong in the library.**
 
 Next, concurrency (decided 2026-11-18), in this order:

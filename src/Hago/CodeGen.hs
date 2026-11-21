@@ -388,6 +388,15 @@ dataReprs prog = M.union byValueReprs pointers
         | S.member c candidates -> c : concatMap inside ts
         | tupleArity c /= Nothing -> concatMap inside ts
       _ -> []
+    -- the types that contain themselves, through strict fields and the
+    -- types inside them: never kept by value, so a field of one is a pointer
+    -- or an interface
+    selfContaining = S.fromList [n | CyclicSCC ns <- stronglyConnComp [(n, n, refs n) | n <- M.keys (progData prog)], n <- ns]
+    refs n = nub [c | (lz, t) <- fieldsOf n, not lz, c <- conNamesIn t]
+    conNamesIn = \case
+      TCon c ts | c /= "[]", M.member c (progData prog) || tupleArity c /= Nothing -> c : concatMap conNamesIn ts
+      TCon _ ts -> concatMap conNamesIn ts
+      _ -> []
     -- in words, guessing two for a type variable; a type that contains
     -- itself is too big
     sizeOf seen n
@@ -400,6 +409,7 @@ dataReprs prog = M.union byValueReprs pointers
         | c `elem` ["Int", "Double", "Char", "Bool", "Integer", "()", "Lazy", "IO"] -> 1
         | tupleArity c /= Nothing -> sum (map (wordsOf seen) ts)
         | M.member c pointers, not (S.member c smallSums) -> 1
+        | S.member c selfContaining -> if M.member c pointers then 1 else 2
         | Just di <- M.lookup c (progData prog), length (diCons di) <= 3, not (diNewtype di), null (hkPositions prog c), c `notElem` ["[]"] ->
             min 100 (sizeOf seen c)
         | otherwise -> 2
@@ -698,6 +708,26 @@ genExpr ctx e = case e of
           foldM (\acc a -> (\a' -> acc ++ "(" ++ a' ++ ")") <$> genExpr ctx a) (foreignCall ctx fo targs True as) later
     CVar x ref t | Just ar <- knownArity x, ar > 0 ->
       genApp ctx f args (Just ar) (\as -> call ctx x ref t as) t
+    -- a cell kept behind a pointer, given suspensions for its lazy fields
+    -- (a list's cell and its tail), is one allocation with its thunks
+    -- instead of one each
+    CCon k targs t
+      | length args == conArity k, any isDelay args
+      , Just ci <- M.lookup k (progCons (cxProg ctx)), Just Pointer <- M.lookup (ciType ci) (cxUnboxed ctx) -> do
+          parts <- forM (zip [0 :: Int ..] args) $ \case
+            (i, CDelay ty inner) -> do
+              th <- thunkValue ty inner
+              pure (Right (i, ty, th))
+            (i, a) -> Left . (,) i <$> genExpr ctx a
+          let st = conRef ctx k targs
+              (_, r) = splitFun (length args) (zonk (progSubst (cxProg ctx)) t)
+              thunks = [(i, ty, th) | Right (i, ty, th) <- parts]
+          pure $ "func() " ++ goTy ctx r ++ " {\n"
+            ++ "hg_c := &struct{ c " ++ st ++ concat ["; t" ++ show i ++ " rt_thunk[" ++ goTy ctx ty ++ "]" | (i, ty, _) <- thunks] ++ " }{"
+            ++ commas (("c: " ++ st ++ "{" ++ commas ["F" ++ show i ++ ": " ++ v | Left (i, v) <- parts] ++ "}") : ["t" ++ show i ++ ": " ++ th | (i, _, th) <- thunks])
+            ++ "}\n"
+            ++ concat ["hg_c.c.F" ++ show i ++ " = &hg_c.t" ++ show i ++ "\n" | (i, _, _) <- thunks]
+            ++ "return &hg_c.c\n}()"
     CCon k targs t -> genApp ctx f args (Just (conArity k)) (\as -> pure (conValue ctx k targs as)) t
     _ -> do
       h <- genExpr ctx f
@@ -733,6 +763,16 @@ genExpr ctx e = case e of
       Just (VKPrim a) -> Just a
       Nothing -> Nothing
     conArity k = length (ciFields (progCons (cxProg ctx) M.! k))
+    isDelay = \case
+      CDelay {} -> True
+      _ -> False
+    -- a suspension as a thunk's value, to be kept inside another struct,
+    -- computed now when that does the same (see CDelay)
+    thunkValue ty inner
+      | isValue inner = (\v -> "rt_thunk[" ++ goTy ctx ty ++ "]{v: " ++ v ++ ", state: 2}") <$> genExpr ctx inner
+      | otherwise = do
+          ls <- genStmts (noSelf ctx) inner
+          pure ("rt_thunk[" ++ goTy ctx ty ++ "]{f: func() " ++ goTy ctx ty ++ " {\n" ++ unlines ls ++ "}}")
     -- computing it now does the same as later: it is total, cheap, and does
     -- not read a variable that is still being defined
     isValue = \case

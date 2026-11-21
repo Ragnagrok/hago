@@ -1,3 +1,4 @@
 dist-newstyle/
 *.go
 !runtime/*.go
+!bench/*.go

@@ -1,6 +1,9 @@
 -- A JSON parser and pretty printer, written on parser combinators
--- (Text.Parser) and Wadler's pretty printer (Text.Pretty).
+-- (Text.Parser) and Wadler's pretty printer (Text.Pretty). Given a file,
+-- it pretty prints it, as jq . does: the README's benchmark, on the input
+-- bench/json-input.go writes.
 import Data.Json
+import System.Environment (getArgs)
 
 config :: String
 config = unlines
@@ -23,7 +26,16 @@ broken =
   , "" ]
 
 main :: IO ()
-main = case decode config of
+main = do
+  args <- getArgs
+  case args of
+    [file] -> do
+      s <- readFile file
+      putStrLn (either id (pretty 80) (s >>= decode))
+    _ -> examples
+
+examples :: IO ()
+examples = case decode config of
   Left err -> putStrLn err
   Right j -> do
     putStrLn (pretty 80 j)

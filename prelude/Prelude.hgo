@@ -670,15 +670,14 @@ class Foldable t where
   foldMap :: Monoid m => (a -> m) -> t a -> m
   foldl :: (b -> a -> b) -> b -> t a -> b
   toList :: t a -> [a]
+  null :: t a -> Bool
   foldMap g xs = foldr (\x acc -> g x <> acc) mempty xs
   toList xs = foldr (\x acc -> x : acc) [] xs
   foldl g z xs = listFoldl g z (toList xs)
+  null xs = foldr (\_ _ -> False) True xs
 
 class (Functor t, Foldable t) => Traversable t where
   traverse :: Applicative f => (a -> f b) -> t a -> f (t b)
-
-null :: Foldable t => t a -> Bool
-null xs = foldr (\_ _ -> False) True xs
 
 length :: Foldable t => t a -> Int
 length xs = foldl (\n _ -> n + 1) 0 xs
@@ -759,6 +758,9 @@ instance Foldable [] where
   foldr g z xs = listFoldr g z xs
   foldl g z xs = listFoldl g z xs
   toList xs = xs
+  -- without the suspension of the rest that foldr would make
+  null [] = True
+  null _ = False
 
 instance Foldable Maybe where
   foldr _ z Nothing = z
