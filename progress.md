@@ -209,6 +209,13 @@ Next, more of Go's library (decided 2026-11-18), the easy ones first:
       1.25 and on the newest. The README asked for Go 1.21; iterators and generic aliases need
       1.24, and 1.25 is what is tested.
 
+Next, tools around the language, in this order:
+
+- [x] **`hago check FILE`:** type checks a program, a module of one, a module of the library or
+      the Prelude, with what it imports, and generates no Go: about 0.05 s with the cache full,
+      for editors to run on save. The first error only, as the compiler stops there.
+      `check.sh` runs it over every example and module, and over `rejected/`.
+
 Known rough edges, found on the way and not fixed yet:
 
 - [ ] **Errors in type signatures have no location** (a context with the wrong number of types, an
@@ -268,5 +275,6 @@ L); `examples/syntax-*.hgo` hold the tricky cases. Where it differs:
 with an `.out` next to it; the rest are modules) comparing its output with that `.out`, replays
 the REPL sessions in `repl/`, and checks that every program in `rejected/` fails with the error on its
 `-- expects:` line. It compiles with an empty cache, then compiles every example again with the
-cache full and checks the Go is the same.
+cache full and checks the Go is the same. `hago check` must pass every example and module of the
+library, and fail every program in `rejected/` with its error.
 CI runs the same script on every push.

@@ -576,9 +576,19 @@ Hace falta GHC (probado con 9.12) con cabal, y Go 1.25 o posterior (el CI prueba
 cabal build
 cabal run -v0 hago -- run examples/lazy.hgo                 # compilar y correr
 cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # sólo compilar
+cabal run -v0 hago -- check examples/lazy.hgo              # sólo chequear los tipos
 cabal run -v0 hago -- repl                                  # evaluar expresiones a medida que se escriben
 ./check.sh                                                  # todos los ejemplos y los rechazados
 ```
+
+`hago check ARCHIVO` chequea los tipos de un archivo y de los módulos que importa, y ahí se
+detiene: no genera ni compila Go. Imprime el primer error como lo hace el compilador y sale con
+1, o sale con 0 sin imprimir nada. Con el caché lleno tarda cerca de 0,05 s, así que un editor
+lo puede correr cada vez que se guarda. El archivo puede ser un programa, uno de sus módulos
+(`hago check examples/Data/Json.hgo` busca los imports de `Data.Json` desde `examples/`, porque
+el módulo vive en `Data/Json.hgo`), un módulo de la biblioteca estándar (sus imports se leen de
+`lib/`, al lado, así que una biblioteca que se está editando se chequea como está en el disco) o
+el Prelude.
 
 ### El REPL
 

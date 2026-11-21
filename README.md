@@ -555,9 +555,18 @@ You need GHC (9.12 is tested) with cabal, and Go 1.25 or later (CI tests 1.25 an
 cabal build
 cabal run -v0 hago -- run examples/lazy.hgo                 # compile and run
 cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # just compile
+cabal run -v0 hago -- check examples/lazy.hgo              # just type check
 cabal run -v0 hago -- repl                                  # evaluate expressions as you type them
 ./check.sh                                                  # every example and rejected program
 ```
+
+`hago check FILE` type checks a file and the modules it imports, and stops there: no Go is
+generated or built. It prints the first error as the compiler does and exits with 1, or exits
+with 0 and prints nothing. With the cache full it takes about 0.05 s, so an editor can run it on
+every save. The file can be a program, one of its modules (`hago check examples/Data/Json.hgo`
+looks for `Data.Json`'s imports from `examples/`, since the module lives in `Data/Json.hgo`), a
+module of the standard library (its imports are read from `lib/` next to it, so a library being
+edited is checked as it is on disk) or the Prelude.
 
 ### The REPL
 

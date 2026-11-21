@@ -1,7 +1,7 @@
 -- | The hago command line.
 module Main (main) where
 
-import Hago.Driver (compileFile)
+import Hago.Driver (checkFile, compileFile)
 import Hago.Repl (repl)
 import Control.Exception (finally)
 import System.Directory (createDirectoryIfMissing, findExecutable, getTemporaryDirectory, removeDirectoryRecursive)
@@ -15,6 +15,7 @@ usage :: String
 usage = unlines
   [ "usage: hago build FILE.hgo [-o OUT.go]   compile to Go"
   , "       hago run FILE.hgo [ARGS...]       compile and run, with the arguments given"
+  , "       hago check FILE.hgo               type check a program or a module, without making Go"
   , "       hago repl [FILE.hgo]              evaluate expressions as they are typed" ]
 
 main :: IO ()
@@ -35,6 +36,7 @@ main = getArgs >>= \args -> case args of
           failure -> pure failure)
       `finally` removeDirectoryRecursive dir
     exitWith code
+  ["check", file] -> checkFile file >>= either (\err -> hPutStrLn stderr err >> exitFailure) pure
   ["repl"] -> repl Nothing
   ["repl", file] -> repl (Just file)
   _ -> hPutStr stderr usage >> exitFailure

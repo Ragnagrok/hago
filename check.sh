@@ -3,9 +3,10 @@
 # output with the .out file next to it (the concurrent ones also under Go's
 # race detector), checks that every program in failing/ fails at run time,
 # replays every session in repl/, and checks that every file in rejected/ fails
-# with the error announced on its "-- expects:" line. Modules are compiled with an
-# empty cache, and every example again with the cache full, which must give the
-# same Go.
+# with the error announced on its "-- expects:" line, with hago build and with
+# hago check, which must pass every example and module of the library. Modules
+# are compiled with an empty cache, and every example again with the cache
+# full, which must give the same Go.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -70,6 +71,22 @@ for expected_out in examples/*.out; do
   fi
 done
 echo "ok   every example gives the same Go with the cache full"
+
+# hago check: every example, module of the library and the Prelude passes,
+# and every rejected program fails with its error, as hago build does
+checked=1
+for f in $(find examples lib -name '*.hgo' | sort) prelude/Prelude.hgo; do
+  if ! output=$("$hago" check "$f" 2>&1); then
+    echo "FAIL hago check $f:"; echo "$output"; failures=1; checked=0
+  fi
+done
+for f in rejected/*.hgo; do
+  expected=$(sed -n 's/^-- expects: //p' "$f")
+  if output=$("$hago" check "$f" 2>&1) || ! grep -qF "$expected" <<<"$output"; then
+    echo "FAIL hago check $f gave:"; echo "$output"; failures=1; checked=0
+  fi
+done
+[ $checked == 1 ] && echo "ok   hago check passes every example and module, and fails every rejected program"
 
 # a session at the prompt: the lines after "hago> " and "hago| " are typed,
 # and the transcript must come out the same
