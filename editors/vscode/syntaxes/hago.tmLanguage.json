@@ -1,0 +1,606 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Hago",
+  "scopeName": "source.hago",
+  "fileTypes": [
+    "hgo"
+  ],
+  "comment": "Hago: Haskell 98 syntax, strict by default, compiled to Go. Based on Haskell's grammars, with Hago's own forms: foreign import go (type), Lazy, ~ on fields, and field access with a dot (p.name).",
+  "patterns": [
+    {
+      "include": "#top"
+    }
+  ],
+  "repository": {
+    "top": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#foreign_type"
+        },
+        {
+          "include": "#foreign"
+        },
+        {
+          "include": "#module"
+        },
+        {
+          "include": "#import"
+        },
+        {
+          "include": "#declaration"
+        },
+        {
+          "include": "#signature"
+        },
+        {
+          "include": "#expression"
+        }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.hago",
+          "begin": "\\{-",
+          "end": "-\\}",
+          "captures": {
+            "0": {
+              "name": "punctuation.definition.comment.hago"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#block_comment_nested"
+            }
+          ]
+        },
+        {
+          "name": "comment.line.double-dash.hago",
+          "match": "(?<![!#$%&*+./<=>?@\\\\^|~:\\-])(--+)(?![!#$%&*+./<=>?@\\\\^|~:\\-]).*$",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.comment.hago"
+            }
+          }
+        }
+      ]
+    },
+    "block_comment_nested": {
+      "patterns": [
+        {
+          "begin": "\\{-",
+          "end": "-\\}",
+          "patterns": [
+            {
+              "include": "#block_comment_nested"
+            }
+          ]
+        }
+      ]
+    },
+    "foreign_type": {
+      "match": "^\\s*(foreign)\\s+(import)\\s+(go)\\s+(type)\\s+(\\\"(?:[^\\\"\\\\]|\\\\.)*\\\")\\s+([A-Z][\\w']*)((?:\\s+[a-z_][\\w']*)*)",
+      "captures": {
+        "1": {
+          "name": "keyword.other.foreign.hago"
+        },
+        "2": {
+          "name": "keyword.other.import.hago"
+        },
+        "3": {
+          "name": "keyword.other.go.hago"
+        },
+        "4": {
+          "name": "keyword.other.type.hago"
+        },
+        "5": {
+          "name": "string.quoted.double.go-symbol.hago"
+        },
+        "6": {
+          "name": "entity.name.type.hago"
+        },
+        "7": {
+          "name": "variable.other.generic-type.hago"
+        }
+      }
+    },
+    "foreign": {
+      "begin": "^\\s*(foreign)\\s+(import)\\s+(go)\\s+(\\\"(?:[^\\\"\\\\]|\\\\.)*\\\")\\s+([a-z_][\\w']*|\\([!#$%&*+./<=>?@\\\\^|~:\\-]+\\))\\s*(::)?",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.foreign.hago"
+        },
+        "2": {
+          "name": "keyword.other.import.hago"
+        },
+        "3": {
+          "name": "keyword.other.go.hago"
+        },
+        "4": {
+          "name": "string.quoted.double.go-symbol.hago"
+        },
+        "5": {
+          "name": "entity.name.function.hago"
+        },
+        "6": {
+          "name": "keyword.other.double-colon.hago"
+        }
+      },
+      "end": "^(?=\\S)",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#type"
+        }
+      ]
+    },
+    "module": {
+      "begin": "^(module)\\s+((?:[A-Z][\\w']*\\.)*[A-Z][\\w']*)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.module.hago"
+        },
+        "2": {
+          "name": "entity.name.namespace.hago"
+        }
+      },
+      "end": "\\b(where)\\b",
+      "endCaptures": {
+        "1": {
+          "name": "keyword.other.where.hago"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#export_list"
+        }
+      ]
+    },
+    "export_list": {
+      "patterns": [
+        {
+          "match": "\\b(module)\\s+((?:[A-Z][\\w']*\\.)*[A-Z][\\w']*)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.module.hago"
+            },
+            "2": {
+              "name": "entity.name.namespace.hago"
+            }
+          }
+        },
+        {
+          "match": "\\b[A-Z][\\w']*\\b",
+          "name": "entity.name.type.hago"
+        },
+        {
+          "match": "\\b[a-z_][\\w']*\\b",
+          "name": "entity.name.function.hago"
+        },
+        {
+          "match": "\\([!#$%&*+./<=>?@\\\\^|~:\\-]+\\)",
+          "name": "entity.name.function.operator.hago"
+        },
+        {
+          "match": "\\(\\.\\.\\)",
+          "name": "keyword.operator.wildcard.hago"
+        }
+      ]
+    },
+    "import": {
+      "begin": "^(import)\\s+(?:(qualified)\\s+)?((?:[A-Z][\\w']*\\.)*[A-Z][\\w']*)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.import.hago"
+        },
+        "2": {
+          "name": "keyword.other.import.hago"
+        },
+        "3": {
+          "name": "entity.name.namespace.hago"
+        }
+      },
+      "end": "^(?=\\S)",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "match": "\\b(as)\\s+((?:[A-Z][\\w']*\\.)*[A-Z][\\w']*)",
+          "captures": {
+            "1": {
+              "name": "keyword.other.import.hago"
+            },
+            "2": {
+              "name": "entity.name.namespace.hago"
+            }
+          }
+        },
+        {
+          "match": "\\b(hiding)\\b",
+          "name": "keyword.other.import.hago"
+        },
+        {
+          "include": "#export_list"
+        }
+      ]
+    },
+    "declaration": {
+      "patterns": [
+        {
+          "begin": "^(data|newtype)\\s+([A-Z][\\w']*|\\[[^\\]]*\\])",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.other.declaration.hago"
+            },
+            "2": {
+              "name": "entity.name.type.hago"
+            }
+          },
+          "end": "^(?=\\S)",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#deriving"
+            },
+            {
+              "match": "(?:((?<![!#$%&*+./<=>?@\\\\^|~:\\-])=(?![!#$%&*+./<=>?@\\\\^|~:\\-]))|((?<![!#$%&*+./<=>?@\\\\^|~:\\-])\\|(?![!#$%&*+./<=>?@\\\\^|~:\\-])))\\s*([A-Z][\\w']*|\\(:[!#$%&*+./<=>?@\\\\^|~:\\-]*\\))",
+              "captures": {
+                "1": {
+                  "name": "keyword.operator.reserved.hago"
+                },
+                "2": {
+                  "name": "keyword.operator.reserved.hago"
+                },
+                "3": {
+                  "name": "constant.other.constructor.hago"
+                }
+              }
+            },
+            {
+              "match": "([{,])\\s*([a-z_][\\w']*(?:\\s*,\\s*[a-z_][\\w']*)*)\\s*(::)(?![!#$%&*+./<=>?@\\\\^|~:\\-])",
+              "captures": {
+                "1": {
+                  "name": "punctuation.separator.hago"
+                },
+                "2": {
+                  "patterns": [
+                    {
+                      "match": "[a-z_][\\w']*",
+                      "name": "variable.other.member.hago"
+                    },
+                    {
+                      "match": ",",
+                      "name": "punctuation.separator.hago"
+                    }
+                  ]
+                },
+                "3": {
+                  "name": "keyword.other.double-colon.hago"
+                }
+              }
+            },
+            {
+              "match": "(?<![!#$%&*+./<=>?@\\\\^|~:\\-])(?:=|\\|)(?![!#$%&*+./<=>?@\\\\^|~:\\-])",
+              "name": "keyword.operator.reserved.hago"
+            },
+            {
+              "match": "(?<![!#$%&*+./<=>?@\\\\^|~:\\-]):[!#$%&*+./<=>?@\\\\^|~:\\-]*",
+              "name": "constant.other.operator.hago"
+            },
+            {
+              "match": "[{},]",
+              "name": "punctuation.separator.hago"
+            },
+            {
+              "include": "#type"
+            }
+          ]
+        },
+        {
+          "begin": "^(type)\\s+([A-Z][\\w']*)",
+          "end": "^(?=\\S)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.other.declaration.hago"
+            },
+            "2": {
+              "name": "entity.name.type.hago"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "match": "=",
+              "name": "keyword.operator.reserved.hago"
+            },
+            {
+              "include": "#type"
+            }
+          ]
+        },
+        {
+          "begin": "^(class|instance)\\b",
+          "end": "\\b(where)\\b|^(?=\\S)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.other.declaration.hago"
+            }
+          },
+          "endCaptures": {
+            "1": {
+              "name": "keyword.other.where.hago"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "match": "(?<![!#$%&*+./<=>?@\\\\^|~:\\-])\\|(?![!#$%&*+./<=>?@\\\\^|~:\\-])",
+              "name": "keyword.operator.reserved.hago"
+            },
+            {
+              "match": "[,()]",
+              "name": "punctuation.separator.hago"
+            },
+            {
+              "include": "#type"
+            }
+          ]
+        },
+        {
+          "include": "#deriving"
+        },
+        {
+          "match": "^\\s*(infixl|infixr|infix)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.other.fixity.hago"
+            }
+          }
+        }
+      ]
+    },
+    "deriving": {
+      "begin": "\\b(deriving)\\b",
+      "end": "(?<=\\))|(?<=[\\w'])(?=\\s*$)|^(?=\\S)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.other.deriving.hago"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\b(?:[A-Z][\\w']*\\.)*[A-Z][\\w']*\\b",
+          "name": "entity.other.inherited-class.hago"
+        },
+        {
+          "match": "[(),]",
+          "name": "punctuation.separator.hago"
+        }
+      ]
+    },
+    "signature": {
+      "begin": "^(\\s*)((?:[a-z_][\\w']*|\\([!#$%&*+./<=>?@\\\\^|~:\\-]+\\))(?:\\s*,\\s*(?:[a-z_][\\w']*|\\([!#$%&*+./<=>?@\\\\^|~:\\-]+\\)))*)\\s*(::)(?![!#$%&*+./<=>?@\\\\^|~:\\-])",
+      "beginCaptures": {
+        "2": {
+          "patterns": [
+            {
+              "match": "[a-z_][\\w']*",
+              "name": "entity.name.function.hago"
+            },
+            {
+              "match": "\\([!#$%&*+./<=>?@\\\\^|~:\\-]+\\)",
+              "name": "entity.name.function.operator.hago"
+            }
+          ]
+        },
+        "3": {
+          "name": "keyword.other.double-colon.hago"
+        }
+      },
+      "end": "^(?!\\1\\s)(?=\\s*\\S)|(?=[=;}])",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#type"
+        }
+      ]
+    },
+    "type": {
+      "patterns": [
+        {
+          "include": "#lazy"
+        },
+        {
+          "match": "=>|->",
+          "name": "keyword.operator.arrow.hago"
+        },
+        {
+          "match": "::",
+          "name": "keyword.other.double-colon.hago"
+        },
+        {
+          "match": "\\b(?:[A-Z][\\w']*\\.)+[A-Z][\\w']*\\b",
+          "name": "entity.name.type.hago"
+        },
+        {
+          "match": "\\b[A-Z][\\w']*\\b",
+          "name": "entity.name.type.hago"
+        },
+        {
+          "match": "\\b[a-z_][\\w']*\\b",
+          "name": "variable.other.generic-type.hago"
+        },
+        {
+          "match": "\\(\\)|\\[\\]",
+          "name": "entity.name.type.hago"
+        }
+      ]
+    },
+    "lazy": {
+      "patterns": [
+        {
+          "match": "\\bLazy\\b",
+          "name": "storage.modifier.lazy.hago"
+        },
+        {
+          "match": "(?<![!#$%&*+./<=>?@\\\\^|~:\\-])~(?![!#$%&*+./<=>?@\\\\^|~:\\-])",
+          "name": "storage.modifier.lazy.hago"
+        }
+      ]
+    },
+    "expression": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "include": "#char"
+        },
+        {
+          "match": "\\b(case|of|if|then|else|let|in|where|do)\\b",
+          "name": "keyword.control.hago"
+        },
+        {
+          "include": "#lazy"
+        },
+        {
+          "begin": "(?<![!#$%&*+./<=>?@\\\\^|~:\\-])(::)(?![!#$%&*+./<=>?@\\\\^|~:\\-])",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.other.double-colon.hago"
+            }
+          },
+          "end": "(?=[)\\],;}=]|$)",
+          "patterns": [
+            {
+              "include": "#type"
+            }
+          ]
+        },
+        {
+          "match": "\\b((?:[A-Z][\\w']*\\.)+)([a-z_][\\w']*)",
+          "captures": {
+            "1": {
+              "name": "entity.name.namespace.hago"
+            },
+            "2": {
+              "name": "variable.other.hago"
+            }
+          }
+        },
+        {
+          "match": "\\b((?:[A-Z][\\w']*\\.)+)([!#$%&*+./<=>?@\\\\^|~:\\-]+)",
+          "captures": {
+            "1": {
+              "name": "entity.name.namespace.hago"
+            },
+            "2": {
+              "name": "keyword.operator.hago"
+            }
+          }
+        },
+        {
+          "match": "\\b((?:[A-Z][\\w']*\\.)+)([A-Z][\\w']*)",
+          "captures": {
+            "1": {
+              "name": "entity.name.namespace.hago"
+            },
+            "2": {
+              "name": "constant.other.hago"
+            }
+          }
+        },
+        {
+          "match": "(?<=[\\w')\\]}])(\\.)([a-z_][\\w']*)",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.dot.hago"
+            },
+            "2": {
+              "name": "variable.other.member.hago"
+            }
+          }
+        },
+        {
+          "match": "(?<=\\()(\\.)([a-z_][\\w']*)(?=\\))",
+          "captures": {
+            "1": {
+              "name": "punctuation.accessor.dot.hago"
+            },
+            "2": {
+              "name": "variable.other.member.hago"
+            }
+          }
+        },
+        {
+          "match": "\\b(True|False)\\b",
+          "name": "constant.language.boolean.hago"
+        },
+        {
+          "match": "\\b[A-Z][\\w']*\\b",
+          "name": "constant.other.hago"
+        },
+        {
+          "match": "\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b",
+          "name": "constant.numeric.hago"
+        },
+        {
+          "match": "`(?:[A-Z][\\w']*\\.)*[a-z_][\\w']*`",
+          "name": "keyword.operator.function.infix.hago"
+        },
+        {
+          "match": "(?<![!#$%&*+./<=>?@\\\\^|~:\\-])(?:=|->|<-|=>|\\||\\\\|@|\\.\\.)(?![!#$%&*+./<=>?@\\\\^|~:\\-])",
+          "name": "keyword.operator.reserved.hago"
+        },
+        {
+          "match": ":[!#$%&*+./<=>?@\\\\^|~:\\-]*",
+          "name": "constant.other.operator.hago"
+        },
+        {
+          "match": "[!#$%&*+./<=>?@\\\\^|~:\\-]+",
+          "name": "keyword.operator.hago"
+        },
+        {
+          "match": "[,;]",
+          "name": "punctuation.separator.hago"
+        }
+      ]
+    },
+    "string": {
+      "name": "string.quoted.double.hago",
+      "begin": "\"",
+      "end": "\"|$",
+      "patterns": [
+        {
+          "match": "\\\\(?:[abfnrtv\\\\\\\"']|x[0-9A-Fa-f]+|[0-9]+)",
+          "name": "constant.character.escape.hago"
+        }
+      ]
+    },
+    "char": {
+      "match": "(?<![\\w'])'(?:[^'\\\\]|\\\\(?:[abfnrtv\\\\\\\"']|x[0-9A-Fa-f]+|[0-9]+))'",
+      "name": "string.quoted.single.hago",
+      "captures": {}
+    }
+  }
+}

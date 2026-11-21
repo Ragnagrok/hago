@@ -229,7 +229,9 @@ module Geometry (module Geometry.Shapes, scale) where   -- reexporta Geometry.Sh
 ### La biblioteca estándar
 
 Algunos módulos vienen con el compilador, y un programa los importa como a los suyos (un módulo
-del programa con el mismo nombre tiene prioridad):
+del programa con el mismo nombre tiene prioridad). [La referencia de la
+biblioteca](docs/library/README.md) (en inglés) tiene cada nombre que exporta cada uno, con su
+tipo y lo que hace:
 
 | Módulo | Qué tiene |
 | --- | --- |
@@ -576,9 +578,52 @@ Hace falta GHC (probado con 9.12) con cabal, y Go 1.25 o posterior (el CI prueba
 cabal build
 cabal run -v0 hago -- run examples/lazy.hgo                 # compilar y correr
 cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # sólo compilar
+cabal run -v0 hago -- check examples/lazy.hgo              # sólo chequear los tipos
+cabal run -v0 hago -- doc                                   # la referencia de la biblioteca, en docs/library
+cabal run -v0 hago -- fmt --check examples/*.hgo            # qué archivos cambiaría hago fmt
 cabal run -v0 hago -- repl                                  # evaluar expresiones a medida que se escriben
 ./check.sh                                                  # todos los ejemplos y los rechazados
 ```
+
+`hago check ARCHIVO` chequea los tipos de un archivo y de los módulos que importa, y ahí se
+detiene: no genera ni compila Go. Imprime el primer error como lo hace el compilador y sale con
+1, o sale con 0 sin imprimir nada. Con el caché lleno tarda cerca de 0,05 s, así que un editor
+lo puede correr cada vez que se guarda. El archivo puede ser un programa, uno de sus módulos
+(`hago check examples/Data/Json.hgo` busca los imports de `Data.Json` desde `examples/`, porque
+el módulo vive en `Data/Json.hgo`), un módulo de la biblioteca estándar (sus imports se leen de
+`lib/`, al lado, así que una biblioteca que se está editando se chequea como está en el disco) o
+el Prelude.
+
+`hago doc` escribe la referencia del Prelude y de la biblioteca estándar en `docs/library`
+(`-o DIR` la pone en otro lado): un archivo Markdown por módulo y un índice. Cada página lista lo
+que exporta el módulo, en el orden de su código y bajo las secciones que el código marca con
+líneas `-- Título -----`: funciones con sus tipos, tipos de datos con los constructores
+exportados y todas sus instancias, clases con sus métodos. Los nombres y los tipos son los del
+type checker, así que son exactos (un sinónimo aparece expandido, como `StateT s Identity`). El
+texto es el bloque de comentarios que está justo arriba de cada declaración, y el comentario del
+principio del archivo presenta el módulo. `check.sh` falla si las páginas que están en el
+repositorio no son las que hace `hago doc`.
+
+`hago fmt ARCHIVO...` cambia los espacios de los archivos en el lugar, y `hago fmt --check
+ARCHIVO...` nombra los archivos que cambiaría y sale con 1, para el CI. Hace sólo lo que no puede
+mover un token ni un comentario: un tab en el código se vuelve los espacios hasta la columna que
+le da la regla de layout, se van los espacios al final de una línea, varias líneas en blanco
+seguidas quedan en una, y el archivo termina con un solo salto de línea. Los literales de strings
+y de caracteres y los comentarios quedan como están (salvo los espacios al final de una línea).
+No vuelve a diagramar el código, para lo que hace falta un árbol de sintaxis que guarde los
+comentarios y las formas que el parser traduce (ver `progress.md`). Antes de escribir, parsea el
+resultado y chequea que el árbol de sintaxis y los comentarios sean los mismos y que formatearlo
+de nuevo no cambie nada, y si no, se niega. `check.sh` lo corre sobre todos los `.hgo` del
+repositorio.
+
+### Editores
+
+`editors/vscode` es una extensión de VS Code, JavaScript sin dependencias que se instala desde la
+carpeta (ver [su README](editors/vscode/README.md), en inglés): resaltado, comentarios,
+paréntesis e indentación para los archivos `.hgo`, y el error de `hago check` en el editor cada
+vez que se guarda un archivo. Su gramática TextMate, `editors/vscode/syntaxes/hago.tmLanguage.json`,
+conoce las formas propias de Hago (`foreign import go` y `foreign import go type`, `Lazy`, el `~`
+de un campo perezoso, `p.name`), y la pueden usar otras herramientas que leen gramáticas TextMate.
 
 ### El REPL
 
@@ -703,12 +748,16 @@ Haskell 98.
 | `src/Hago/CodeGen.hs` | generación de Go |
 | `src/Hago/Cache.hs` | compilación separada: lo que da cada módulo, guardado en disco |
 | `src/Hago/Driver.hs` | encontrar los módulos, compilar cada uno, y después el programa entero |
+| `src/Hago/Doc.hs` | `hago doc`: la referencia de la biblioteca, desde el type checker y los comentarios |
+| `src/Hago/Format.hs` | `hago fmt`: sólo espacios, chequeado para que no cambie el árbol de sintaxis ni los comentarios |
 | `runtime/runtime.go` | listas e IO con trampolín; se copia en cada programa |
 | `runtime/thunk_sequential.go` | thunks para un programa en una sola goroutine |
 | `runtime/concurrent.go` | thunks que cualquier goroutine puede forzar, hilos, MVars, canales, `select` y `parMap`, para un programa que los usa |
 | `runtime/lib_*.go` | lo que necesitan los hashes, las codificaciones, los procesos y el cliente HTTP; se copia sólo en un programa que lo usa, para que no todo programa importe `net/http` o `crypto` |
 | `prelude/Prelude.hgo` | el prelude, escrito en Hago |
 | `lib/` | la biblioteca estándar (`Control.Monad.State` y compañía), escrita en Hago |
+| `docs/library/` | la referencia de la biblioteca, hecha por `hago doc` |
+| `editors/vscode/` | la extensión de VS Code: la gramática TextMate, y `hago check` al guardar |
 
 ## Licencia
 
