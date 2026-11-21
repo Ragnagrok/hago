@@ -1,0 +1,29 @@
+-- Mutable references in ST: see Control.Monad.ST. An STRef s a can only
+-- be used by the computation that made it, which runs on one thread, so it
+-- is a plain cell.
+module Data.STRef (STRef, newSTRef, readSTRef, writeSTRef, modifySTRef, modifySTRef') where
+
+import Control.Monad.ST.Unsafe
+
+foreign import go type "*rt_STRef" STRef s a
+
+foreign import go "rt_newSTRef" goNew :: a -> IO (STRef s a)
+foreign import go "rt_readSTRef" goRead :: STRef s a -> IO a
+foreign import go "rt_writeSTRef" goWrite :: STRef s a -> a -> IO ()
+foreign import go "rt_modifySTRef" goModify :: STRef s a -> (a -> a) -> IO ()
+
+newSTRef :: a -> ST s (STRef s a)
+newSTRef x = unsafeIOToST (goNew x)
+
+readSTRef :: STRef s a -> ST s a
+readSTRef r = unsafeIOToST (goRead r)
+
+writeSTRef :: STRef s a -> a -> ST s ()
+writeSTRef r x = unsafeIOToST (goWrite r x)
+
+-- Hago is strict, so modifySTRef and modifySTRef' are the same function.
+modifySTRef' :: STRef s a -> (a -> a) -> ST s ()
+modifySTRef' r f = unsafeIOToST (goModify r f)
+
+modifySTRef :: STRef s a -> (a -> a) -> ST s ()
+modifySTRef r f = modifySTRef' r f

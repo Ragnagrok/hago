@@ -1,0 +1,12 @@
+-- expects: only Data.HashTable gives instances of Key
+import qualified Data.HashTable as HashTable
+import Data.HashTable (Key)
+
+-- a list is a pointer, which Go would compare by identity
+instance Key [a]
+
+main :: IO ()
+main = do
+  t <- HashTable.new
+  HashTable.insert t [1 :: Int] "one"
+  HashTable.lookup t [1] >>= print

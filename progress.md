@@ -199,9 +199,44 @@ Next, more of Go's library (decided 2026-11-18), the easy ones first:
       **`System.Process`** (`os/exec`), **`Network.HTTP`** (a client). The runtime has optional
       parts (`runtime/lib_*.go`), copied only into programs that call one of their functions,
       so a program that does not use them does not import `net/http` or `crypto`.
-- [ ] **Mutable structures in a monad.** In `IO` first (`IORef`, a mutable vector, a hash table
-      on Go's `map` with keys limited to types Go compares by value); then `ST` with a pure
-      `runST`, which needs its rank-2 type checked by a rule of its own.
+- [x] **Mutable structures in a monad.** `Data.IORef` (an atomic pointer to the value;
+      `modifyIORef'` and `atomicModifyIORef'` are CAS loops), `Data.STRef`,
+      `Data.Vector.Mutable` (`MVector s a` over a Go slice) and `Data.HashTable`
+      (`HashTable s k v` over a Go map), and `Control.Monad.ST`. Decided on the way:
+      - Vectors and tables are parameterised by a state, as in Haskell's vector
+        (`IOVector = MVector RealWorld`), and their operations run in any `PrimMonad s m`
+        (`class Monad m => PrimMonad s m | m -> s`, IO and `ST s`), so one function serves
+        both; specialisation makes it free. References are two types, because an `IORef` must
+        be atomic and an `STRef` need not. No `stToIO`: what ST makes has no lock.
+      - `ST s a` is a newtype over `IO a`, in `Control.Monad.ST.Unsafe` (with `unsafeIOToST`
+        and the class's methods); `runST` is `primRunIO`, as `runIdentity` is.
+      - `runST` has its own rule in the type checker: its argument is checked against
+        `ST s a` for a new rigid `s` (a type variable no program can write), which may appear
+        neither in `a` nor in the types of the local variables in scope, after improvement by
+        functional dependencies. Unapplied, `runST` is an error. The rigid variable becomes `()`
+        once the module is checked (`closeUp`), since nothing at run time depends on it.
+        `rejected/runst-*.hgo` hold the escapes.
+      - An index out of range ends the program (`error: index out of range: 5, in a vector of
+        length 5`, `failing/index-out-of-range.hgo`), as in Go and as a division by zero does;
+        `readMaybe` is there for indices from outside. No `new` with undefined elements.
+      - Keys are the instances of `Data.HashTable.Key`: `Int`, `Char`, `String`, `Bool`, `()`
+        and tuples of keys up to four. Only `Data.HashTable` may give instances (the type
+        checker rejects others), since a type kept as a pointer would be compared by identity.
+        The Go table keeps its map as an `any` and asserts it to `map[K]V` in functions with
+        `K comparable`: generated generic code declares its type parameters `any`, and
+        a `Key k` constraint makes every call to those functions specialised to a concrete key.
+      - A vector or table made in IO, in a program that has threads, has a mutex; one made in
+        ST, or in a program without threads (`rt_concurrent` is a constant), has none.
+        `examples/concurrent-mutable.hgo` runs under the race detector.
+      Measured (one machine, noisy): the primes up to 1M, sieve on an `STVector` 0.26 s against
+      1.65 s with the incremental `Data.Map` sieve; up to 10M, 2.3 s against 23 s (Go: 0.03 s).
+      Frequencies of 1M numbers: `HashTable` in ST 0.33 s, `Data.Map` 1.0 s. Each operation is
+      an IO action, some 60 ns; the sieve in IO takes 2 s, and 3.1 s in a program with threads.
+- [ ] **Keys that are newtypes over keys,** and maybe `Integer` (by its digits): `Key` is closed
+      for now.
+- [ ] **`PrimMonad` through the transformers** (`StateT s IO`), which now have to `lift`.
+- [ ] **Cheaper mutable loops.** Each read or write is an IO action allocated and run by the
+      trampoline; a loop over indices done by the runtime would avoid it.
 
 - [x] **Go 1.27.** A type kept by value whose struct refers to itself through its alias (a
       list of itself) made Go 1.27's type checker panic ("incomplete alias", go.dev/issue/78296):
@@ -222,6 +257,9 @@ Known rough edges, found on the way and not fixed yet:
       between guards in the core.
 - [ ] **A record update that changes a type parameter some other field fixes** is reported as the
       type mismatch it causes (`no instance for Num String`), not as the field that cannot change.
+- [ ] **A local function moved to the top is called through curried closures, and its self tail
+      call is not a loop.** The incremental sieve with a local `go` over `(Ord, Num)` (generalised,
+      so lifted) ran out of Go's stack at ten million; as a top-level function it is a loop.
 
 ## Syntax: where Hago parts from the Haskell 2010 Report
 

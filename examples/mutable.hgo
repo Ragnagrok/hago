@@ -1,0 +1,116 @@
+-- Mutable state in a monad: references, vectors and hash tables in IO, and
+-- the same in ST, where runST makes a computation that mutates its own
+-- structures a pure function.
+import Control.Monad.ST
+import Data.IORef
+import Data.STRef
+import qualified Data.Vector as Vector
+import qualified Data.Vector.Mutable as MV
+import Data.Vector.Mutable (MVector, STVector)
+import qualified Data.HashTable as HashTable
+import Data.List (sort)
+
+-- A pure function, computed by mutating a reference.
+sumST :: [Int] -> Int
+sumST xs = runST $ do
+  total <- newSTRef 0
+  mapM_ (\x -> modifySTRef' total (+ x)) xs
+  readSTRef total
+
+-- Fibonacci numbers, in a vector filled in place, then frozen.
+fibs :: Int -> Vector.Vector Integer
+fibs n = runST $ do
+  v <- MV.replicate n 0
+  when (n > 1) (MV.write v 1 1)
+  forM_ [2 .. n - 1] $ \i -> do
+    a <- MV.read v (i - 1)
+    b <- MV.read v (i - 2)
+    MV.write v i (a + b)
+  MV.freeze v
+
+-- Insertion sort, on a copy of the vector.
+sortVector :: Ord a => Vector.Vector a -> Vector.Vector a
+sortVector xs = runST $ do
+  v <- MV.thaw xs
+  forM_ [1 .. MV.length v - 1] (insertAt v)
+  MV.freeze v
+
+insertAt :: Ord a => STVector s a -> Int -> ST s ()
+insertAt v i = when (i > 0) $ do
+  a <- MV.read v (i - 1)
+  b <- MV.read v i
+  when (a > b) (MV.swap v (i - 1) i >> insertAt v (i - 1))
+
+-- The same function in IO and in ST: PrimMonad s m says that m is a monad
+-- whose structures have the state s.
+histogram :: PrimMonad s m => Int -> [Int] -> m [Int]
+histogram buckets xs = do
+  counts <- MV.replicate buckets 0
+  mapM_ (\x -> MV.modify counts (+ 1) (x `mod` buckets)) xs
+  MV.toList counts
+
+-- The distinct words, and how many times each appears.
+wordCounts :: String -> [(String, Int)]
+wordCounts text = sort (runST $ do
+  table <- HashTable.new
+  mapM_ (\w -> HashTable.insertWith (+) table w 1) (words text)
+  HashTable.toList table)
+
+-- Data types can hold structures of a state too.
+data Account s = Account (STRef s Int) (STRef s [String])
+
+deposit :: Account s -> Int -> ST s ()
+deposit (Account balance history) n = do
+  modifySTRef' balance (+ n)
+  modifySTRef' history (("deposit " ++ show n) :)
+
+statement :: [Int] -> (Int, [String])
+statement deposits = runST $ do
+  account@(Account balance history) <- Account <$> newSTRef 0 <*> newSTRef []
+  mapM_ (deposit account) deposits
+  (,) <$> readSTRef balance <*> fmap reverse (readSTRef history)
+
+main :: IO ()
+main = do
+  -- IORef
+  counter <- newIORef (0 :: Int)
+  forM_ [1 .. 10] (\i -> modifyIORef' counter (+ i))
+  readIORef counter >>= print
+  previous <- atomicModifyIORef' counter (\n -> (n * 2, n))
+  print previous
+  readIORef counter >>= print
+  writeIORef counter 7
+  readIORef counter >>= print
+  -- a vector in IO
+  v <- MV.generate 5 (\i -> i * 10)
+  MV.write v 0 (-1)
+  MV.modify v (+ 1) 4
+  MV.toList v >>= print
+  MV.readMaybe v 2 >>= print
+  MV.readMaybe v 5 >>= print
+  frozen <- MV.freeze v
+  MV.set v 0
+  print (frozen, MV.length v)
+  MV.toList v >>= print
+  -- a table in IO
+  ages <- HashTable.fromList [("ana", 31 :: Int), ("luis", 45)]
+  HashTable.insert ages "eva" 28
+  HashTable.alter (fmap (+ 1)) ages "ana"
+  HashTable.alter (const Nothing) ages "luis"
+  HashTable.lookup ages "ana" >>= print
+  HashTable.member ages "luis" >>= print
+  HashTable.size ages >>= print
+  HashTable.toList ages >>= print . sort
+  points <- HashTable.new
+  HashTable.insert points (1 :: Int, 'a') True
+  HashTable.lookup points (1, 'a') >>= print
+  HashTable.delete points (1, 'a')
+  HashTable.lookup points (1, 'a') >>= print
+  -- ST
+  print (sumST [1 .. 100])
+  print (fibs 12)
+  print (sortVector (Vector.fromList [5, 3, 9, 1, 4 :: Int]))
+  histogram 3 [1 .. 10] >>= print
+  print (runST (histogram 3 [1 .. 10]))
+  print (wordCounts "the cat saw the dog and the bird")
+  print (statement [10, 20, 5])

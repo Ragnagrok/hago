@@ -1,0 +1,99 @@
+-- Mutable hash tables, on Go's maps: insert, lookup and delete in constant
+-- time on average. HashTable s k v is used in a monad of state s:
+-- IOHashTable k v in IO, and HashTable s k v in ST s (see Control.Monad.ST),
+-- with the same functions. Import it qualified:
+-- import qualified Data.HashTable as HashTable.
+--
+-- Keys are the types Go compares by value, the instances of Key: Int,
+-- Char, String, Bool, (), and tuples of keys. Other types are kept as
+-- pointers, which Go would compare by identity (two equal lists would be
+-- different keys), or have no equality that suits a table (Double's NaN is
+-- not equal to itself). Only this module gives instances of Key; for other
+-- keys, use Data.Map.
+--
+-- toList gives the pairs in Go's order, which changes from run to run.
+--
+-- A table made in IO can be shared by threads: in a program that has them,
+-- it has a lock, and each operation takes it, so each is atomic (alter and
+-- insertWith too); a sequence of them is not. One made in ST has none.
+module Data.HashTable
+  ( HashTable, IOHashTable, Key
+  , new, fromList, insert, insertWith, alter, lookup, member, delete, size, toList
+  ) where
+
+import Prelude hiding (lookup, toList)
+import Control.Monad.ST.Unsafe
+
+foreign import go type "*rt_HashTable" HashTable s k v
+
+type IOHashTable = HashTable RealWorld
+
+-- The types Go compares by value.
+class Key k
+
+instance Key Int
+instance Key Char
+instance Key String
+instance Key Bool
+instance Key ()
+instance (Key a, Key b) => Key (a, b)
+instance (Key a, Key b, Key c) => Key (a, b, c)
+instance (Key a, Key b, Key c, Key d) => Key (a, b, c, d)
+
+foreign import go "rt_tableNew" goNew :: Bool -> IO (HashTable s k v)
+foreign import go "rt_tableInsert" goInsert :: HashTable s k v -> k -> v -> IO ()
+foreign import go "rt_tableInsertWith" goInsertWith :: HashTable s k v -> (v -> v -> v) -> k -> v -> IO ()
+foreign import go "rt_tableAlter" goAlter
+  :: HashTable s k v -> k -> (m -> m) -> m -> (v -> m) -> (m -> Bool) -> (m -> v) -> IO ()
+foreign import go "rt_tableLookup" goLookup :: HashTable s k v -> k -> IO (Either String v)
+foreign import go "rt_tableMember" goMember :: HashTable s k v -> k -> IO Bool
+foreign import go "rt_tableDelete" goDelete :: HashTable s k v -> k -> IO ()
+foreign import go "rt_tableSize" goSize :: HashTable s k v -> IO Int
+foreign import go "rt_tableToList" goToList :: HashTable s k v -> (k -> v -> p) -> IO [p]
+
+new :: (PrimMonad s m, Key k) => m (HashTable s k v)
+new = primShared >>= \shared -> unsafePrimIO (goNew shared)
+
+fromList :: (PrimMonad s m, Key k) => [(k, v)] -> m (HashTable s k v)
+fromList kvs = do
+  t <- new
+  mapM_ (\(k, v) -> insert t k v) kvs
+  pure t
+
+-- Replaces the value the key had, if it had one.
+insert :: (PrimMonad s m, Key k) => HashTable s k v -> k -> v -> m ()
+insert t k v = unsafePrimIO (goInsert t k v)
+
+-- insertWith f t k new keeps f new old if the key had a value, and new if
+-- it had none.
+insertWith :: (PrimMonad s m, Key k) => (v -> v -> v) -> HashTable s k v -> k -> v -> m ()
+insertWith f t k v = unsafePrimIO (goInsertWith t f k v)
+
+-- What the function makes of the key's value (Nothing if it has none): the
+-- new value, or Nothing to delete it.
+alter :: (PrimMonad s m, Key k) => (Maybe v -> Maybe v) -> HashTable s k v -> k -> m ()
+alter f t k = unsafePrimIO (goAlter t k f Nothing Just isJust fromJust)
+  where
+    isJust m = case m of
+      Just _ -> True
+      Nothing -> False
+    -- only called on what isJust accepts
+    fromJust m = case m of
+      Just x -> x
+      Nothing -> error "Data.HashTable.alter: fromJust on Nothing"
+
+lookup :: (PrimMonad s m, Key k) => HashTable s k v -> k -> m (Maybe v)
+lookup t k = unsafePrimIO (fmap (either (const Nothing) Just) (goLookup t k))
+
+member :: (PrimMonad s m, Key k) => HashTable s k v -> k -> m Bool
+member t k = unsafePrimIO (goMember t k)
+
+delete :: (PrimMonad s m, Key k) => HashTable s k v -> k -> m ()
+delete t k = unsafePrimIO (goDelete t k)
+
+size :: (PrimMonad s m, Key k) => HashTable s k v -> m Int
+size t = unsafePrimIO (goSize t)
+
+-- The pairs, in an order that changes from run to run.
+toList :: (PrimMonad s m, Key k) => HashTable s k v -> m [(k, v)]
+toList t = unsafePrimIO (goToList t (\k v -> (k, v)))

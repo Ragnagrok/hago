@@ -5,6 +5,9 @@ package main
 
 // --- runtime ---
 
+// This program runs on one goroutine: see rt_newLock in lib_mutable.go.
+const rt_concurrent = false
+
 // Thunks.
 // A thunk is computed the first time it is forced and remembered. This
 // program runs on one goroutine, so it needs no lock: sync.OnceValue cost seven

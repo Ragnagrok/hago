@@ -1,0 +1,8 @@
+-- expects: no instance for Key [Int]: the keys of a hash table are the types Go compares by value
+import qualified Data.HashTable as HashTable
+
+main :: IO ()
+main = do
+  t <- HashTable.new
+  HashTable.insert t [1 :: Int] "one"
+  HashTable.lookup t [1] >>= print

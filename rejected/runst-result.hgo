@@ -1,0 +1,14 @@
+-- expects: runST's result has the type STRef s Int, which mentions its state s
+import Control.Monad.ST
+import Data.STRef
+
+-- the reference would outlive the computation that made it
+counter :: Int
+counter = runST (do
+  r <- leak
+  readSTRef r)
+  where
+    leak = pure (runST (newSTRef (0 :: Int)))
+
+main :: IO ()
+main = print counter

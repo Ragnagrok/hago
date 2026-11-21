@@ -12,6 +12,7 @@ import Data.Data (Data, cast, gmapQ)
 import Data.Maybe (catMaybes, listToMaybe)
 
 import Control.Monad
+import Control.Monad.Except (catchError, throwError)
 import Control.Monad.State
 import Data.Graph (SCC (..), flattenSCC, flattenSCCs, stronglyConnComp)
 import qualified Data.IntMap as IM
@@ -305,6 +306,10 @@ litType (LChar _) = tChar
 litType (LStr _) = tString
 
 inferVarRaw :: Env -> Name -> TC (CExpr, Type)
+inferVarRaw env x
+  | x == runSTName, not (S.member x (envLocal env)) =
+      throw "runST must be applied to its argument, as in runST (do ...) or runST $ do ...: \
+            \Haskell gives it the type (forall s. ST s a) -> a, which no variable can have here"
 inferVarRaw env x = case M.lookup x (envVars env) of
   Nothing -> throw ("not in scope: " ++ x)
   Just (sc, self) -> do
@@ -368,8 +373,14 @@ inferApp env expected e = do
   case (unLoc f, args) of
     -- f $ x is f x: a Lazy parameter of f stays lazy
     (EVar "$", g : x : rest) | not (S.member "$" (envLocal env)) -> inferApp env expected (foldl EApp (EApp g x) rest)
+    (EVar n, a : rest) | n == runSTName, not (S.member n (envLocal env)) -> do
+      (c, t) <- atLoc (firstLoc f) (inferRunST env a)
+      if null rest then pure (c, t) else applyTo c t rest
     _ -> do
       (cf, tf) <- infer env f
+      applyTo cf tf args
+  where
+    applyTo cf tf args = do
       (slots, tr) <- walk tf args
       when (any isLeftSlot slots) $ do
         forM_ expected $ \ex -> do
@@ -379,7 +390,6 @@ inferApp env expected e = do
         improve env
       cargs <- mapM (either (uncurry (check env)) pure) slots
       pure (CApp cf cargs, tr)
-  where
     spine (EApp g a) = let (h, as) = spine g in (h, as ++ [a])
     spine x = (x, [])
     -- A lambda argument is checked after the other arguments, so in
@@ -397,6 +407,78 @@ inferApp env expected e = do
       ELoc _ x -> isLam x
       ELam _ _ -> True
       _ -> False
+
+-- | runST, from Control.Monad.ST, and ST, which its argument has.
+runSTName, stName :: Name
+runSTName = "Control.Monad.ST.runST"
+stName = "Control.Monad.ST.Unsafe.ST"
+
+-- | @runST m@. Haskell gives runST the type @(forall s. ST s a) -> a@, which
+-- Hago's types cannot write, so it has a rule of its own, as GHC once had:
+-- m is checked against @ST s a@ for a new rigid s, which may appear neither
+-- in a (the result would be a structure of the computation's state, used
+-- after it has ended) nor in the types of the variables m uses from
+-- outside (a structure of another computation). Each runST thus has a state
+-- of its own, nothing it makes outlives it, and it is a pure function of
+-- what it uses. The state is a type variable no program can write; once the
+-- module is checked it becomes (), since an ST action is an IO action at
+-- run time.
+inferRunST :: Env -> Expr -> TC (CExpr, Type)
+inferRunST env m = do
+  (sc, _) <- maybe (throw ("not in scope: " ++ runSTName)) pure (M.lookup runSTName (envVars env))
+  (t, targs, ds) <- instantiate sc
+  k <- next
+  let sk = "s#" ++ show k
+      shown = pretty . substTV (M.singleton sk (TVar "s"))
+  (p, r) <- splitArrow t
+  zonkT p >>= \case
+    TCon c [s, _] | c == stName -> unify s (TVar sk)
+    _ -> throw "runST must have the type ST s a -> a"
+  -- the state is s' when the argument does not fit it, since the argument
+  -- has a state of its own, often s
+  cm <- check env m p `catchError` \(TcErr l cs msg) ->
+    throwError (TcErr l cs (if sk `L.isInfixOf` msg
+      then otherStates (replaceAll sk "s'" msg) ++ (if hint `L.isInfixOf` msg then "" else "\n" ++ hint)
+      else msg))
+  improve env
+  r' <- zonkT r
+  when (sk `elem` tyVarsOf r') $
+    throw ("runST's result has the type " ++ shown r' ++ ", which mentions its state s: \
+           \what is made inside runST cannot be used outside it, so return what it holds instead \
+           \(readSTRef, freeze)")
+  outside <- forM [(n, ty) | n <- S.toList (envLocal env), Just (Forall _ _ ty, _) <- [M.lookup n (envVars env)]] $ \(n, ty) -> (,) n <$> zonkT ty
+  mono <- mapM zonkT (envMono env)
+  -- the variable the state reached first has the smallest type
+  case sortOn (length . shown . snd) [(n, ty) | (n, ty) <- outside, sk `elem` tyVarsOf ty] of
+    (n, ty) : _ -> throw ("runST's argument uses " ++ unqual n ++ ", of type " ++ shown ty ++ ", which \
+                          \mentions the state s of its computation: each runST has a state of its own, so a \
+                          \structure made outside it cannot be used inside")
+    [] | any ((sk `elem`) . tyVarsOf) mono ->
+           throw "runST's argument uses a variable from outside whose type mentions the state s of its \
+                 \computation: each runST has a state of its own"
+       | otherwise -> pure ()
+  pure (CApp (CVar runSTName (Inst targs ds) t) [cm], r)
+  where
+    hint = "runST's argument must work for a state of its own, s' here, which nothing outside the runST knows"
+    replaceAll old new str = case str of
+      [] -> []
+      _ | old `L.isPrefixOf` str -> new ++ replaceAll old new (drop (length old) str)
+      ch : rest -> ch : replaceAll old new rest
+    -- the state of an enclosing runST
+    otherStates str = case str of
+      [] -> []
+      's' : '#' : rest@(d : _) | d >= '0' && d <= '9' -> 's' : otherStates (dropWhile (\c -> c >= '0' && c <= '9') rest)
+      ch : rest -> ch : otherStates rest
+
+-- | The rigid state of a runST (see 'inferRunST'), once its module is
+-- checked: (), as nothing at run time depends on it.
+eraseSkolems :: Type -> Type
+eraseSkolems = \case
+  TVar v | '#' `elem` v -> tUnit
+  TCon c ts -> TCon c (map eraseSkolems ts)
+  TFun a b -> TFun (eraseSkolems a) (eraseSkolems b)
+  TApp f x -> tApp (eraseSkolems f) (eraseSkolems x)
+  t -> t
 
 splitArrow :: Type -> TC (Type, Type)
 splitArrow t =
@@ -826,7 +908,7 @@ builtinData = M.fromList [("[]", DataInfo ["a"] [0] ["[]", ":"] False Nothing), 
 
 -- | Resolves every unification variable and fills in every dictionary.
 closeUp :: Subst -> IM.IntMap Dict -> Checked -> Checked
-closeUp sub solved = everywhere (zonk sub) . everywhere fill
+closeUp sub solved = everywhere (eraseSkolems . zonk sub) . everywhere fill
   where
     fill = \case
       DHole h | Just d <- IM.lookup h solved -> fillAll d
@@ -921,6 +1003,12 @@ tcModule interactive modName' before ds = do
   -- instance heads
   instDecls <- forM [(l, ctx, c, sts, body) | DInstance l ctx c sts body <- ds] $ \(l, ctx, c, sts, body) -> atLoc l $ withCtx ("instance " ++ unqual c) $ do
     ci <- maybe (throw ("unknown class: " ++ c)) pure (M.lookup c (envClasses envCl))
+    -- a Go map compares its keys with ==, which is identity for the types
+    -- kept as pointers, so the keys are the types the library chose
+    when (c == "Data.HashTable.Key" && modName' /= "Data.HashTable") $
+      throw "only Data.HashTable gives instances of Key: its keys are the types Go compares by value \
+            \(Int, Char, String, Bool, () and tuples of them), and Go would compare others by identity; \
+            \use one of those as the key, or a Data.Map"
     unless (length sts == length (clsVars ci)) (throw (classArity c ci (length sts)))
     let vars = M.fromList [(v, TVar v) | st <- sts, v <- stypeVars st]
     ts <- mapM (fromSType envCl vars) sts

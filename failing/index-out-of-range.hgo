@@ -1,0 +1,8 @@
+-- expects: error: index out of range: 5, in a vector of length 5
+import qualified Data.Vector.Mutable as MV
+
+main :: IO ()
+main = do
+  v <- MV.replicate 5 'x'
+  MV.write v 5 'y'
+  print 1

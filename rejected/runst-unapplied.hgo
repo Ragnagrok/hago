@@ -1,0 +1,5 @@
+-- expects: runST must be applied to its argument
+import Control.Monad.ST
+
+main :: IO ()
+main = print (map runST [pure 1, pure 2])
