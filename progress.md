@@ -67,6 +67,25 @@ From easiest to hardest, which is the order we take them in.
       even as a plain value), `:load` and `:{ :}`. A transcript without a terminal; `repl/`
       sessions are replayed by `check.sh`. The driver compiles modules given as text.
 
+- [x] **Values from actions at the prompt, `:info`, `:browse`.** `pattern <- action` runs the
+      action once and keeps what a variable, tuple, `@` or constructor pattern binds: the
+      program that runs it also writes `show` of each value (checked to `read` back), and each
+      becomes a definition `x :: T; x = read "..."` with the type the action gave it, so
+      `:type` sees it. A value without Show and Read (an MVar, a function, an action, a Go
+      value), a type left open, or a refutable pattern is refused before anything runs, with
+      why and what to do instead; the action is never run again. Other ways to carry a value
+      were weighed: replaying the action is wrong (`getLine`, `forkIO`); one long-lived Go
+      process cannot load the next line's code (Go has no eval, and `plugin` cannot share a
+      runtime's state across builds); serialising Go values (gob) would carry a few more types
+      (a `Map` has Show but no Read) but none of those that matter (MVars, functions,
+      goroutines) and needs a decoder for every type. Show and Read is the text the language
+      already round-trips. `:info` gives a value's type, or a type's or class's declaration
+      and instances; `:browse M` what M exports; `:help` lists them.
+- [ ] **What the REPL still cannot do.** Keep a value without Show and Read; give an action
+      that reads standard input anything without a terminal (the REPL reads all of it);
+      redefining a type forgets the values kept of it instead of shadowing it, as GHCi does.
+      Line editing: libtinfo is now installed, so haskeline could replace `rlwrap`.
+
 - [x] **`Integer`, and what the book's first chapters use.** Any size, a `*big.Int` never
       modified; literals past `Int` are read from their digits; `toInteger` is a method of
       `Integral`. Also `last` and `init` (with `Maybe`), `words`, `lines`, `notElem`, `scanl`,

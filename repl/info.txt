@@ -1,0 +1,56 @@
+hago> :help
+  EXPR            evaluate and print EXPR (an IO action is run)
+  NAME = EXPR     define (also data, class, instance, import...)
+  PAT <- ACTION   run ACTION once and keep what PAT binds (if it has Show and Read)
+  :type EXPR      the type of EXPR
+  :kind TYPE      the kind of a type, or of a class
+  :info NAME      what NAME is: its type, or its definition and instances
+  :browse MODULE  what MODULE exports, with types
+  :load FILE      load the definitions in FILE, forgetting those typed here
+  :reload         load the same file again
+  :{ ... :}       a definition or expression on several lines
+  :quit
+hago> data Color = Red | Green deriving (Show, Eq)
+hago> class Pretty a where { pretty :: a -> String }
+hago> instance Pretty Color where { pretty c = "a color" }
+hago> :info Color
+data Color = Red | Green
+instance Eq Color
+instance Pretty Color
+instance Show Color
+hago> :info Pretty
+class Pretty a where
+  pretty :: a -> String
+instance Pretty Color
+hago> :info pretty
+pretty :: Pretty a => a -> String
+  -- a method of class Pretty
+hago> :info Red
+Red :: Color
+  -- a constructor of Color
+hago> :info fmap
+fmap :: Functor f => (a -> b) -> f a -> f b
+  -- a method of class Functor
+hago> :info (<>)
+(<>) :: Semigroup a => a -> Lazy a -> a
+  -- a method of class Semigroup
+hago> :load repl/Shapes.hgo
+loaded repl/Shapes.hgo
+hago> :info Shape
+data Shape = Circle Double | Rect Double Double
+instance Show Shape
+hago> :info area
+area :: Shape -> Double
+hago> :browse Shapes
+data Shape = Circle Double | Rect Double Double
+area :: Shape -> Double
+main :: IO ()
+hago> :browse Data.Functor.Identity
+newtype Identity a
+runIdentity :: Identity a -> a
+hago> :info nothing
+<interactive>: not in scope: nothing
+hago> :browse Nothing.Here
+<interactive>: cannot find module Nothing.Here (looked for ./Nothing/Here.hgo)
+hago> :info
+<interactive>: :info takes a name, as in :info Maybe
