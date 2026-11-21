@@ -19,6 +19,10 @@ import (
 
 // --- runtime ---
 
+// This program may run on several goroutines: see rt_newLock in
+// lib_mutable.go.
+const rt_concurrent = true
+
 var _ = rt_reflect.Select
 var _ = rt_runtime.Gosched
 var _ = rt_syscall.Exec

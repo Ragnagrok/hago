@@ -1,0 +1,12 @@
+-- expects: runST's argument must work for a state of its own
+import Control.Monad.ST
+import Data.STRef
+
+-- the inner runST uses a reference of the outer one
+twice :: Int
+twice = runST $ do
+  r <- newSTRef 1
+  pure (runST (readSTRef r))
+
+main :: IO ()
+main = print twice

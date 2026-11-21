@@ -262,6 +262,9 @@ solveGen env gen0 = do
           TVar _ -> throw ("no instance for (" ++ showPred p ++ "): add it to the type signature")
           TCon "Double" [] | c == "Enum" ->
             throw "no instance for Enum Double: a range of floating-point numbers is not exact; map over a range of Int instead, as in map (\\i -> fromIntegral i / 10) [0 .. 10]"
+          _ | c == "Data.HashTable.Key" ->
+                throw ("no instance for " ++ showPred p ++ ": the keys of a hash table are the types Go compares \
+                       \by value (Int, Char, String, Bool, () and tuples of them); use a Data.Map for other keys")
           _ -> throw ("no instance for " ++ showPred p)
     finish gen deferred = do
       -- two waiting constraints of a class on the same type agree on the rest

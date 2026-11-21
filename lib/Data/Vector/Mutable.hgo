@@ -1,0 +1,87 @@
+-- Mutable vectors: a fixed number of elements, each read and written in
+-- constant time. MVector s a is used in a monad of state s: IOVector a in
+-- IO, and STVector s a in ST s (see Control.Monad.ST), with the same
+-- functions. Import it qualified: import qualified Data.Vector.Mutable as MV.
+--
+-- An index outside the vector ends the program with
+-- "error: index out of range", as in Go: indices come from the algorithm,
+-- and one out of bounds is a bug in it. readMaybe is for an index that
+-- comes from outside.
+--
+-- A vector made in IO can be shared by threads: in a program that has
+-- them, it has a lock, and each operation takes it. One made in ST has
+-- none, since only its computation can see it.
+module Data.Vector.Mutable
+  ( MVector, IOVector, STVector
+  , replicate, generate, length, read, readMaybe, write, modify, swap, set
+  , freeze, thaw, fromList, toList
+  ) where
+
+import Prelude hiding (length, read, replicate, toList)
+import Control.Monad.ST.Unsafe
+import Data.Vector (Vector)
+import qualified Data.Vector as Vector
+
+foreign import go type "*rt_MVector" MVector s a
+
+type IOVector = MVector RealWorld
+type STVector s = MVector s
+
+foreign import go "rt_mvecReplicate" goReplicate :: Bool -> Int -> a -> IO (MVector s a)
+foreign import go "rt_mvecGenerate" goGenerate :: Bool -> Int -> (Int -> a) -> IO (MVector s a)
+foreign import go "rt_mvecLength" goLength :: MVector s a -> Int
+foreign import go "rt_mvecRead" goRead :: MVector s a -> Int -> IO a
+foreign import go "rt_mvecReadMaybe" goReadMaybe :: MVector s a -> Int -> IO (Either String a)
+foreign import go "rt_mvecWrite" goWrite :: MVector s a -> Int -> a -> IO ()
+foreign import go "rt_mvecModify" goModify :: MVector s a -> (a -> a) -> Int -> IO ()
+foreign import go "rt_mvecSwap" goSwap :: MVector s a -> Int -> Int -> IO ()
+foreign import go "rt_mvecSet" goSet :: MVector s a -> a -> IO ()
+foreign import go "rt_mvecFreeze" goFreeze :: MVector s a -> IO (Vector a)
+foreign import go "rt_mvecThaw" goThaw :: Bool -> Vector a -> IO (MVector s a)
+
+-- A vector of n elements, all the same.
+replicate :: PrimMonad s m => Int -> a -> m (MVector s a)
+replicate n x = primShared >>= \shared -> unsafePrimIO (goReplicate shared n x)
+
+-- A vector of n elements, each computed from its position.
+generate :: PrimMonad s m => Int -> (Int -> a) -> m (MVector s a)
+generate n f = primShared >>= \shared -> unsafePrimIO (goGenerate shared n f)
+
+-- The length never changes, so it is not an action.
+length :: MVector s a -> Int
+length v = goLength v
+
+read :: PrimMonad s m => MVector s a -> Int -> m a
+read v i = unsafePrimIO (goRead v i)
+
+-- The element at a position, or Nothing if the vector has none there.
+readMaybe :: PrimMonad s m => MVector s a -> Int -> m (Maybe a)
+readMaybe v i = unsafePrimIO (fmap (either (const Nothing) Just) (goReadMaybe v i))
+
+write :: PrimMonad s m => MVector s a -> Int -> a -> m ()
+write v i x = unsafePrimIO (goWrite v i x)
+
+-- Replaces the element at a position with what the function makes of it.
+modify :: PrimMonad s m => MVector s a -> (a -> a) -> Int -> m ()
+modify v f i = unsafePrimIO (goModify v f i)
+
+swap :: PrimMonad s m => MVector s a -> Int -> Int -> m ()
+swap v i j = unsafePrimIO (goSwap v i j)
+
+-- Writes the value in every element.
+set :: PrimMonad s m => MVector s a -> a -> m ()
+set v x = unsafePrimIO (goSet v x)
+
+-- An immutable copy, which later writes do not change.
+freeze :: PrimMonad s m => MVector s a -> m (Vector a)
+freeze v = unsafePrimIO (goFreeze v)
+
+-- A mutable copy of an immutable vector.
+thaw :: PrimMonad s m => Vector a -> m (MVector s a)
+thaw xs = primShared >>= \shared -> unsafePrimIO (goThaw shared xs)
+
+fromList :: PrimMonad s m => [a] -> m (MVector s a)
+fromList xs = thaw (Vector.fromList xs)
+
+toList :: PrimMonad s m => MVector s a -> m [a]
+toList v = fmap Vector.toList (freeze v)

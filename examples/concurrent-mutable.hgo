@@ -1,0 +1,32 @@
+-- Mutable structures shared by threads. An IORef is an atomic pointer to its
+-- value, so modifyIORef' and atomicModifyIORef' never lose a change. A
+-- vector or a table made in IO, in a program that has threads, has a lock
+-- that each operation takes, so each operation is atomic.
+import Control.Concurrent.Async
+import Data.IORef
+import qualified Data.Vector.Mutable as MV
+import qualified Data.HashTable as HashTable
+import Data.List (sort)
+
+main :: IO ()
+main = do
+  -- a thousand threads add to one counter
+  counter <- newIORef (0 :: Int)
+  mapConcurrently_ (\_ -> modifyIORef' counter (+ 1)) [1 .. 1000]
+  readIORef counter >>= print
+  -- each thread takes a ticket: no two get the same one
+  next <- newIORef (0 :: Int)
+  tickets <- mapConcurrently (\_ -> atomicModifyIORef' next (\n -> (n + 1, n))) [1 .. 100]
+  print (sort tickets == [0 .. 99])
+  -- threads count words into one table, and fill one vector
+  table <- HashTable.new
+  let texts = replicate 50 "the cat saw the dog and the bird"
+  forConcurrently_ texts (mapM_ (\w -> HashTable.insertWith (+) table w (1 :: Int)) . words)
+  HashTable.toList table >>= print . sort
+  squares <- MV.replicate 100 (0 :: Int)
+  forConcurrently_ [0 .. 99] (\i -> MV.write squares i (i * i))
+  MV.toList squares >>= print . sum
+  -- strings are two words: a thread never reads half of one
+  names <- MV.replicate 4 "nobody"
+  forConcurrently_ [0 .. 399] (\i -> MV.write names (i `mod` 4) (if even i then "even" else "odd"))
+  MV.toList names >>= print

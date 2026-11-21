@@ -1,0 +1,10 @@
+-- expects: runST's argument uses r, of type STRef s _, which mentions the state s of its computation
+import Control.Monad.ST
+import Data.STRef
+
+-- each runST has a state of its own, so a reference cannot come from outside
+peek :: [Int] -> [Int]
+peek xs = map (\r -> runST (readSTRef r) + 1) []
+
+main :: IO ()
+main = print (peek [])

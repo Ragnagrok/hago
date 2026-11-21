@@ -1,0 +1,35 @@
+-- Mutable references in IO. An IORef holds one value, which any thread can
+-- read and replace: it is an atomic pointer to the value, so a thread never
+-- sees half of what another is writing, and modifyIORef' and
+-- atomicModifyIORef' never lose a change.
+--
+-- Hago is strict, so a value is computed before it is written:
+-- modifyIORef' and modifyIORef are the same function.
+module Data.IORef
+  ( IORef, newIORef, readIORef, writeIORef, modifyIORef, modifyIORef'
+  , atomicModifyIORef', atomicWriteIORef
+  ) where
+
+foreign import go type "*rt_IORef" IORef a
+
+foreign import go "rt_newIORef" newIORef :: a -> IO (IORef a)
+foreign import go "rt_readIORef" readIORef :: IORef a -> IO a
+foreign import go "rt_writeIORef" writeIORef :: IORef a -> a -> IO ()
+
+-- Applies the function to the value, atomically: if another thread writes
+-- in between, the function runs again on the new value.
+foreign import go "rt_modifyIORef" modifyIORef' :: IORef a -> (a -> a) -> IO ()
+
+modifyIORef :: IORef a -> (a -> a) -> IO ()
+modifyIORef r f = modifyIORef' r f
+
+foreign import go "rt_atomicModifyIORef" atomicModify :: IORef a -> (a -> t) -> (t -> a) -> (t -> b) -> IO b
+
+-- Replaces the value with the first of the pair the function gives, and
+-- gives the second, atomically.
+atomicModifyIORef' :: IORef a -> (a -> (a, b)) -> IO b
+atomicModifyIORef' r f = atomicModify r f fst snd
+
+-- writeIORef is already atomic.
+atomicWriteIORef :: IORef a -> a -> IO ()
+atomicWriteIORef r x = writeIORef r x

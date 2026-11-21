@@ -65,7 +65,13 @@ libraryModules = M.fromList
   , ("Data.Ord", $(embedFile "lib/Data/Ord.hgo"))
   , ("Data.List", $(embedFile "lib/Data/List.hgo"))
   , ("Data.Map", $(embedFile "lib/Data/Map.hgo"))
-  , ("Data.Set", $(embedFile "lib/Data/Set.hgo")) ]
+  , ("Data.Set", $(embedFile "lib/Data/Set.hgo"))
+  , ("Control.Monad.ST.Unsafe", $(embedFile "lib/Control/Monad/ST/Unsafe.hgo"))
+  , ("Control.Monad.ST", $(embedFile "lib/Control/Monad/ST.hgo"))
+  , ("Data.IORef", $(embedFile "lib/Data/IORef.hgo"))
+  , ("Data.STRef", $(embedFile "lib/Data/STRef.hgo"))
+  , ("Data.Vector.Mutable", $(embedFile "lib/Data/Vector/Mutable.hgo"))
+  , ("Data.HashTable", $(embedFile "lib/Data/HashTable.hgo")) ]
 
 -- | The runtime copied into every program: runtime.go, and the thunks of
 -- thunk_sequential.go, or concurrent.go for a program that starts goroutines.
@@ -88,7 +94,8 @@ runtime = Runtime
   , rtParts = map part
       [ $(embedFile "runtime/lib_codec.go")
       , $(embedFile "runtime/lib_process.go")
-      , $(embedFile "runtime/lib_http.go") ]
+      , $(embedFile "runtime/lib_http.go")
+      , $(embedFile "runtime/lib_mutable.go") ]
   }
   where
     part src = RuntimePart (afterMarker src) (definedIn src) (importsOf src)

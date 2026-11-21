@@ -1,0 +1,38 @@
+-- How many times each number appears in a long sequence, twice: in a hash
+-- table in ST, and in a Data.Map. Both are pure functions; see the README's
+-- Performance section for how they compare:
+-- hago run examples/frequencies.hgo 1000000.
+import Control.Monad.ST
+import qualified Data.HashTable as HashTable
+import qualified Data.Map as Map
+import System.Environment (getArgs)
+
+-- A sequence of pseudo-random numbers below 100000 (a linear congruential
+-- generator, so that every run sees the same one).
+numbers :: Int -> [Int]
+numbers n = map (\x -> x `mod` 100000) (take n (iterate (\x -> (x * 1103515245 + 12345) `mod` 2147483648) 42))
+
+-- How many different numbers there are, and how often the commonest appears.
+summary :: [(Int, Int)] -> (Int, Int)
+summary counts = (length counts, foldl max 0 (map snd counts))
+
+countTable :: [Int] -> (Int, Int)
+countTable xs = summary (runST $ do
+  table <- HashTable.new
+  mapM_ (\x -> HashTable.insertWith (+) table x 1) xs
+  HashTable.toList table)
+
+countMap :: [Int] -> (Int, Int)
+countMap xs = summary (Map.toList (foldl (\m x -> Map.insertWith (+) x 1 m) Map.empty xs))
+
+main :: IO ()
+main = do
+  args <- getArgs
+  let n = case args of
+        a : _ -> maybe 10000 id (read a)
+        [] -> 10000
+      which = case args of
+        [_, w] -> w
+        _ -> "both"
+  when (which /= "map") (print (countTable (numbers n)))
+  when (which /= "table") (print (countMap (numbers n)))

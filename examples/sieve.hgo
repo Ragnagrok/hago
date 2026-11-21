@@ -1,0 +1,50 @@
+-- The sieve of Eratosthenes, twice: on a mutable vector in ST, which is
+-- what the algorithm asks for, and with Data.Map, the incremental sieve a
+-- pure program writes (O'Neill, "The Genuine Sieve of Eratosthenes", 2009).
+-- runST makes the first a pure function too. See the README's Performance
+-- section for how they compare: hago run examples/sieve.hgo 10000000.
+import Control.Monad.ST
+import qualified Data.Vector.Mutable as MV
+import qualified Data.Map as Map
+import System.Environment (getArgs)
+
+-- How many primes there are up to n, crossing out the multiples of each.
+primesST :: Int -> Int
+primesST n = runST $ do
+  composite <- MV.replicate (n + 1) False
+  let cross p i = if i > n then pure () else do
+        MV.write composite i True
+        cross p (i + p)
+      count p found
+        | p > n = pure found
+        | otherwise = do
+            crossed <- MV.read composite p
+            if crossed
+              then count (p + 1) found
+              else do
+                when (p * p <= n) (cross p (p * p))
+                count (p + 1) (found + 1)
+  count 2 0
+
+-- The same, keeping for each prime found the next multiple to cross out.
+primesMap :: Int -> Int
+primesMap n = sieveFrom n 2 Map.empty 0
+
+sieveFrom :: Int -> Int -> Map.Map Int [Int] -> Int -> Int
+sieveFrom n i next found
+  | i > n = found
+  | otherwise = case Map.lookup i next of
+      Nothing -> sieveFrom n (i + 1) (Map.insert (i * i) [i] next) (found + 1)
+      Just ps -> sieveFrom n (i + 1) (foldl (\m p -> Map.insertWith (++) (i + p) [p] m) (Map.delete i next) ps) found
+
+main :: IO ()
+main = do
+  args <- getArgs
+  let n = case args of
+        a : _ -> maybe 100000 id (read a)
+        [] -> 100000
+      which = case args of
+        [_, w] -> w
+        _ -> "both"
+  when (which /= "map") (print (primesST n))
+  when (which /= "st") (print (primesMap n))

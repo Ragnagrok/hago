@@ -1,0 +1,10 @@
+-- expects: runST's argument must work for a state of its own
+import Control.Monad.ST
+import Data.STRef
+
+-- m works for one state s, which the caller chooses, not for any
+run :: ST s Int -> Int
+run m = runST m
+
+main :: IO ()
+main = print (run (pure 1))
