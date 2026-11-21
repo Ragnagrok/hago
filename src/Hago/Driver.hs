@@ -3,7 +3,7 @@
 -- | From a source file to Go source: loading modules, renaming, type
 -- synonyms, deriving, type checking, specialisation, newtype erasure, code
 -- generation.
-module Hago.Driver (Virtual, compileFile, checkProgram, generateProgram, quoteSource, quoteIn) where
+module Hago.Driver (Virtual, compileFile, checkProgram, checkProgramExports, generateProgram, quoteSource, quoteIn) where
 
 import Control.Applicative ((<|>))
 import Control.Monad (foldM)
@@ -18,7 +18,7 @@ import Hago.Expand (expandSynonyms, synonymsOf)
 import Hago.Newtype (eraseNewtypes)
 import Hago.Parser (fixitiesOf, parseModule, resolveFixity)
 import Hago.Cache
-import Hago.Rename (renameModule)
+import Hago.Rename (Renamed (..), renameModule)
 import Hago.Sink (sinkLocals)
 import Hago.Specialize (specialize)
 import Hago.Syntax
@@ -164,7 +164,12 @@ compileFile file = do
 -- | Every module of the program, type checked, dependencies first, with the
 -- Prelude. Errors are not quoted yet.
 checkProgram :: Virtual -> FilePath -> IO (Either String [(Name, Checked)])
-checkProgram virtual file = do
+checkProgram virtual file = fmap (\(mods, _, _) -> mods) <$> checkProgramExports virtual file
+
+-- | checkProgram, also giving what each module exports, and the type
+-- synonyms, by internal name.
+checkProgramExports :: Virtual -> FilePath -> IO (Either String ([(Name, Checked)], Renamed, M.Map Name ([Name], SType)))
+checkProgramExports virtual file = do
   loaded <- loadAll virtual file
   stamp <- compilerStamp
   cache <- cacheDirectory
@@ -172,7 +177,7 @@ checkProgram virtual file = do
   result <- case loaded of
     Left e -> pure (Left e)
     Right mods -> compileUnits stamp cache (preludeUnit : [Unit path (modName m) src (Just m) | (path, src, m) <- mods])
-  pure (map (fmap ifChecked) <$> result)
+  pure ((\ifaces -> (map (fmap ifChecked) ifaces, mconcat (map (ifRenamed . snd) ifaces), M.unions (map (ifSynonyms . snd) ifaces))) <$> result)
 
 generateProgram :: FilePath -> [(Name, Checked)] -> Either String String
 generateProgram file modules = do

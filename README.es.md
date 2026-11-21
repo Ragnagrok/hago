@@ -592,6 +592,10 @@ hago> :load repl/Shapes.hgo
 loaded repl/Shapes.hgo
 hago> area (Rect 2.0 5.0)
 10.0
+hago> name <- getLine
+Ada
+hago> "hello, " ++ name
+"hello, Ada"
 ```
 
 `hago repl` guarda lo que se define (funciones, `data`, clases, instancias, imports) en un
@@ -599,9 +603,21 @@ módulo y lo chequea a medida que crece. Una expresión se compila con ese módu
 chico que la imprime, o que la ejecuta si es una acción, y Go lo corre: cerca de un tercio de
 segundo cada vez. `:type` muestra el tipo con sus restricciones, `:load` trae las definiciones
 de un archivo (y su `main`), que una definición en el prompt reemplaza, y `:{ ... :}` abarca
-varias líneas. No hay edición de línea; `rlwrap hago repl` la agrega. Sin una terminal en la
-entrada, repite cada línea después del prompt, así que la salida es una transcripción:
-`check.sh` reproduce las sesiones de `repl/`.
+varias líneas. `:info` dice qué es un nombre (un tipo y sus instancias, una clase y sus
+métodos), `:browse` lista lo que exporta un módulo y `:help` lista los comandos. No hay edición
+de línea; `rlwrap hago repl` la agrega. Sin una terminal en la entrada, repite cada línea
+después del prompt, así que la salida es una transcripción: `check.sh` reproduce las sesiones de
+`repl/`.
+
+`patrón <- acción` ejecuta la acción una vez y guarda lo que el patrón liga para las líneas
+siguientes. Cada línea es un programa aparte, así que un valor no puede quedar en memoria: se
+guarda como el texto que da `show`, en una definición que lo vuelve a leer con `read` con el
+tipo que tenía. Hace falta Show y Read; una MVar, una función, una acción o un valor de Go no
+se pueden guardar, y el REPL lo dice antes de ejecutar nada. La acción nunca se vuelve a
+ejecutar: las líneas siguientes ven el valor, no la acción. Un tipo que la acción deja abierto
+(`xs <- pure []`) hay que darlo, y definir un tipo de nuevo olvida los valores guardados de
+ese tipo. Sin una terminal, una acción que lee la entrada estándar no encuentra nada: el REPL
+la lee toda.
 
 En `examples/` hay listas perezosas, ADTs con pattern matching y guardas, type classes, mónadas
 (State, Maybe, Either, listas, reader, writer, Traversable), transformadores de mónadas, módulos,

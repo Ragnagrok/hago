@@ -571,15 +571,30 @@ hago> :load repl/Shapes.hgo
 loaded repl/Shapes.hgo
 hago> area (Rect 2.0 5.0)
 10.0
+hago> name <- getLine
+Ada
+hago> "hello, " ++ name
+"hello, Ada"
 ```
 
 `hago repl` keeps what you define (functions, `data`, classes, instances, imports) in a module
 and type checks it as you go. An expression is compiled with that module into a small program
 that prints it, or runs it if it is an action, and Go runs it: about a third of a second each.
 `:type` shows the type with its constraints, `:load` brings in a file's definitions (and its
-`main`), which a definition at the prompt replaces, and `:{ ... :}` spans several lines. There is
-no line editing; `rlwrap hago repl` adds it. Without a terminal on its input it echoes each line
-after the prompt, so its output is a transcript: `check.sh` replays the sessions in `repl/`.
+`main`), which a definition at the prompt replaces, and `:{ ... :}` spans several lines.
+`:info` says what a name is (a type and its instances, a class and its methods), `:browse`
+lists what a module exports, and `:help` lists the commands. There is no line editing;
+`rlwrap hago repl` adds it. Without a terminal on its input it echoes each line after the
+prompt, so its output is a transcript: `check.sh` replays the sessions in `repl/`.
+
+`pattern <- action` runs the action once and keeps what the pattern binds for the next lines.
+Every line is a program of its own, so a value cannot stay in memory: it is kept as the text
+`show` gives, in a definition that reads it back with `read` at the type it had. That needs Show
+and Read; an MVar, a function, an action or a Go value cannot be kept, and the REPL says so
+before running anything. The action is never run again: the next lines see the value, not the
+action. A type the action leaves open (`xs <- pure []`) has to be given, and defining a type
+again forgets the values kept of it. Without a terminal, an action that reads standard input
+finds nothing: the REPL reads all of it.
 
 The `examples/` folder has lazy lists, ADTs with pattern matching and guards, type classes,
 monads (State, Maybe, Either, lists, reader, writer, Traversable), monad transformers, modules,

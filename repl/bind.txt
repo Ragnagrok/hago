@@ -1,0 +1,94 @@
+hago> x <- pure 3
+hago> x + 1
+4
+hago> :t x
+x :: Int
+hago> (name, score) <- pure ("Ada", 2.5)
+hago> name ++ "!"
+"Ada!"
+hago> :t score
+score :: Double
+hago> :{
+hago| total <- do
+hago|   putStrLn "adding"
+hago|   pure (sum [1, 2, 3])
+hago| :}
+adding
+hago> total * 2
+12
+hago> p@(c, flags) <- pure ('a', [True, False])
+hago> p
+('a',[True,False])
+hago> x <- pure (x * 10)
+hago> x
+30
+hago> _ <- putStrLn "run, nothing kept"
+run, nothing kept
+hago> Just n <- pure (Just 3)
+<interactive>:1:1: the pattern on the left of <- does not match every value: nothing matches Nothing
+  |
+1 | Just n <- pure (Just 3)
+  | ^^^^
+match it with case instead, to say what happens with the others
+hago> (a, b) <- pure 3
+<interactive>:1:1: no instance for Num (_, _)
+  |
+1 | (a, b) <- pure 3
+  | ^
+hago> y <- 3
+<interactive>: on the right of <- goes an action, and 3 :: Num a => a is not one
+let y = 3 names a value
+hago> it <- pure 3
+<interactive>: it names the expression typed at the prompt; bind another name
+hago> xs <- pure []
+<interactive>: the type of xs, [a], is not fixed by the action; give it one, as in xs <- (pure [] :: IO [Int])
+hago> xs <- pure ([] :: [Int])
+hago> :t xs
+xs :: [Int]
+hago> import Control.Concurrent
+hago> box <- newEmptyMVar
+<interactive>: box cannot be kept for the next lines: its type, MVar a, has no Show
+each line runs as a program of its own, so a value reaches the next lines only as the text Show writes and Read reads back; nothing was run
+use box within one line, as in newEmptyMVar >>= \box -> ..., or in a program; a pure value can be named with let
+hago> box <- (newEmptyMVar :: IO (MVar Int))
+<interactive>: box cannot be kept for the next lines: its type, MVar Int, has no Show
+each line runs as a program of its own, so a value reaches the next lines only as the text Show writes and Read reads back; nothing was run
+use box within one line, as in (newEmptyMVar :: IO (MVar Int)) >>= \box -> ..., or in a program; a pure value can be named with let
+hago> inc <- pure (+ 1)
+<interactive>: inc cannot be kept for the next lines: its type, Int -> Int, has no Show
+each line runs as a program of its own, so a value reaches the next lines only as the text Show writes and Read reads back; nothing was run
+use inc within one line, as in pure (+ 1) >>= \inc -> ..., or in a program; a pure value can be named with let
+hago> data Color = Red | Green deriving (Show, Eq)
+hago> color <- pure Red
+<interactive>: color cannot be kept for the next lines: its type, Color, has Show but no Read (deriving (Show, Read) gives a data type both)
+each line runs as a program of its own, so a value reaches the next lines only as the text Show writes and Read reads back; nothing was run
+use color within one line, as in pure Red >>= \color -> ..., or in a program; a pure value can be named with let
+hago> data Color = Red | Green deriving (Show, Eq, Read)
+hago> color <- pure Green
+hago> color == Green
+True
+hago> data Color = Blue deriving (Show, Read)
+<interactive>: color is forgotten: its type Color is defined again
+hago> color
+<interactive>:1:1: not in scope: color
+  |
+1 | color
+  | ^^^^^
+hago> r <- pure (div 1 0)
+error: runtime error: integer divide by zero
+hago> r
+<interactive>:1:1: not in scope: r
+  |
+1 | r
+  | ^
+hago> data Odd = Odd deriving Read
+hago> instance Show Odd where { show _ = "not Odd" }
+hago> o <- pure Odd
+<interactive>: o cannot be kept: Read does not read back what Show gives for its value (the action did run)
+hago> :load repl/Shapes.hgo
+loaded repl/Shapes.hgo
+hago> area <- pure 2.0
+hago> area * 2
+4.0
+hago> :t area
+area :: Double
