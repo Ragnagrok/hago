@@ -203,6 +203,12 @@ Next, more of Go's library (decided 2026-11-18), the easy ones first:
       on Go's `map` with keys limited to types Go compares by value); then `ST` with a pure
       `runST`, which needs its rank-2 type checked by a rule of its own.
 
+- [x] **Go 1.27.** A type kept by value whose struct refers to itself through its alias (a
+      list of itself) made Go 1.27's type checker panic ("incomplete alias", go.dev/issue/78296):
+      the struct now takes the type's name, and the constructor's is the alias. CI runs on Go
+      1.25 and on the newest. The README asked for Go 1.21; iterators and generic aliases need
+      1.24, and 1.25 is what is tested.
+
 Known rough edges, found on the way and not fixed yet:
 
 - [ ] **Errors in type signatures have no location** (a context with the wrong number of types, an

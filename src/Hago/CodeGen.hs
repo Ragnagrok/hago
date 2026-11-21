@@ -423,8 +423,11 @@ genData prog unboxed (n, DataInfo ps _ ks _ _)
   | Just Plain <- M.lookup n unboxed, [k] <- ks =
       let ci = progCons prog M.! k
           fields = [ "F" ++ show i ++ " " ++ goTy ctx (if lz then tLazy t else t) | (i, (lz, t)) <- zip [0 :: Int ..] (ciFields ci)]
-       in [ "type " ++ conStruct prog k ++ tparamList ps ++ " struct{ " ++ intercalate "; " fields ++ " }"
-          , "type " ++ typeName n ++ tparamList ps ++ " = " ++ conStruct prog k ++ (if null ps then "" else "[" ++ commas (map tyVar ps) ++ "]") ]
+       -- the struct is the type itself and the constructor's name an alias
+       -- of it: a struct that refers to itself through an alias (a list of
+       -- itself) makes Go 1.27 fail with "incomplete alias" (go.dev/issue/78296)
+       in [ "type " ++ typeName n ++ tparamList ps ++ " struct{ " ++ intercalate "; " fields ++ " }"
+          , "type " ++ conStruct prog k ++ tparamList ps ++ " = " ++ typeName n ++ (if null ps then "" else "[" ++ commas (map tyVar ps) ++ "]") ]
   | otherwise =
       ["type " ++ typeName n ++ tparamList ps ++ " interface{ " ++ marker ++ "() }"]
         ++ concatMap con ks

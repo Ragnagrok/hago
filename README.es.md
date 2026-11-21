@@ -570,7 +570,7 @@ Son números de una sola máquina, como referencia y no como benchmark.
 
 ## Uso
 
-Hace falta GHC (probado con 9.12) con cabal, y Go 1.21 o posterior.
+Hace falta GHC (probado con 9.12) con cabal, y Go 1.25 o posterior (el CI prueba 1.25 y la más nueva).
 
 ```sh
 cabal build

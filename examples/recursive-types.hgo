@@ -1,0 +1,24 @@
+-- Types that contain lists of themselves, kept by value (one constructor)
+-- and as pointers (two constructors, one without fields). Go 1.27 failed on
+-- a struct that referred to itself through a type alias.
+data Section = Section String [Section]
+
+data Rose = Leaf | Node Int [Rose]
+
+data Labelled a = Labelled a [Labelled a]
+
+titles :: Section -> [String]
+titles (Section t subs) = t : concatMap titles subs
+
+total :: Rose -> Int
+total Leaf = 0
+total (Node n kids) = n + sum (map total kids)
+
+size :: Labelled a -> Int
+size (Labelled _ more) = 1 + sum (map size more)
+
+main :: IO ()
+main = do
+  print (titles (Section "book" [Section "one" [], Section "two" [Section "two.1" []]]))
+  print (total (Node 1 [Node 2 [Leaf], Node 3 [Node 4 []]]))
+  print (size (Labelled 'a' [Labelled 'b' [], Labelled 'c' [Labelled 'd' []]]))

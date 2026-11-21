@@ -549,7 +549,7 @@ These numbers come from one machine, as a reference and not as a benchmark.
 
 ## Using it
 
-You need GHC (9.12 is tested) with cabal, and Go 1.21 or later.
+You need GHC (9.12 is tested) with cabal, and Go 1.25 or later (CI tests 1.25 and the newest).
 
 ```sh
 cabal build

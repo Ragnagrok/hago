@@ -3,6 +3,10 @@ on: [push, pull_request]
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # the oldest Go the README asks for, and the newest
+        go: ['1.25', 'stable']
     steps:
       - uses: actions/checkout@v4
       - uses: haskell-actions/setup@v2
@@ -11,7 +15,7 @@ jobs:
           cabal-version: 'latest'
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: ${{ matrix.go }}
       - run: cabal update
       # check.sh vets the runtime, in both its versions
       - run: ./check.sh
