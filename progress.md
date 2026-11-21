@@ -222,6 +222,12 @@ Next, tools around the language, in this order:
       type. Synonyms appear expanded (`runState :: StateT s Identity a -> ...`): the checker
       does not keep them. The Prelude has no export list, so its helpers (`readParens`,
       `goAtoi`) are listed too. `check.sh` regenerates the pages and compares.
+- [x] **Editor support:** `editors/vscode`, a VS Code extension in plain JavaScript, installed
+      from the folder. A TextMate grammar (Haskell's forms, and `foreign import go`, `foreign
+      import go type`, `Lazy`, `~` on fields, `p.name` against `f . g`), tried with
+      vscode-textmate on every `.hgo` file of the repository; comments, brackets, folding and
+      indentation; the error of `hago check` as a diagnostic on open and on save, also on the
+      saved file when it is in a module it imports. One error at a time, as `hago check` gives.
 
 Known rough edges, found on the way and not fixed yet:
 

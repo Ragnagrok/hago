@@ -579,6 +579,15 @@ type checker's, so they are exact (a synonym appears expanded, as `StateT s Iden
 is the comment block right above each declaration, and the comment at the top of the file
 introduces the module. `check.sh` fails if the committed pages are not what `hago doc` makes.
 
+### Editors
+
+`editors/vscode` is a VS Code extension, plain JavaScript that installs from the folder (see
+[its README](editors/vscode/README.md)): highlighting, comments, brackets and indentation for
+`.hgo` files, and the error of `hago check` in the editor every time a file is saved. Its
+TextMate grammar, `editors/vscode/syntaxes/hago.tmLanguage.json`, knows Hago's own forms
+(`foreign import go` and `foreign import go type`, `Lazy`, the `~` of a lazy field, `p.name`),
+and other tools that read TextMate grammars can use it too.
+
 ### The REPL
 
 ```
@@ -688,6 +697,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `prelude/Prelude.hgo` | the prelude, written in Hago |
 | `lib/` | the standard library (`Control.Monad.State` and friends), written in Hago |
 | `docs/library/` | the library's reference, made by `hago doc` |
+| `editors/vscode/` | the VS Code extension: the TextMate grammar, and `hago check` on save |
 
 ## License
 

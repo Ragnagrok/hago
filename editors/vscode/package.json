@@ -1,0 +1,73 @@
+{
+  "name": "hago",
+  "displayName": "Hago",
+  "description": "Hago: highlighting, and type errors from hago check when a file is saved",
+  "version": "0.1.0",
+  "publisher": "ragnagrok",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ragnagrok/hago"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:hago"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "hago",
+        "aliases": [
+          "Hago",
+          "hago"
+        ],
+        "extensions": [
+          ".hgo"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "hago",
+        "scopeName": "source.hago",
+        "path": "./syntaxes/hago.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "hago.check",
+        "title": "Hago: Check this file"
+      }
+    ],
+    "configuration": {
+      "title": "Hago",
+      "properties": {
+        "hago.path": {
+          "type": "string",
+          "default": "hago",
+          "description": "The hago command: a name on the PATH, or a full path to the binary."
+        },
+        "hago.checkOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run hago check on a .hgo file when it is opened and every time it is saved."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[hago]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false
+      }
+    }
+  }
+}

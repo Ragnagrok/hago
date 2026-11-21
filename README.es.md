@@ -603,6 +603,15 @@ texto es el bloque de comentarios que está justo arriba de cada declaración, y
 principio del archivo presenta el módulo. `check.sh` falla si las páginas que están en el
 repositorio no son las que hace `hago doc`.
 
+### Editores
+
+`editors/vscode` es una extensión de VS Code, JavaScript sin dependencias que se instala desde la
+carpeta (ver [su README](editors/vscode/README.md), en inglés): resaltado, comentarios,
+paréntesis e indentación para los archivos `.hgo`, y el error de `hago check` en el editor cada
+vez que se guarda un archivo. Su gramática TextMate, `editors/vscode/syntaxes/hago.tmLanguage.json`,
+conoce las formas propias de Hago (`foreign import go` y `foreign import go type`, `Lazy`, el `~`
+de un campo perezoso, `p.name`), y la pueden usar otras herramientas que leen gramáticas TextMate.
+
 ### El REPL
 
 ```
@@ -718,6 +727,7 @@ Haskell 98.
 | `prelude/Prelude.hgo` | el prelude, escrito en Hago |
 | `lib/` | la biblioteca estándar (`Control.Monad.State` y compañía), escrita en Hago |
 | `docs/library/` | la referencia de la biblioteca, hecha por `hago doc` |
+| `editors/vscode/` | la extensión de VS Code: la gramática TextMate, y `hago check` al guardar |
 
 ## Licencia
 
