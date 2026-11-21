@@ -265,6 +265,10 @@ del programa con el mismo nombre tiene prioridad):
 | `Control.Concurrent.Channel` | los canales de Go: `newChannel` (con el tamaño de su buffer), `send`, `receive` (`Nothing` una vez cerrado), `close`, `receiveAll`, y `select` sobre `onReceive`, `onSend` y `after` |
 | `Control.Concurrent.Async` | `async`, `wait`, `poll`, `concurrently`, `race`, `mapConcurrently`, `forConcurrently` y sus versiones con `_` |
 | `Control.Parallel` | `parMap`: `map` con los elementos calculados en todos los procesadores |
+| `Data.IORef` | `IORef`, una referencia que los hilos pueden compartir: `newIORef`, `readIORef`, `writeIORef`, `modifyIORef'` y `atomicModifyIORef'` (atómicas) |
+| `Control.Monad.ST`, `Data.STRef` | `ST s`, `runST` (pura), `STRef` con `newSTRef`, `readSTRef`, `writeSTRef`, `modifySTRef'`; `PrimMonad`, la clase de IO y de `ST s` |
+| `Data.Vector.Mutable` | `MVector s a` (`IOVector a`, `STVector s a`), un slice de Go que se modifica en el lugar: `replicate`, `generate`, `read`, `readMaybe`, `write`, `modify`, `swap`, `set`, `length`, `freeze` y `thaw` (copiando a y desde un `Vector`); se importa calificado |
+| `Data.HashTable` | `HashTable s k v` (`IOHashTable k v`), un map de Go: `new`, `fromList`, `insert`, `insertWith`, `alter`, `lookup` (con `Maybe`), `member`, `delete`, `size`, `toList`; las claves son los tipos que Go compara por valor (`Key`); se importa calificado |
 
 El Prelude lee y escribe archivos y la entrada estándar: `getContents` e `interact` (que leen
 toda la entrada primero), y `readFile`, `writeFile` y `appendFile`, que devuelven un
@@ -532,6 +536,76 @@ main = do
   cuando llama a una función de estos módulos, o a una función de Go que recibe una función o
   acción de Hago, que Go podría llamar desde otra goroutine.
 
+## Estado mutable
+
+```haskell
+import Control.Monad.ST
+import Data.STRef
+import Data.IORef
+
+sumST :: [Int] -> Int           -- una función pura que muta por dentro
+sumST xs = runST $ do
+  total <- newSTRef 0
+  mapM_ (\x -> modifySTRef' total (+ x)) xs
+  readSTRef total
+
+main = do
+  counter <- newIORef 0
+  mapM_ (\x -> modifyIORef' counter (+ x)) [1 .. 10]
+  readIORef counter >>= print   -- 55
+  print (sumST [1 .. 10])       -- 55
+```
+
+- **La mayor parte del código no lo necesita:** un fold, un `Data.Map` o la mónada `State` dicen
+  lo mismo sin cambiar nada. Mutar conviene cuando el algoritmo está escrito en esos términos,
+  y llega a los elementos y los cambia por posición o por clave: una criba, una tabla de
+  programación dinámica, el conjunto de visitados de una búsqueda en un grafo, cuentas en
+  casilleros. `examples/sieve.hgo` es de 6 a 10 veces más rápido sobre un vector mutable que con
+  un `Data.Map`, y `examples/frequencies.hgo` 3 veces más rápido sobre una tabla de hash (ver
+  [Performance](#performance)).
+- **En IO:** `Data.IORef`, `Data.Vector.Mutable` (`IOVector a`) y `Data.HashTable`
+  (`IOHashTable k v`).
+- **En ST, puro desde afuera.** Un `ST s a` es un cálculo sobre estructuras propias, de estado
+  `s`: `STRef s a`, `STVector s a`, `HashTable s k v`. `runST` lo corre y da su resultado, y es
+  pura porque nada de lo que se crea adentro se usa afuera. El type checker le da a cada `runST`
+  un estado propio, una `s` rígida que no puede aparecer ni en su resultado (`runST (newSTRef 0)`
+  se rechaza: la referencia sobreviviría al cálculo) ni en los tipos de las variables de afuera
+  que usa (una estructura de un `runST` no puede usarla otro). Los mismos argumentos dan el
+  mismo resultado. Haskell escribe el tipo de `runST` como `(forall s. ST s a) -> a`; Hago no
+  tiene esos tipos, y chequea `runST` con una regla propia, como hacía GHC, así que hay que
+  aplicarla a su argumento (`runST (do ...)`, `runST $ do ...`) en vez de pasarla como función.
+- **Las mismas funciones en los dos.** Un vector es un `MVector s a` y una tabla un
+  `HashTable s k v`, como en el vector de Haskell (`IOVector = MVector RealWorld`), y sus
+  operaciones corren en cualquier `PrimMonad s m`: IO, cuyo estado es `RealWorld`, y `ST s`. Una
+  función escrita una vez corre en los dos (`histogram` en `examples/mutable.hgo`). Las
+  referencias tienen un tipo cada una, como en Haskell, porque una `IORef` es atómica y una
+  `STRef` no necesita serlo. En tiempo de ejecución una acción de ST es una acción de IO (los
+  newtypes son gratis), que `runST` corre.
+- **Un índice fuera de rango termina el programa,** con `error: index out of range: 10, in a
+  vector of length 10`, como en Go. El código puro no tiene funciones parciales, pero acá el
+  índice sale del algoritmo: uno fuera de los límites es un error del algoritmo, que ningún
+  resultado arreglaría, y un `Maybe` en cada lectura de un loop sólo se miraría para parar. Una
+  división por cero termina el programa por la misma razón. `readMaybe` es para un índice que
+  viene de afuera. No hay un `new` con elementos todavía indefinidos: `replicate` y `generate`
+  le dan su valor a cada uno.
+- **Las claves de una tabla de hash son los tipos que Go compara por valor:** `Int`, `Char`,
+  `String`, `Bool`, `()` y las tuplas de claves, las instancias de la clase `Key`, que sólo
+  `Data.HashTable` puede dar. Un map de Go compara las claves con `==`, que para una lista o un
+  árbol, guardados como puntero, es la identidad, y también para un `Integer`; un `Double` puede
+  ser NaN, que no es igual a sí mismo. Las demás claves van en un `Data.Map`. Las funciones
+  genéricas generadas declaran sus tipos como `any`, y un map de Go necesita `comparable`, así
+  que la tabla guarda su map como un `any`: sus operaciones sólo se llaman desde código
+  especializado a un tipo de clave, cosa que asegura `Key k`.
+- **Hilos.** Una `IORef` es un puntero atómico a su valor, y `modifyIORef'` y
+  `atomicModifyIORef'` vuelven a probar si otro hilo escribió en el medio, así que no se pierde
+  ningún cambio. Un vector o una tabla creados en IO, en un programa con hilos, tienen un lock
+  que toma cada operación, así que ningún hilo ve la mitad de un valor que otro está
+  escribiendo, y un map de Go nunca lo escriben dos a la vez: cada operación es atómica
+  (`insertWith` y `alter` también), una secuencia de ellas no. Un programa sin hilos, y todo lo
+  creado en ST, no tiene lock.
+- **Cada operación es una acción de IO:** una clausura y un paso del trampolín, unos 60 ns. La
+  criba hasta diez millones tarda 2,3 s, y el loop de Go 0,03 s.
+
 ## Performance
 
 Son números de una sola máquina, como referencia y no como benchmark.
@@ -553,6 +627,13 @@ Son números de una sola máquina, como referencia y no como benchmark.
 | `fib 32` dieciséis veces con `map` | 0,11 s | — |
 | lo mismo con `parMap`, en 8 procesadores | 0,02 s | — |
 | un millón de inserciones en un `Data.Map`, después medio millón de borrados con `foldl`, y búsquedas | 1,45 s | ~170 MB |
+| los primos hasta un millón, criba de Eratóstenes sobre un `STVector` (`examples/sieve.hgo`) | 0,26 s | ~9 MB |
+| lo mismo con un `Data.Map` (la criba incremental) | 1,65 s | ~20 MB |
+| los primos hasta diez millones, sobre un `STVector` | 2,3 s | ~25 MB |
+| lo mismo con un `Data.Map` | 23 s | ~130 MB |
+| lo mismo, Go escrito a mano | 0,03 s | ~12 MB |
+| cuántas veces aparece cada uno de un millón de números, en una `HashTable` en ST (`examples/frequencies.hgo`) | 0,33 s | ~17 MB |
+| lo mismo con un `Data.Map` | 1,0 s | ~25 MB |
 
 - **El código estricto en tipos concretos** se compila al Go que escribirías a mano, y rinde
   igual.
@@ -567,6 +648,11 @@ Son números de una sola máquina, como referencia y no como benchmark.
   de Go.
   Parsear la entrada como `[Char]` (con `unpack`) era cuatro veces más lento todavía;
   `Data.String.uncons` lee un `String` sin armar una lista.
+- **Las estructuras mutables** son más rápidas que los árboles de `Data.Map` para lo que sirven,
+  pero cada operación es una acción, una clausura y un paso del trampolín de IO, así que un loop
+  sobre un vector mutable sigue lejos del de Go. En un programa con hilos, un vector creado en
+  IO además toma un lock en cada acceso (la criba en IO: 2 s sola, 3,1 s en un programa con
+  hilos).
 
 ## Uso
 
@@ -645,6 +731,7 @@ Haskell 98.
 - `foreign import go` y `foreign import go type`.
 - Hilos, MVars, los canales de Go y `select`, `async` y `parMap`.
 - Vectores (slices de Go) e iteradores (el `iter.Seq` de Go).
+- Referencias, vectores y tablas de hash mutables, en IO y en ST, con un `runST` puro.
 
 **Falta**
 - **La recursión polimórfica a través de una restricción** (una función que se llama a sí misma
@@ -690,7 +777,7 @@ Haskell 98.
 | `runtime/runtime.go` | listas e IO con trampolín; se copia en cada programa |
 | `runtime/thunk_sequential.go` | thunks para un programa en una sola goroutine |
 | `runtime/concurrent.go` | thunks que cualquier goroutine puede forzar, hilos, MVars, canales, `select` y `parMap`, para un programa que los usa |
-| `runtime/lib_*.go` | lo que necesitan los hashes, las codificaciones, los procesos y el cliente HTTP; se copia sólo en un programa que lo usa, para que no todo programa importe `net/http` o `crypto` |
+| `runtime/lib_*.go` | lo que necesitan los hashes, las codificaciones, los procesos, el cliente HTTP y las estructuras mutables; se copia sólo en un programa que lo usa, para que no todo programa importe `net/http` o `crypto` |
 | `prelude/Prelude.hgo` | el prelude, escrito en Hago |
 | `lib/` | la biblioteca estándar (`Control.Monad.State` y compañía), escrita en Hago |
 
