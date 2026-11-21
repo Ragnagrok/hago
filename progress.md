@@ -228,6 +228,44 @@ Next, tools around the language, in this order:
       vscode-textmate on every `.hgo` file of the repository; comments, brackets, folding and
       indentation; the error of `hago check` as a diagnostic on open and on save, also on the
       saved file when it is in a module it imports. One error at a time, as `hago check` gives.
+- [x] **`hago fmt`, the part that needs no new syntax tree:** whitespace only, so that every
+      token keeps its column as the lexer counts it and its line among the lines that are not
+      blank: tabs in code become spaces, trailing whitespace goes, blank lines in a row become
+      one, one final newline. Literals and comments are untouched (blank lines inside a block
+      comment too). It checks every result itself (same syntax tree but for locations, same
+      comments in the same columns, the same file when run again) and refuses to write
+      otherwise; that check found its first bug, a block comment rebuilt backwards.
+      `--check` for CI. `check.sh` runs it on a copy of every `.hgo` but `rejected/`'s. The
+      repository's own files are not reformatted (two have a double blank line).
+- [ ] **`hago fmt` that lays code out,** as gofmt or ormolu do. Not done: keeping comments needs
+      the lexer and the parser to carry them, and the parser's tree is not a concrete one, so it
+      is a large change. The plan:
+      1. **The lexer keeps trivia.** A `lexTrivia` that gives every token its end column, and the
+         comments as tokens of their own (line or block, text, start and end); `lexer` drops
+         them, so the parser does not change. Small: the lexer already finds both.
+      2. **A concrete syntax tree.** Today's tree cannot be printed back as the source: the
+         parser desugars list literals into `:`, ranges into `enumFrom*`, comprehensions into
+         `concatMap` and `if`, sections and `(.name)` into lambdas, `-x` into `negate`, and
+         `p <- e` in `do` into a bind and a `case`, and it forgets parentheses, backquotes and
+         explicit braces. A printer from it would rewrite the forms, not only the layout. So the
+         Parsec grammar builds a `Hago.Cst` that keeps every form, each node with its first and
+         last token, and today's `Module` becomes `desugar :: Cst -> Module`, so the two cannot
+         drift apart. This is the large part: every production of `Parser.hs` (740 lines)
+         changes, and `rejected/syntax.hgo` and the `examples/syntax-*.hgo` must keep their
+         behaviour and messages.
+      3. **Comments attached to nodes,** by position, as ormolu does: a comment on lines of its own
+         goes with the declaration, statement, alternative, guard, field or element that follows
+         it, and one at the end of a line with the node that ends on that line.
+      4. **A printer** from the tree with comments to text, with Wadler's documents (the
+         algorithm of `examples/Text/Pretty.hgo`): blocks indented by two, `do`, `let`,
+         `where`, `case` and guards with their items aligned as the layout rule needs, breaking
+         applications, operator chains and lists that do not fit in 100 columns, and one blank
+         line between top-level declarations. To decide first: whether to keep the author's
+         alignment of `=`, `->` and end-of-line comments (the README's examples align them), and
+         how export lists and records break.
+      5. **The same checks as now,** over every `.hgo` of the repository: the tree desugared from
+         the printed text is the original's but for locations, the comments are the same and
+         attached to the same nodes, and printing again gives the same text.
 
 Known rough edges, found on the way and not fixed yet:
 
@@ -290,5 +328,6 @@ the REPL sessions in `repl/`, and checks that every program in `rejected/` fails
 `-- expects:` line. It compiles with an empty cache, then compiles every example again with the
 cache full and checks the Go is the same. `hago check` must pass every example and module of the
 library, and fail every program in `rejected/` with its error. The pages in `docs/library` must be
-what `hago doc` makes.
+what `hago doc` makes, and `hago fmt`, run on a copy of every `.hgo` but `rejected/`'s, must change
+nothing but whitespace and give the same file when run again.
 CI runs the same script on every push.

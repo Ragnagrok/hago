@@ -558,6 +558,7 @@ cabal run -v0 hago -- run examples/lazy.hgo                 # compile and run
 cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # just compile
 cabal run -v0 hago -- check examples/lazy.hgo              # just type check
 cabal run -v0 hago -- doc                                   # the library's reference, into docs/library
+cabal run -v0 hago -- fmt --check examples/*.hgo            # which files hago fmt would change
 cabal run -v0 hago -- repl                                  # evaluate expressions as you type them
 ./check.sh                                                  # every example and rejected program
 ```
@@ -578,6 +579,16 @@ constructors and every instance of them, classes with their methods. The names a
 type checker's, so they are exact (a synonym appears expanded, as `StateT s Identity`). The text
 is the comment block right above each declaration, and the comment at the top of the file
 introduces the module. `check.sh` fails if the committed pages are not what `hago doc` makes.
+
+`hago fmt FILE...` changes the whitespace of files in place, and `hago fmt --check FILE...`
+names the files it would change and exits with 1, for CI. It does only what cannot move a token
+or a comment: a tab in code becomes the spaces up to the column the layout rule gives it,
+whitespace at the end of a line goes, blank lines in a row become one, and the file ends with
+one newline. String and character literals and comments are left as they are (but for spaces at
+the end of a line). It does not lay code out anew, which needs a syntax tree that keeps comments
+and the forms the parser desugars (see `progress.md`). Before writing, it parses the result and
+checks that the syntax tree and the comments are the same and that formatting it again changes
+nothing, and refuses otherwise. `check.sh` runs it over every `.hgo` file of the repository.
 
 ### Editors
 
@@ -690,6 +701,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `src/Hago/Cache.hs` | separate compilation: what each module gives, kept on disk |
 | `src/Hago/Driver.hs` | finding modules, compiling each, then the whole program |
 | `src/Hago/Doc.hs` | `hago doc`: the library's reference, from the type checker and the comments |
+| `src/Hago/Format.hs` | `hago fmt`: whitespace only, checked to keep the syntax tree and the comments |
 | `runtime/runtime.go` | lists and trampolined IO, copied into every program |
 | `runtime/thunk_sequential.go` | thunks for a program on one goroutine |
 | `runtime/concurrent.go` | thunks any goroutine can force, threads, MVars, channels, `select`, `parMap`, for a program that uses them |

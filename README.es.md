@@ -580,6 +580,7 @@ cabal run -v0 hago -- run examples/lazy.hgo                 # compilar y correr
 cabal run -v0 hago -- build examples/lazy.hgo -o lazy.go    # sólo compilar
 cabal run -v0 hago -- check examples/lazy.hgo              # sólo chequear los tipos
 cabal run -v0 hago -- doc                                   # la referencia de la biblioteca, en docs/library
+cabal run -v0 hago -- fmt --check examples/*.hgo            # qué archivos cambiaría hago fmt
 cabal run -v0 hago -- repl                                  # evaluar expresiones a medida que se escriben
 ./check.sh                                                  # todos los ejemplos y los rechazados
 ```
@@ -602,6 +603,18 @@ type checker, así que son exactos (un sinónimo aparece expandido, como `StateT
 texto es el bloque de comentarios que está justo arriba de cada declaración, y el comentario del
 principio del archivo presenta el módulo. `check.sh` falla si las páginas que están en el
 repositorio no son las que hace `hago doc`.
+
+`hago fmt ARCHIVO...` cambia los espacios de los archivos en el lugar, y `hago fmt --check
+ARCHIVO...` nombra los archivos que cambiaría y sale con 1, para el CI. Hace sólo lo que no puede
+mover un token ni un comentario: un tab en el código se vuelve los espacios hasta la columna que
+le da la regla de layout, se van los espacios al final de una línea, varias líneas en blanco
+seguidas quedan en una, y el archivo termina con un solo salto de línea. Los literales de strings
+y de caracteres y los comentarios quedan como están (salvo los espacios al final de una línea).
+No vuelve a diagramar el código, para lo que hace falta un árbol de sintaxis que guarde los
+comentarios y las formas que el parser traduce (ver `progress.md`). Antes de escribir, parsea el
+resultado y chequea que el árbol de sintaxis y los comentarios sean los mismos y que formatearlo
+de nuevo no cambie nada, y si no, se niega. `check.sh` lo corre sobre todos los `.hgo` del
+repositorio.
 
 ### Editores
 
@@ -720,6 +733,7 @@ Haskell 98.
 | `src/Hago/Cache.hs` | compilación separada: lo que da cada módulo, guardado en disco |
 | `src/Hago/Driver.hs` | encontrar los módulos, compilar cada uno, y después el programa entero |
 | `src/Hago/Doc.hs` | `hago doc`: la referencia de la biblioteca, desde el type checker y los comentarios |
+| `src/Hago/Format.hs` | `hago fmt`: sólo espacios, chequeado para que no cambie el árbol de sintaxis ni los comentarios |
 | `runtime/runtime.go` | listas e IO con trampolín; se copia en cada programa |
 | `runtime/thunk_sequential.go` | thunks para un programa en una sola goroutine |
 | `runtime/concurrent.go` | thunks que cualquier goroutine puede forzar, hilos, MVars, canales, `select` y `parMap`, para un programa que los usa |

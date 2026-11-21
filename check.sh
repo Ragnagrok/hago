@@ -7,7 +7,7 @@
 # hago check, which must pass every example and module of the library. Modules
 # are compiled with an empty cache, and every example again with the cache
 # full, which must give the same Go. The reference in docs/library must be
-# what hago doc makes.
+# what hago doc makes, and hago fmt must keep every file's meaning and comments.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -96,6 +96,25 @@ if diff -r "$out/docs" docs/library >/dev/null; then
 else
   echo "FAIL docs/library is not what hago doc makes; run it:"; diff -r "$out/docs" docs/library | head -20 || true; failures=1
 fi
+
+# hago fmt on a copy of every .hgo file but rejected/'s. It checks itself that
+# the syntax tree and the comments stay the same, and fails otherwise; here,
+# that only blank lines and whitespace at the ends of lines changed, and that
+# running it again changes nothing
+mkdir -p "$out/fmt"
+formatted=1
+for f in $(find examples lib prelude -name '*.hgo' | sort); do
+  copy="$out/fmt/$(echo "$f" | tr / _)"
+  cp "$f" "$copy"
+  if ! output=$("$hago" fmt "$copy" 2>&1); then
+    echo "FAIL hago fmt $f:"; echo "$output"; failures=1; formatted=0
+  elif ! cmp -s <(sed 's/[[:space:]]*$//' "$f" | grep -v '^$') <(grep -v '^$' "$copy"); then
+    echo "FAIL hago fmt $f changed more than blank lines and trailing whitespace"; failures=1; formatted=0
+  elif ! "$hago" fmt --check "$copy" >/dev/null; then
+    echo "FAIL hago fmt $f is not the same when run again"; failures=1; formatted=0
+  fi
+done
+[ $formatted == 1 ] && echo "ok   hago fmt keeps every file's syntax tree and comments, and gives the same file again"
 
 # a session at the prompt: the lines after "hago> " and "hago| " are typed,
 # and the transcript must come out the same
