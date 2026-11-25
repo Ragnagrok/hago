@@ -1857,6 +1857,8 @@ data Prod
   = PRange CExpr RangeStep (Maybe CExpr)
     -- ^ a range of Int, from where, by what step, up to where (or the end of
     -- Int): [a ..], [a .. b], [a, b ..], [a, b .. c]
+  | PRangeDown CExpr Integer CExpr
+    -- ^ the range [a, a + n .. c], from its last element back to a (see 'backwards')
   | PCells CExpr                  -- ^ any other list, whose cells are visited
   | PSeq CExpr                    -- ^ any other Iter, ranged over
   | PMap CExpr Prod
@@ -2141,6 +2143,26 @@ genLoop ctx p k = case p of
       -- the next one would be past the end of Int: the range stops, as intsTo does
       [ "if " ++ up ++ " && " ++ v ++ " > int(^uint(0)>>1)-" ++ s' ++ " || " ++ down ++ " && " ++ v ++ " < -int(^uint(0)>>1)-1-" ++ s' ++ " {", "break", "}"
       , "}" ]
+  PRangeDown a n c -> do
+    i <- freshName "i"
+    a0 <- freshName "a"
+    l' <- freshName "l"
+    a' <- genExpr ctx a
+    c' <- genExpr ctx c
+    b <- visit (bindLocals ctx [(i, 0)]) i
+    let v = mangle i
+        m = show (abs n)
+        -- the last element: a and as many steps as fit, counted in uint,
+        -- where the distance between any two Ints fits
+        (cond, dist, lastE, back) = if n > 0
+          then (a0 ++ " <= " ++ l', "uint(" ++ l' ++ ") - uint(" ++ a0 ++ ")", a0 ++ " + int(", v ++ " -= " ++ m)
+          else (a0 ++ " >= " ++ l', "uint(" ++ a0 ++ ") - uint(" ++ l' ++ ")", a0 ++ " - int(", v ++ " += " ++ m)
+    pure $
+      [a0 ++ " := " ++ a', l' ++ " := " ++ c', "if " ++ cond ++ " {"
+      , v ++ " := " ++ lastE ++ "(" ++ dist ++ ") / " ++ m ++ " * " ++ m ++ ")"
+      , "for ; ; " ++ back ++ " {" ]
+        ++ b ++
+      ["if " ++ v ++ " == " ++ a0 ++ " {", "break", "}", "}", "}"]
   PCells e -> do
     c <- freshName "c"
     x <- freshName "e"
@@ -2517,31 +2539,74 @@ fuseFoldr ctx0 t k0 z xs0 = do
         pure (["{"] ++ ls ++ b' ++ ["}"])
       _ -> error "fuseFoldr: not a step that stops"
 
--- | The step of a listFoldr that forces its rest once, whatever happens,
--- and does nothing else that could fail: x + rest, max x rest. It is
--- recursion, not a loop, but the elements can be kept in a Go slice and
--- the step taken from the last one back, without the Go stack and the
--- suspension per element that the Prelude's listFoldr takes. Since nothing
--- but the rest can fail, taking the steps backwards computes the same.
-strictStepOf :: Ctx -> CExpr -> Maybe (Name, Name, CExpr)
+-- | The step of a listFoldr that forces its rest once, whatever happens:
+-- x + rest, max x rest, f x + rest, x `div` rest. It is recursion, not a
+-- loop, but the elements can be kept and the step taken from the last one
+-- back, without the Go stack and the suspension per element that the
+-- Prelude's listFoldr takes. In the recursion, what the step computes
+-- before it forces its rest is computed from the first element on (with
+-- the elements, as the list's cells are made), and what it computes after,
+-- from the last one back. So the first part is computed on the way
+-- forward and kept with each element, unless it is total (it is then
+-- computed on the way back, which nothing can tell), and the second on the
+-- way back: everything happens in the recursion's order. The rest is
+-- forced first where nothing comes before it but what is computed at once
+-- (the function and earlier arguments of a call, the bindings before a
+-- let's body, the condition of an if, the scrutinee of a case), not in a
+-- branch, a lambda or a suspension; it may be used again after that,
+-- anywhere, forced, since it is then the same value. The result: the
+-- element's name, the rest's,
+-- what is computed forward (names, types and expressions, in order), and
+-- the step with those names for them.
+strictStepOf :: Ctx -> CExpr -> Maybe (Name, Name, [(Name, Type, CExpr)], CExpr)
 strictStepOf ctx k = case lam2 k of
-  Just (x, r, body) | uses r body == 1, forcedOnce r body -> Just (x, r, body)
+  Just (x, r, body) | uses r body == forces r body, Just (_, hs, body') <- split x r (0 :: Int) body -> Just (x, r, hs, body')
   _ -> Nothing
   where
     uses r body = length [() | CVar v _ _ <- everything body, v == r]
-    -- the rest is forced (used once, not in a branch, a lambda or a
-    -- suspension), and the rest of the step is total
-    forcedOnce r e = case e of
-      CForce (CVar v _ _) -> v == r
-      _ | r `notElem` coreRefs e -> total e
-      CApp f as | totalHead f -> all (\a -> r `notElem` coreRefs a && total a || forcedOnce r a) as
-      CLet bs b _ -> all (\(CBind _ _ _ x) -> r `notElem` coreRefs x && total x) bs && forcedOnce r b
-      _ -> False
-    totalHead = \case
+    forces r body = length [() | CForce (CVar v _ _) <- everything body, v == r]
+    mentions r e = r `elem` coreRefs e
+    split x r n e = case e of
+      CForce (CVar v _ _) | v == r -> Just (n, [], e)
+      CApp f as
+        | headOk f, (pts, _) <- splitFun (length as) (zonk (progSubst (cxProg ctx)) (headType f)), length pts == length as
+        , (pre, a : post) <- break (mentions r) as -> do
+            let (n', hs, pre') = hoist x n (zip pts pre)
+            (n'', hs', a') <- split x r n' a
+            Just (n'', hs ++ hs', CApp f (pre' ++ [a'] ++ post))
+      CLet bs b t | all (\(CBind _ _ ar _) -> ar == 0) bs -> case break (\(CBind _ _ _ v) -> mentions r v) bs of
+        (pre, []) -> do
+          (n', hs, b') <- split x r n b
+          Just (n', [(m, ty, v) | CBind m ty _ v <- pre] ++ hs, b')
+        (pre, CBind m ty ar v : after) -> do
+          (n', hs, v') <- split x r n v
+          Just (n', [(m', ty', w) | CBind m' ty' _ w <- pre] ++ hs, CLet (CBind m ty ar v' : after) b t)
+      CIf c a b t | mentions r c -> (\(n', hs, c') -> (n', hs, CIf c' a b t)) <$> split x r n c
+      CMatch [sc] rows t | mentions r sc -> (\(n', hs, sc') -> (n', hs, CMatch [sc'] rows t)) <$> split x r n sc
+      _ -> Nothing
+    headOk = \case
+      CVar {} -> True
       CCon {} -> True
-      CVar p _ _ | isPrim ctx p -> p `elem` totalPrims
-      CVar op _ _ -> op `elem` ["&&", "||"] && isTop ctx op
       _ -> False
+    headType = \case
+      CVar _ _ t -> t
+      CCon _ _ t -> t
+      _ -> tUnit
+    -- an argument computed before the rest: kept where it is if it is
+    -- total, else computed forward, in a variable of its own
+    hoist _ n [] = (n, [], [])
+    hoist x n ((pt, a) : more)
+      | totalExpr ctx a = let (n', hs, as) = hoist x n more in (n', hs, a : as)
+      | otherwise =
+          let h = x ++ "#h" ++ show n
+              (n', hs, as) = hoist x (n + 1) more
+           in (n', (h, pt, a) : hs, CVar h (Inst [] []) pt : as)
+
+-- | An expression that cannot fail and has nothing to show: computing it
+-- now or later, or not at all, is the same.
+totalExpr :: Ctx -> CExpr -> Bool
+totalExpr ctx = total
+  where
     total = \case
       CVar {} -> True
       CLit _ -> True
@@ -2561,8 +2626,13 @@ strictStepOf ctx k = case lam2 k of
       [ "primAdd", "primSub", "primMul", "primNeg", "primEq", "primNeq", "primLt", "primLe", "primGt", "primGe"
       , "primIntToDouble", "primFDiv" ]
 
--- | Such a listFoldr: its elements into a slice, z, then the step from the
--- last element back, with the rest the value so far.
+-- | Such a listFoldr: z, then the elements, each with what its step
+-- computes forward, onto a stack, then the step from the last element
+-- back, with the rest the value so far. The stack is in blocks, which are
+-- never copied (a slice that doubles would leave the old ones to the
+-- collector) and are let go on the way back. When nothing is computed
+-- forward and the elements are a range whose step is known, they are
+-- visited from the last back instead, and nothing is kept.
 fuseFoldrBack :: Ctx -> Type -> CExpr -> CExpr -> CExpr -> Gen String
 fuseFoldrBack ctx0 t k0 z xs0 = do
   (k, xs) <- renamed2 k0 xs0
@@ -2574,23 +2644,82 @@ fuseFoldrBack ctx0 t k0 z xs0 = do
       b = goTy ctx resTy
   case strictStepOf ctx k of
     Nothing -> error "fuseFoldrBack: not a strict step"
-    Just (x, r, body) -> do
+    Just (x, r, hs, body) -> do
       acc <- freshName "acc"
-      xsV <- freshName "xs"
-      i <- freshName "i"
+      rv <- freshName "rest"
       z' <- genExpr ctx z
-      loop <- genLoop ctx (prodOf ctx xs) $ \_ e -> pure [xsV ++ " = append(" ++ xsV ++ ", " ++ mangle e ++ ")"]
-      let ctxA = bindLocals ctx [(acc, 0), (x, 0)]
-          body' = everywhere (\case
-            CForce (CVar v _ _) | v == r -> CVar acc (Inst [] []) resTy
-            other -> other) body
-      step <- genExpr ctxA body'
-      pure $ intercalate "\n"
-        ( ["func() " ++ b ++ " {", "var " ++ mangle acc ++ " " ++ b ++ " = " ++ z', "var " ++ xsV ++ " []" ++ goTy ctx elTy]
-            ++ loop
-            ++ [ "for " ++ i ++ " := len(" ++ xsV ++ ") - 1; " ++ i ++ " >= 0; " ++ i ++ "-- {"
-               , mangle x ++ " := " ++ xsV ++ "[" ++ i ++ "]", "_ = " ++ mangle x
-               , mangle acc ++ " = " ++ step, "}", "return " ++ mangle acc, "}()" ] )
+      let restIsVar = everywhere (\case
+            CForce (CVar v _ _) | v == r -> CVar rv (Inst [] []) resTy
+            other -> other)
+          start = ["func() " ++ b ++ " {", "var " ++ mangle acc ++ " " ++ b ++ " = " ++ z']
+          finish = ["return " ++ mangle acc, "}()"]
+          -- the step, the element and what was computed forward bound; the
+          -- rest in a variable of each round's, which closures may keep
+          back c = do
+            step <- genExpr (bindLocals c [(acc, 0), (rv, 0)]) (restIsVar body)
+            pure [mangle rv ++ " := " ++ mangle acc, "_ = " ++ mangle rv, mangle acc ++ " = " ++ step]
+      case backwards ctx (prodOf ctx xs) of
+        Just p | null hs -> do
+          loop <- genLoop ctx p $ \c e -> ([mangle x ++ " := " ++ mangle e, "_ = " ++ mangle x] ++) <$> back (bindLocals c [(x, 0)])
+          pure (intercalate "\n" (start ++ loop ++ finish))
+        _ -> do
+          chunks <- freshName "chunks"
+          top <- freshName "top"
+          ci <- freshName "ci"
+          ch <- freshName "ch"
+          i <- freshName "i"
+          el <- freshName "el"
+          -- kept: what the way back uses, of the element and what was computed
+          let used = coreRefs body
+              fields = [(f, ft) | (f, ft) <- (x, elTy) : [(h, ht) | (h, ht, _) <- hs], f `elem` used]
+              single = length fields == 1
+              ty = if single then concat [goTy ctx ft | (_, ft) <- fields] else "struct{ " ++ intercalate "; " ["f" ++ show j ++ " " ++ goTy ctx ft | (j, (_, ft)) <- zip [0 :: Int ..] fields] ++ " }"
+          loop <- genLoop ctx (prodOf ctx xs) $ \c e -> do
+            (_, ls) <- foldM (\(cc, acc') (h, _, he) -> do
+                he' <- genExpr cc he
+                pure (bindLocals cc [(h, 0)], acc' ++ [mangle h ++ " := " ++ he', "_ = " ++ mangle h]))
+              (bindLocals c [(x, 0)], [mangle x ++ " := " ++ mangle e, "_ = " ++ mangle x]) hs
+            let v = if single then commas (map (mangle . fst) fields) else ty ++ "{" ++ commas (map (mangle . fst) fields) ++ "}"
+            pure (ls ++
+              [ "if len(" ++ top ++ ") == cap(" ++ top ++ ") {"
+              , "if " ++ top ++ " != nil {", chunks ++ " = append(" ++ chunks ++ ", " ++ top ++ ")", "}"
+              , top ++ " = make([]" ++ ty ++ ", 0, min(max(2*cap(" ++ top ++ "), 32), 16384))", "}"
+              , top ++ " = append(" ++ top ++ ", " ++ v ++ ")" ])
+          stepLs <- back (bindLocals ctx [(f, 0) | (f, _) <- fields])
+          let unpack = if single
+                then concat [[mangle f ++ " := " ++ ch ++ "[" ++ i ++ "]", "_ = " ++ mangle f] | (f, _) <- fields]
+                else concat [[mangle f ++ " := " ++ el ++ ".f" ++ show j, "_ = " ++ mangle f] | (j, (f, _)) <- zip [0 :: Int ..] fields]
+              getEl = if single then [] else [el ++ " := " ++ ch ++ "[" ++ i ++ "]"]
+          pure $ intercalate "\n"
+            ( start
+                ++ ["var " ++ chunks ++ " [][]" ++ ty, "var " ++ top ++ " []" ++ ty]
+                ++ loop
+                ++ [ chunks ++ " = append(" ++ chunks ++ ", " ++ top ++ ")"
+                   , "for " ++ ci ++ " := len(" ++ chunks ++ ") - 1; " ++ ci ++ " >= 0; " ++ ci ++ "-- {"
+                   , ch ++ " := " ++ chunks ++ "[" ++ ci ++ "]", chunks ++ "[" ++ ci ++ "] = nil"
+                   , "for " ++ i ++ " := len(" ++ ch ++ ") - 1; " ++ i ++ " >= 0; " ++ i ++ "-- {" ]
+                ++ getEl ++ unpack ++ stepLs
+                ++ ["}", "}"]
+                ++ finish )
+
+-- | The same elements, from the last back, when that can be done without
+-- keeping them: a range whose end and step are known (the step a literal),
+-- through maps and filters whose functions are total, since then the order
+-- in which they are applied cannot be seen.
+backwards :: Ctx -> Prod -> Maybe Prod
+backwards ctx = \case
+  PRange a (By st) (Just c) | Just n <- literal st, n /= 0, abs n < 2 ^ (62 :: Int) -> Just (PRangeDown a n c)
+  PMap g q | totalFn g -> PMap g <$> backwards ctx q
+  PFilter g q | totalFn g -> PFilter g <$> backwards ctx q
+  _ -> Nothing
+  where
+    literal = \case
+      CLit (LInt n) -> Just n
+      CNum n _ _ -> Just n
+      _ -> Nothing
+    totalFn = \case
+      CLam _ _ body -> totalExpr ctx body
+      _ -> False
 
 -- | The step of a listFoldr of actions that runs some and then its rest:
 -- mapM_, forM_, traverse_, sequence_.

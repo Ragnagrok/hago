@@ -482,9 +482,46 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
         fail, so the order of the steps cannot be seen. `foldr (+) 0 [1 .. 10000000]` ran out
         of the Go stack (1 GB) before; now 0.10 s and 190 MB, GHC 0.13 s and 169 MB.
       `examples/fusion.hgo` checks the lists' cases against GHC and the `Iter`s' by hand.
-- [ ] **Left as recursion:** a `foldr` whose step calls a function not known to be total
-      (`max x rest` stays a call to `max`, `x `div` rest` can fail). The backwards fold's
-      slice holds every element at once and grows by doubling: 190 MB for ten million.
+- [x] **Left as recursion** (2026-11-25): a `foldr` whose step called a function not known
+      to be total (`max x rest`, `x `div` rest`, even `x + rest` when `+` stayed a call to the
+      `Num Int` method) ran out of the Go stack at ten million; and the backwards fold's slice
+      held every element and grew by doubling, 215 MB for ten million. Three changes, in
+      `strictStepOf` and `fuseFoldrBack`:
+      - **Before the rest, forward; after it, back.** In `listFoldr g z (x : xs)`, what the
+        step computes before it forces its rest is computed from the first element on, as
+        the cells are made, and what it computes after, from the last back. So the step is
+        split where the rest is first forced (the function and earlier arguments of a call,
+        the bindings before a let's body, the condition of an `if`, the scrutinee of a
+        `case`): what comes before is computed on the way forward and kept with its element,
+        unless it is total (then on the way back, which nothing can tell); what comes after,
+        any call, on the way back. Everything happens in the recursion's order, so the step
+        no longer needs to be total: `failing/foldr-before-rest.hgo` fails at the second
+        element, `failing/foldr-after-rest.hgo` at the fourth, as the recursion does. The
+        rest may be used again after it is forced, anywhere, since it is then a value; each
+        round has its own variable for it, which closures keep. Only what the way back uses
+        is kept.
+      - **Blocks, not a slice that doubles.** The elements go onto a stack of blocks (32 to
+        16384 elements), never copied, each let go on the way back: no garbage is left for
+        the collector while the elements are kept.
+      - **A range from its end.** When nothing is kept but the element and the list is a
+        range whose step is a literal, through maps and filters of total functions, it is
+        visited from its last element back (counted in `uint`, so the ends of `Int` hold),
+        and nothing is kept.
+      `examples/fusion.hgo` checks steps with `max`, `mod`, a recursive function, `let`s,
+      an `if` and a `case` on the rest, a map that may fail, closures that keep the rest, and
+      ranges at the ends of `Int`, against GHC. Library code gained too: `replicateM` and
+      `traverse` in applicatives that are not IO (the parser's `count`) are such folds.
+      Measured, before and after, nine runs interleaved; GHC 9.12 with `-O2`:
+
+      | Program | Before | After | GHC |
+      | --- | --- | --- | --- |
+      | `foldr (+) 0 [1 .. 10000000]` | 0.11 s, 220 to 310 MB | <0.01 s, 2 MB | 0.14 s, 169 MB |
+      | `foldr max 0 [1 .. 10000000]` (`bench/foldr-max.hgo`) | out of Go stack (1.45 s, 1 GB) | <0.01 s, 2 MB | 0.14 s, 169 MB |
+      | ``foldr (\x r -> x `mod` 7 + r) 0 [1 .. 10000000]`` (`bench/foldr-mod.hgo`) | out of Go stack (1.40 s, 1 GB) | 0.03 s, 81 MB | 0.15 s, 169 MB |
+- [ ] **A `foldr` left as recursion:** a step whose rest is forced only in a branch
+      (`if x > 0 then x + rest else rest - 1`), or in a lambda or a suspension, or passed on
+      unforced: `foldl` written with `foldr` (`foldr (\x k acc -> k (acc + x)) id xs 0`) makes
+      a closure per element and calls them nested.
 - [x] **What the garbage collector costs, and `Data.Map`** (2026-11-25). pprof had Go's
       collector marking at two thirds of the CPU of the `Data.Map` programs, and the nodes of
       the tree at 84 % to 97 % of what they allocated (2.3 GB for the sieve to a million): a

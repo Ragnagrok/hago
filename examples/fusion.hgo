@@ -84,6 +84,18 @@ main = do
   -- a foldr that is recursion: its elements kept, the step taken from the last back
   print (foldr (\x acc -> x + 2 * acc) 0 [1 .. 10], foldr (-) 0 [1 .. 10], foldr (\x acc -> x - acc) 100 (filter odd [1 .. 9]))
   print (foldr (+) 0 [1 .. 3000000])
+  -- steps that call what may fail, before the rest (computed with the
+  -- elements, forward) and after it (from the last back)
+  print (foldr max 0 [3, 1, 4, 1, 5, 9, 2, 6], foldr (\x r -> x `mod` 7 + r) 0 [1 .. 100000], foldr (\x r -> digits x + r) 0 [1 .. 100000])
+  print (foldr (\x r -> let y = x * 3 in y - r) 0 [1 .. 10], foldr (\x r -> let s = r + x in s * 2 `mod` 1000003) 1 [1 .. 1000])
+  print (foldr (\x r -> if r > 100 then r - x else r + x * x) 0 [1 .. 50], foldr (\x r -> case r of (a, b) -> (a + x, max b (x `mod` 13))) (0, 0) [1 .. 100])
+  print (foldr (\x r -> x + r) 0 (map (\x -> 100 `div` x) [1 .. 50]), foldr (\x r -> x `div` (r + 1)) 1000 [3, 2, 5])
+  print (foldr max 0 [1 .. 3000000], foldr (\x r -> digits x + r) 0 (map (* 7) [1 .. 3000000]))
+  -- the rest used again after it is forced, also in closures kept in the result
+  print (map (\f -> f 1) (snd (foldr (\x r -> case r of (n, fs) -> (n + x, (\y -> fst r * y + x) : fs)) (0, []) [1 .. 4])))
+  -- from the last element of a range back: its ends, empty ones, maps and filters
+  print (foldr (\x r -> x - r) 0 [maxBound - 3 .. maxBound :: Int], foldr (\x r -> x - r) 0 [minBound .. minBound + 3 :: Int])
+  print (foldr (+) 7 [5 .. 1], foldr (\x r -> x - r) 0 [3 .. 3], foldr (\x r -> x - r) 0 (map (* 3) (filter odd [1 .. 20])))
   -- Iter.drop, Iter.dropWhile, Iter.find and what is made of it
   print (Iter.sum (Iter.drop 2 (Iter.range 1 5)), Iter.sum (Iter.dropWhile odd (Iter.fromList [1, 3, 4, 5])))
   print (Iter.find (> 3) (Iter.map (* 2) (Iter.from 1)), Iter.any even (Iter.range 1 5), Iter.all odd (Iter.range 1 5), Iter.elem 4 (Iter.range 1 3))
@@ -91,3 +103,6 @@ main = do
     x <- Iter.from 1
     y <- Iter.range 1 x
     if x * y == 12 then pure (x, y) else Iter.fromList []))
+
+digits :: Int -> Int
+digits n = if n < 10 then 1 else 1 + digits (n `div` 10)

@@ -37,6 +37,8 @@ progs=(
   "the same over a Vector (unboxed in GHC)|bench/squares-vector.hgo|squares-vector||"
   "Pythagorean triples, comprehension|bench/triples-list.hgo|triples-list||"
   "foldr (+) over 10M, recursion|bench/foldr-sum.hgo|foldr-sum||"
+  "foldr max over 10M|bench/foldr-max.hgo|foldr-max||"
+  "foldr over 10M, a step with mod before the rest|bench/foldr-mod.hgo|foldr-mod||"
   "mapM_ over 1M in IO|bench/mapm-io.hgo|mapm-io||"
   "recursive IO loop, 5M|bench/loop-io.hgo|loop-io||"
   "the same, two functions calling each other|bench/loop-io-mutual.hgo|loop-io-mutual||"

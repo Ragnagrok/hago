@@ -528,11 +528,15 @@ celda de la primera alcanzada antes que la de la segunda, como hace `zip`. Tambi
 `mapM_` en una mónada que pasa un estado, como `StateT s IO`: el estado es una variable del
 loop. `drop`, `dropWhile`, `zip3`, `zipWith3`, y un `foldr` cuyo paso descarta su resto (la
 lista termina ahí) arman listas de la misma manera. Un `foldr` cuyo paso necesita el resto para
-calcular su propio valor (`foldr (+) 0 xs`, `foldr (\x acc -> x + 2 * acc) 0 xs`) es
-recursión, no un loop; cuando el paso fuerza el resto una vez y nada más en él puede fallar, sus
-elementos se guardan en un slice de Go y el paso se toma desde el último hacia atrás, así que
-diez millones de elementos no necesitan ni la pila de Go ni una suspensión cada uno. Una lista
-en una variable, o pasada a una función, es una lista como antes (`examples/fusion.hgo`).
+calcular su propio valor (`foldr (+) 0 xs`, `foldr max 0 xs`,
+``foldr (\x acc -> f x `div` acc) 1 xs``) es recursión, no un loop. Cuando el paso fuerza el
+resto fuera de ramas y lambdas, lo que calcula antes del resto se calcula a la ida, con los
+elementos, y se guarda con cada uno (lo que no puede fallar se deja para después), y el resto
+del paso se toma desde el último elemento hacia atrás: todo en el orden de la recursión, así
+que diez millones de elementos no necesitan ni la pila de Go ni una suspensión cada uno. Los
+elementos se guardan en bloques que nunca se copian, y no se guardan cuando son un rango: se
+recorre desde su final. Una lista en una variable, o pasada a una función, es una lista como
+antes (`examples/fusion.hgo`).
 
 Una función que se le pasa a una función de Go, como hacen `map`, `filter` y `foldl`, se genera
 como una función de Go de todos sus argumentos, así que un pipeline sobre un `Iter` corre como el
@@ -692,7 +696,8 @@ lado a lado con otros (`bench/run.sh HAGO_VIEJO HAGO_NUEVO`).
 | ternas pitagóricas hasta 400, como comprensión de listas | <0,01 s | ~2 MB |
 | lo mismo como `do` sobre `Iter` | <0,01 s | ~2 MB |
 | lo mismo con `Iter.filter` para el último generador y la guarda | <0,01 s | ~2 MB |
-| `foldr (+) 0 [1 .. 10000000]` | 0,12 s | ~215 MB |
+| `foldr (+) 0 [1 .. 10000000]` | <0,01 s | ~2 MB |
+| ``foldr (\x r -> x `mod` 7 + r) 0 [1 .. 10000000]`` (`mod` puede fallar: se guarda, calculado a la ida) | 0,03 s | ~81 MB |
 | `mapM_` sobre un millón de elementos en IO | <0,01 s | ~2 MB |
 | un loop recursivo en IO de cinco millones de iteraciones | <0,01 s | ~2 MB |
 | lo mismo con dos funciones que se llaman entre sí | <0,01 s | ~2 MB |
@@ -779,7 +784,9 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
 | suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | <0,01 s | <0,01 s |
 | lo mismo sobre un `Data.Vector` (unboxed en GHC) | 0,02 s | 0,01 s |
 | ternas pitagóricas hasta 400, como comprensión de listas | <0,01 s | <0,01 s |
-| `foldr (+) 0 [1 .. 10000000]` | 0,12 s, 216 MB | 0,14 s, 164 MB |
+| `foldr (+) 0 [1 .. 10000000]` | <0,01 s, 2 MB | 0,14 s, 169 MB |
+| `foldr max 0 [1 .. 10000000]` | <0,01 s, 2 MB | 0,14 s, 169 MB |
+| ``foldr (\x r -> x `mod` 7 + r) 0 [1 .. 10000000]`` | 0,03 s, 81 MB | 0,15 s, 169 MB |
 | `mapM_` sobre un millón de elementos en IO | <0,01 s | <0,01 s |
 | un loop recursivo en IO de cinco millones de iteraciones | <0,01 s | 0,01 s |
 | lo mismo con dos funciones que se llaman entre sí | <0,01 s | 0,01 s |
@@ -801,8 +808,10 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
   se arman donde se pliegan (los dos los vuelven loops, también en IO y en `StateT`), los loops
   recursivos en IO, los arreglos mutables, en ST, en IO y en un programa con hilos, `parMap`.
 - **Adelante Hago:** un `Data.Map` construido por un pliegue o un loop, que Hago construye en el
-  lugar (cuatro veces más rápido, un tercio de la memoria); el parser y el impresor de JSON; la
-  tabla hash; y la memoria en general.
+  lugar (cuatro veces más rápido, un tercio de la memoria); un `foldr` que es recursión, tomado
+  desde el último elemento hacia atrás (cinco veces más rápido, con la mitad de la memoria, o
+  ninguna sobre un rango); el parser y el impresor de JSON; la tabla hash; y la memoria en
+  general.
 - **Adelante GHC:** la criba con un map, por la mitad más: cada paso todavía reserva las listas
   que guarda (`[p]`, `++`), donde el recolector generacional de GHC anda mejor que el de Go.
 

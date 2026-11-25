@@ -1,0 +1,9 @@
+-- expects: error: second
+-- What a step of foldr computes before its rest is computed from the first
+-- element on, as in the recursion, even where the fold goes from the last
+-- element back: the second element fails first.
+check :: Int -> Int
+check x = if x == 2 then error "second" else if x == 4 then error "fourth" else x
+
+main :: IO ()
+main = print (foldr (\x r -> check x + r) 0 [1 .. 5])

@@ -1,0 +1,4 @@
+-- What the step computes before the rest (`mod`, which may fail) is computed
+-- forward and kept with each element.
+main :: IO ()
+main = print (foldr (\x r -> x `mod` 7 + r) 0 [1 .. 10000000])

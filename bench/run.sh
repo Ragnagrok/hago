@@ -30,6 +30,8 @@ progs=(
   "the same as do over Iter|bench/triples-iter.hgo|"
   "the same with Iter.filter|bench/triples-filter.hgo|"
   "foldr (+) over 10M, recursion|bench/foldr-sum.hgo|"
+  "foldr max over 10M|bench/foldr-max.hgo|"
+  "foldr over 10M, a step with mod before the rest|bench/foldr-mod.hgo|"
   "mapM_ over 1M in IO|bench/mapm-io.hgo|"
   "recursive IO loop, 5M|bench/loop-io.hgo|"
   "the same, two functions calling each other|bench/loop-io-mutual.hgo|"

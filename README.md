@@ -508,10 +508,13 @@ the other a step at a time, the first one's cell reached before the second's, as
 So is `mapM_` in a monad that passes a state, as `StateT s IO` does: the state is a variable
 of the loop. `drop`, `dropWhile`, `zip3`, `zipWith3`, and a `foldr` whose step drops its rest
 (it ends the list there) make lists the same way. A `foldr` whose step needs the rest to
-compute its own value (`foldr (+) 0 xs`, `foldr (\x acc -> x + 2 * acc) 0 xs`) is recursion,
-not a loop; when the step forces the rest once and nothing else in it can fail, its elements
-are kept in a Go slice and the step taken from the last one back, so ten million elements
-need neither the Go stack nor a suspension each. A list in a variable, or given to a
+compute its own value (`foldr (+) 0 xs`, `foldr max 0 xs`, ``foldr (\x acc -> f x `div` acc) 1 xs``)
+is recursion, not a loop. When the step forces the rest outside branches and lambdas, what it
+computes before the rest is computed on the way forward, with the elements, and kept with
+each one (what cannot fail is left for later), and the rest of the step is taken from the last
+element back: everything in the recursion's order, so ten million elements need neither the
+Go stack nor a suspension each. The elements are kept in blocks that are never copied, and not
+at all when they are a range: it is visited from its end. A list in a variable, or given to a
 function, is a list as before (`examples/fusion.hgo`).
 
 A function given to a Go function, as `map`, `filter` and `foldl` give theirs, is generated as a
@@ -669,7 +672,8 @@ side by side with others (`bench/run.sh OLD_HAGO NEW_HAGO`).
 | Pythagorean triples up to 400, as a list comprehension | <0.01 s | ~2 MB |
 | the same as `do` over `Iter` | <0.01 s | ~2 MB |
 | the same with `Iter.filter` for the last generator and the guard | <0.01 s | ~2 MB |
-| `foldr (+) 0 [1 .. 10000000]` | 0.12 s | ~215 MB |
+| `foldr (+) 0 [1 .. 10000000]` | <0.01 s | ~2 MB |
+| ``foldr (\x r -> x `mod` 7 + r) 0 [1 .. 10000000]`` (`mod` may fail: kept, computed forward) | 0.03 s | ~81 MB |
 | `mapM_` over a million elements in IO | <0.01 s | ~2 MB |
 | a recursive IO loop of five million iterations | <0.01 s | ~2 MB |
 | the same as two functions that call each other | <0.01 s | ~2 MB |
@@ -751,7 +755,9 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
 | sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | <0.01 s | <0.01 s |
 | the same over a `Data.Vector` (unboxed in GHC) | 0.02 s | 0.01 s |
 | Pythagorean triples up to 400, as a list comprehension | <0.01 s | <0.01 s |
-| `foldr (+) 0 [1 .. 10000000]` | 0.12 s, 216 MB | 0.14 s, 164 MB |
+| `foldr (+) 0 [1 .. 10000000]` | <0.01 s, 2 MB | 0.14 s, 169 MB |
+| `foldr max 0 [1 .. 10000000]` | <0.01 s, 2 MB | 0.14 s, 169 MB |
+| ``foldr (\x r -> x `mod` 7 + r) 0 [1 .. 10000000]`` | 0.03 s, 81 MB | 0.15 s, 169 MB |
 | `mapM_` over a million elements in IO | <0.01 s | <0.01 s |
 | a recursive IO loop of five million iterations | <0.01 s | 0.01 s |
 | the same as two functions that call each other | <0.01 s | 0.01 s |
@@ -773,8 +779,9 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
   folded (both make loops of them, in IO and in `StateT` too), recursive IO loops, mutable
   arrays, in ST, in IO and in a program with threads, `parMap`.
 - **Hago ahead:** a `Data.Map` built by a fold or a loop, which Hago builds in place (four
-  times faster, a third of the memory); the JSON parser and printer; the hash table; and
-  memory in general.
+  times faster, a third of the memory); a `foldr` that is recursion, taken from the last
+  element back (five times faster, with half the memory, or none over a range); the JSON
+  parser and printer; the hash table; and memory in general.
 - **GHC ahead:** the sieve on a map, by a half again: every step still allocates the lists it
   keeps (`[p]`, `++`), where GHC's generational collector does better than Go's.
 
