@@ -746,6 +746,20 @@ genExpr ctx e = case e of
           pure ("func() IOStep[" ++ goTy ctx b ++ "] {\n" ++ unlines ls ++ end ++ "\n}")
       | isTop ctx "listFoldr", [k, z, xs] <- args, fusable (prodOf ctx xs), Just _ <- exitsOf ctx k ->
           fuseFoldr ctx t k z xs
+    -- Iter.foldl (length, sum, maximum) of an Iter made right there: a loop
+    CVar fn _ t | Just "rt_iterFoldl" <- foreignSym ctx fn, [g, z, xs] <- args
+               , let p = iterProdOf ctx xs, iterKnown p, fusable p ->
+      fuseFoldlWith iterProdOf ctx t g z xs
+    -- an Iter made by a do: one Go function with the loops, which gives
+    -- each value to yield
+    CVar fn _ t | Just sym <- foreignSym ctx fn, "rt_iter" `isPrefixOf` sym
+               , let p = iterProdOf ctx e, iterWorthIt p, fusable p
+               , Just el <- iterElem (snd (splitFun (length args) (zonk (progSubst (cxProg ctx)) t))) -> do
+      e' <- renamed e
+      let ctx' = noSelf ctx
+          elTy = goTy ctx el
+      loop <- genLoop ctx' (iterProdOf ctx' e') $ \_ x -> pure ["if !hg_yield(" ++ mangle x ++ ") {", "return", "}"]
+      pure ("rt_iter.Seq[" ++ elTy ++ "](func(hg_yield func(" ++ elTy ++ ") bool) {\n" ++ unlines loop ++ "})")
     -- a bind or a *> of IO is a do block of two statements, whose first is
     -- run on the spot and whose second goes back to the trampoline
     CVar "primBindIO" (Inst [a, b] _) _ | isPrim ctx "primBindIO", [m, k] <- args -> case k of
@@ -1282,6 +1296,23 @@ genRun ctx k e = case e of
     sequenced [CSBind v a m, CSExpr a (CApp f [CVar v (Inst [] []) a])]
   CApp (CVar "primThenIO" _ _) [a, b] | isPrim ctx "primThenIO" ->
     sequenced [CSExpr tUnit a, CSExpr tUnit (case b of CDelay _ x -> x; _ -> CForce b)]
+  -- the same in a monad that passes a state, as StateT over IO does once
+  -- its newtype is gone: the fold makes a function of the state, applied to
+  -- the first one
+  CApp (CVar "listFoldr" _ t) [kf, z, xs, s0]
+    | isTop ctx "listFoldr", fusable (prodOf ctx xs), Just _ <- stateStepsOf ctx kf -> do
+        (ls, ctx', st) <- fuseFoldrState ctx t kf xs s0
+        (ls ++) <$> genRun ctx' k (CApp z [CVar st (Inst [] []) tUnit])
+  -- Iter.mapM_ over an Iter made right there
+  CApp (CVar f _ _) [g0, xs0]
+    | Just "rt_iterMapM_" <- foreignSym ctx f, let p = iterProdOf ctx xs0, iterKnown p, fusable p -> do
+        (g, xs) <- renamed2 g0 xs0
+        let c0 = noSelf ctx
+        loop <- genLoop c0 (iterProdOf c0 xs) $ \c x -> case g of
+          CLam [(v, _)] _ body -> ([mangle v ++ " := " ++ mangle x, "_ = " ++ mangle v] ++) <$> genRun (bindLocals c [(v, 0)]) RDiscard body
+          _ -> genRun c RDiscard (CApp g [CVar x (Inst [] []) tUnit])
+        rest <- genRun ctx k (CApp (CVar "primReturnIO" (Inst [tUnit] []) (TFun tUnit (tIO tUnit))) [CCon "()" [] tUnit])
+        pure (["{"] ++ loop ++ ["}"] ++ rest)
   -- mapM_ and its kind over a list made only for it: a loop
   CApp (CVar "listFoldr" _ _) [kf, z, xs]
     | isTop ctx "listFoldr", fusable (prodOf ctx xs), Just _ <- ioStepsOf ctx kf -> do
@@ -1409,6 +1440,7 @@ data Prod
     -- ^ a range of Int, from where, by what step, up to where (or the end of
     -- Int): [a ..], [a .. b], [a, b ..], [a, b .. c]
   | PCells CExpr                  -- ^ any other list, whose cells are visited
+  | PSeq CExpr                    -- ^ any other Iter, ranged over
   | PMap CExpr Prod
   | PFilter CExpr Prod
   | PTake CExpr Prod
@@ -1418,8 +1450,13 @@ data Prod
   | PAppend Prod Prod
   | PIf CExpr Prod Prod
   | PLet [CBind] Prod
+  | PMatch [CExpr] [CRow] (CExpr -> Prod)
+    -- ^ a case whose bodies make the list, each body as the producer makes it
   | PNil
   | PCons CExpr Prod
+  | PZip (Maybe CExpr) (Type, Type) Prod Prod
+    -- ^ zipWith g xs ys, or zip xs ys (Nothing), with the types of the
+    -- elements of each
   | PFold Name Prod Step Prod
     -- ^ listFoldr (\x rest -> step) end src, as concatMap and comprehensions
     -- make it: for each x of src, the elements of step, then those of end
@@ -1429,6 +1466,12 @@ data RangeStep = By CExpr | Then CExpr
 
 -- | What a step of a fold that makes a list gives before its rest.
 data Step = SNext | SYield CExpr Step | SEach Prod Step | SIf CExpr Step Step | SLet [CBind] Step
+
+-- | The type of an Iter's values.
+iterElem :: Type -> Maybe Type
+iterElem = \case
+  TCon _ [el] -> Just el
+  _ -> Nothing
 
 isTop :: Ctx -> Name -> Bool
 isTop ctx n = case M.lookup n (cxVars ctx) of
@@ -1451,6 +1494,8 @@ prodOf ctx e = case e of
     ("repeat", [x]) -> PRepeat x
     ("iterate", [g, x]) -> PIterate g x
     ("append", [xs, ys]) -> PAppend (prodOf ctx xs) (prodOf ctx (forced ys))
+    ("zip", [xs, ys]) | Just tys <- elemTypes 0 -> PZip Nothing tys (prodOf ctx xs) (second xs ys)
+    ("zipWith", [g, xs, ys]) | Just tys <- elemTypes 1 -> PZip (Just g) tys (prodOf ctx xs) (second xs ys)
     ("listFoldr", [k, z, xs])
       | Just (x, r, body) <- lam2 k, Just st <- stepOf ctx r body -> PFold x (prodOf ctx xs) st (prodOf ctx z)
     _ -> PCells e
@@ -1460,6 +1505,7 @@ prodOf ctx e = case e of
   CApp (CCon ":" _ _) [h, t] -> PCons h (prodOf ctx (forced t))
   CIf c a b _ -> PIf c (prodOf ctx a) (prodOf ctx b)
   CLet bs b _ -> PLet bs (prodOf ctx b)
+  CMatch ss rows _ -> PMatch ss rows (prodOf ctx)
   _ -> PCells e
   where
     forced t = case t of
@@ -1467,6 +1513,71 @@ prodOf ctx e = case e of
       _ -> CForce t
     enumInt = instMethodName "inst_Enum_Int"
     one = CLit (LInt 1)
+    -- the types of the elements of the two lists, after n other arguments
+    elemTypes n = case e of
+      CApp (CVar _ _ t) _ -> case fst (splitFun (n + 2) (zonk (progSubst (cxProg ctx)) t)) of
+        ts | [TCon "[]" [a], TCon "[]" [b]] <- drop n ts -> Just (a, b)
+        _ -> Nothing
+      _ -> Nothing
+    -- one of the two lists is visited a step at a time (see 'genPull'):
+    -- when neither can be, the second is made, and its cells visited
+    second xs ys
+      | pullable (prodOf ctx ys) || pullable (prodOf ctx xs) = prodOf ctx ys
+      | otherwise = PCells ys
+
+-- | The Go function a foreign name calls.
+foreignSym :: Ctx -> Name -> Maybe String
+foreignSym ctx f = case M.lookup f (cxVars ctx) of
+  Just (VKForeign fo) -> Just (fSymbol fo)
+  _ -> Nothing
+
+-- | How an Iter is made: Data.Iter's functions, known by the Go functions
+-- they call, as for lists (see 'prodOf'). An Iter is Go's iter.Seq, a
+-- function that gives each value to yield, so the same loops make one.
+iterProdOf :: Ctx -> CExpr -> Prod
+iterProdOf ctx e = case e of
+  CApp (CVar f _ _) as | Just sym <- foreignSym ctx f -> case (sym, as) of
+    ("rt_iterRange", [a, b]) -> PRange a (By (CLit (LInt 1))) (Just b)
+    ("rt_iterFrom", [a]) -> PRange a (By (CLit (LInt 1))) Nothing
+    ("rt_iterSingleton", [x]) -> PCons x PNil
+    ("rt_iterMap", [g, xs]) -> PMap g (iterProdOf ctx xs)
+    ("rt_iterFilter", [q, xs]) -> PFilter q (iterProdOf ctx xs)
+    ("rt_iterTakeWhile", [q, xs]) -> PTakeWhile q (iterProdOf ctx xs)
+    ("rt_iterTake", [n, xs]) -> PTake n (iterProdOf ctx xs)
+    ("rt_iterRepeat", [x]) -> PRepeat x
+    ("rt_iterIterate", [g, x]) -> PIterate g x
+    ("rt_iterAppend", [a, b]) -> PAppend (iterProdOf ctx a) (iterProdOf ctx b)
+    ("rt_iterFromList", [xs]) -> prodOf ctx xs
+    ("rt_iterConcatMap", [CLam [(x, _)] _ body, xs]) -> PFold x (iterProdOf ctx xs) (SEach (iterProdOf ctx body) SNext) PNil
+    _ -> PSeq e
+  CVar f _ _ | Just "rt_iterEmpty" <- foreignSym ctx f -> PNil
+  CIf c a b _ -> PIf c (iterProdOf ctx a) (iterProdOf ctx b)
+  CLet bs b _ -> PLet bs (iterProdOf ctx b)
+  CMatch ss rows _ -> PMatch ss rows (iterProdOf ctx)
+  _ -> PSeq e
+
+-- | Whether an Iter's own Go function is worth making: it binds values in
+-- turn (a do), each of which would make an Iter of its own.
+iterWorthIt :: Prod -> Bool
+iterWorthIt = \case
+  PFold {} -> True
+  PMap _ q -> iterWorthIt q
+  PFilter _ q -> iterWorthIt q
+  PTake _ q -> iterWorthIt q
+  PTakeWhile _ q -> iterWorthIt q
+  PAppend a b -> iterWorthIt a || iterWorthIt b
+  PIf _ a b -> iterWorthIt a || iterWorthIt b
+  PLet _ q -> iterWorthIt q
+  PMatch _ rows pf -> or [iterWorthIt (pf b) | CRow _ _ gs <- rows, (_, b) <- gs]
+  _ -> False
+
+-- | Whether a fold over the Iter is a loop worth making: it is not an Iter
+-- whose source is not known.
+iterKnown :: Prod -> Bool
+iterKnown = \case
+  PSeq _ -> False
+  PLet _ q -> iterKnown q
+  _ -> True
 
 -- | A function of two arguments, as a lambda.
 lam2 :: CExpr -> Maybe (Name, Name, CExpr)
@@ -1509,10 +1620,12 @@ fusable p = sites p <= 8
       PAppend a b -> sites a + sites b
       PIf _ a b -> sites a + sites b
       PLet _ q -> sites q
+      PMatch _ rows pf -> sum [sites (pf b) | CRow _ _ gs <- rows, (_, b) <- gs]
       PMap _ q -> sites q
       PFilter _ q -> sites q
       PTake _ q -> sites q
       PTakeWhile _ q -> sites q
+      PZip _ _ a b -> sites a + sites b
       PFold _ src st end -> sites src * max 1 (stepSites st) + sites end
       _ -> 1 :: Int
     stepSites = \case
@@ -1586,6 +1699,11 @@ genLoop ctx p k = case p of
     e' <- genExpr ctx e
     b <- k (bindLocals ctx [(x, 0)]) x
     pure (["for " ++ c ++ " := " ++ e' ++ "; " ++ c ++ " != nil; " ++ c ++ " = " ++ c ++ ".F1.force() {", mangle x ++ " := " ++ c ++ ".F0", "_ = " ++ mangle x] ++ b ++ ["}"])
+  PSeq e -> do
+    x <- freshName "e"
+    e' <- genExpr ctx e
+    b <- k (bindLocals ctx [(x, 0)]) x
+    pure (["for " ++ mangle x ++ " := range " ++ e' ++ " {", "_ = " ++ mangle x] ++ b ++ ["}"])
   PMap g q -> genLoop ctx q $ \c x -> do
     (ls, c', y) <- applyNew c g [x]
     (ls ++) <$> k c' y
@@ -1627,6 +1745,40 @@ genLoop ctx p k = case p of
     (ctx', ls) <- genBinds ctx bs
     b <- genLoop ctx' q k
     pure (["{"] ++ ls ++ b ++ ["}"])
+  -- each row's loops, then out of the case; no row matching is a failure
+  PMatch ss rows pf -> do
+    lab <- freshName "M"
+    ls <- genMatch (\c b -> (++ ["break " ++ lab]) <$> genLoop c (pf b) k) ctx ss rows
+    pure ([lab ++ ":", "for {"] ++ ls ++ ["}"])
+  -- zip: one list visited by its loops, the other a step at a time; the
+  -- first list's cell is reached before the second's, as zip does
+  PZip g (ta, tb) a b -> do
+    lab <- freshName "L"
+    let end = "break " ++ lab
+        pair c x y = case g of
+          Just f -> applyNew c f [x, y]
+          Nothing -> bindNew c (CApp (CCon "(,)" [ta, tb] (TFun ta (TFun tb (TCon "(,)" [ta, tb])))) [CVar x (Inst [] []) ta, CVar y (Inst [] []) tb])
+    body <- if pullable b
+      then do
+        (initB, nextB) <- genPull ctx b
+        inner <- genLoop ctx a $ \c x -> do
+          (ls, c', y) <- nextB c end
+          (ls', c'', z) <- pair c' x y
+          (\kb -> ls ++ ls' ++ kb) <$> k c'' z
+        pure (initB ++ inner)
+      else do
+        -- the first list a step ahead, so that its next cell is reached
+        -- before the second's, and an empty one stops before the second's
+        (initA, nextA) <- genPull ctx a
+        cur <- freshName "x"
+        (first, c0, x0) <- nextA ctx end
+        inner <- genLoop c0 b $ \c y -> do
+          (ls', c', z) <- pair (bindLocals c [(cur, 0)]) cur y
+          kb <- k c' z
+          (ls, _, x1) <- nextA c end
+          pure (ls' ++ kb ++ ls ++ [mangle cur ++ " = " ++ mangle x1])
+        pure (initA ++ first ++ [mangle cur ++ " := " ++ mangle x0, "_ = " ++ mangle cur] ++ inner)
+    pure ([lab ++ ":", "for {"] ++ body ++ ["break " ++ lab, "}"])
   PFold x src st end -> do
     each <- genLoop ctx src $ \c e ->
       ([mangle x ++ " := " ++ mangle e, "_ = " ++ mangle x] ++) <$> genStep (bindLocals c [(x, 0)]) st k
@@ -1634,6 +1786,73 @@ genLoop ctx p k = case p of
     pure (each ++ after)
   where
     visit c x = (\b -> ["{"] ++ b ++ ["}"]) <$> k c x
+
+-- | Lists that can be visited a step at a time, from outside a loop.
+pullable :: Prod -> Bool
+pullable = \case
+  PRange {} -> True
+  PCells _ -> True
+  PRepeat _ -> True
+  PIterate _ _ -> True
+  PMap _ q -> pullable q
+  _ -> False
+
+-- | The statements that start visiting a list a step at a time, and a
+-- function that makes those of each step: a variable holding the next
+-- element, or the end statement where there is none. A list's next cell,
+-- and iterate's next element, are reached only when the step asks for
+-- them, as the list would.
+genPull :: Ctx -> Prod -> Gen ([String], Ctx -> String -> Gen ([String], Ctx, Name))
+genPull ctx p = case p of
+  PRange a st l -> do
+    cur <- freshName "cur"
+    s' <- freshName "s"
+    l' <- freshName "l"
+    ok <- freshName "ok"
+    a' <- genExpr ctx a
+    step <- case st of
+      By b -> (\b' -> s' ++ " := " ++ b') <$> genExpr ctx b
+      Then b -> (\b' -> s' ++ " := " ++ b' ++ " - " ++ cur) <$> genExpr ctx b
+    limit <- case l of
+      Just c -> (\c' -> [l' ++ " := " ++ c']) <$> genExpr ctx c
+      Nothing -> pure [l' ++ " := -int(^uint(0)>>1) - 1", "if " ++ s' ++ " >= 0 {", l' ++ " = int(^uint(0) >> 1)", "}"]
+    let next c end = do
+          y <- freshName "e"
+          pure ( [ "if !" ++ ok ++ " || " ++ s' ++ " >= 0 && " ++ cur ++ " > " ++ l' ++ " || " ++ s' ++ " < 0 && " ++ cur ++ " < " ++ l' ++ " {", end, "}"
+                 , mangle y ++ " := " ++ cur, "_ = " ++ mangle y
+                 , "if " ++ s' ++ " >= 0 && " ++ cur ++ " > int(^uint(0)>>1)-" ++ s' ++ " || " ++ s' ++ " < 0 && " ++ cur ++ " < -int(^uint(0)>>1)-1-" ++ s' ++ " {"
+                 , ok ++ " = false", "} else {", cur ++ " += " ++ s', "}" ]
+               , bindLocals c [(y, 0)], y )
+    pure ([cur ++ " := " ++ a', step] ++ limit ++ [ok ++ " := true", "_, _, _, _ = " ++ cur ++ ", " ++ s' ++ ", " ++ l' ++ ", " ++ ok], next)
+  PCells e -> do
+    cur <- freshName "cur"
+    started <- freshName "started"
+    e' <- genExpr ctx e
+    let next c end = do
+          y <- freshName "e"
+          pure ( [ "if " ++ started ++ " {", cur ++ " = " ++ cur ++ ".F1.force()", "}", started ++ " = true"
+                 , "if " ++ cur ++ " == nil {", end, "}", mangle y ++ " := " ++ cur ++ ".F0", "_ = " ++ mangle y ]
+               , bindLocals c [(y, 0)], y )
+    pure ([cur ++ " := " ++ e', started ++ " := false", "_, _ = " ++ cur ++ ", " ++ started], next)
+  PRepeat e -> do
+    (ls, _, v) <- bindNew ctx e
+    pure (ls, \c _ -> pure ([], bindLocals c [(v, 0)], v))
+  PIterate g x -> do
+    (ls, _, v) <- bindNew ctx x
+    started <- freshName "started"
+    let next c0 _ = do
+          let c = bindLocals c0 [(v, 0)]
+          (ls', _, y) <- applyNew c g [v]
+          pure (["if " ++ started ++ " {"] ++ ls' ++ [mangle v ++ " = " ++ mangle y, "}", started ++ " = true"], c, v)
+    pure (ls ++ [started ++ " := false", "_ = " ++ started], next)
+  PMap g q -> do
+    (ls, nextQ) <- genPull ctx q
+    let next c end = do
+          (ls1, c1, x) <- nextQ c end
+          (ls2, c2, y) <- applyNew c1 g [x]
+          pure (ls1 ++ ls2, c2, y)
+    pure (ls, next)
+  _ -> error "genPull: not a list visited a step at a time"
 
 genStep :: Ctx -> Step -> (Ctx -> Name -> Gen [String]) -> Gen [String]
 genStep ctx st k = case st of
@@ -1679,14 +1898,17 @@ applyNew ctx g xs = case lamN (length xs) g of
 
 -- | listFoldl g z xs: the accumulator, changed by each element.
 fuseFoldl :: Ctx -> Type -> CExpr -> CExpr -> CExpr -> Gen String
-fuseFoldl ctx0 t g0 z xs0 = do
+fuseFoldl = fuseFoldlWith prodOf
+
+fuseFoldlWith :: (Ctx -> CExpr -> Prod) -> Ctx -> Type -> CExpr -> CExpr -> CExpr -> Gen String
+fuseFoldlWith prodFor ctx0 t g0 z xs0 = do
   (g, xs) <- renamed2 g0 xs0
   let ctx = noSelf ctx0
       b = goTy ctx (snd (splitFun 3 t))
   acc <- freshName "acc"
   z' <- genExpr ctx z
   let ctxA = bindLocals ctx [(acc, 0)]
-  loop <- genLoop ctxA (prodOf ctx xs) $ \c x -> do
+  loop <- genLoop ctxA (prodFor ctx xs) $ \c x -> do
     (ls, _, y) <- applyNew c g [acc, x]
     pure (ls ++ [mangle acc ++ " = " ++ mangle y])
   pure ("func() " ++ b ++ " {\nvar " ++ mangle acc ++ " " ++ b ++ " = " ++ z' ++ "\n" ++ unlines loop ++ "return " ++ mangle acc ++ "\n}()")
@@ -1809,6 +2031,77 @@ fuseFoldrIO ctx0 k0 xs0 = do
           CSLet bs : rest -> do
             (c'', ls) <- genBinds c' bs
             (ls ++) <$> stmts c'' rest
+
+-- | The step of a listFoldr of functions of a state that give an action:
+-- \x rest s -> actions, then rest applied to the next state. StateT's mapM_
+-- and forM_ over IO are this, once its newtype is gone and its >>= copied in.
+stateStepsOf :: Ctx -> CExpr -> Maybe (Name, Name, Name, CExpr)
+stateStepsOf ctx k = case lam3 k of
+  Just (x, r, st, body) | steps r body -> Just (x, r, st, body)
+  _ -> Nothing
+  where
+    lam3 = \case
+      CLam [(x, _), (r, _), (st, _)] _ b -> Just (x, r, st, b)
+      CLam [(x, _), (r, _)] _ (CLam [(st, _)] _ b) -> Just (x, r, st, b)
+      CLam [(x, _)] _ (CLam [(r, _), (st, _)] _ b) -> Just (x, r, st, b)
+      CLam [(x, _)] _ (CLam [(r, _)] _ (CLam [(st, _)] _ b)) -> Just (x, r, st, b)
+      _ -> Nothing
+    free r x = r `notElem` coreRefs x
+    steps r e = case e of
+      CApp (CForce (CVar v _ _)) [a] -> v == r && free r a
+      CApp (CVar "primBindIO" _ _) [m, CLam [_] _ b] | isPrim ctx "primBindIO" -> free r m && steps r b
+      CApp (CVar "primThenIO" _ _) [a, CDelay _ b] | isPrim ctx "primThenIO" -> free r a && steps r b
+      CIf c a b _ -> free r c && steps r a && steps r b
+      CLet bs b _ -> all (\(CBind _ _ _ x) -> free r x) bs && steps r b
+      CMatch [sc] [CRow ps [] [(Nothing, b)]] _ -> free r sc && all irrefutable ps && steps r b
+      _ -> False
+    irrefutable = \case
+      CPVar _ _ -> True
+      CPWild -> True
+      CPCon c _ qs | Just _ <- tupleArity c -> all irrefutable qs
+      CPCon "()" _ _ -> True
+      _ -> False
+
+-- | The loops of such a fold: the state in a variable, each element's
+-- actions run with it and leaving the next one in it. What comes after
+-- (the fold's last function, applied to the state) is the caller's, given
+-- the variable.
+fuseFoldrState :: Ctx -> Type -> CExpr -> CExpr -> CExpr -> Gen ([String], Ctx, Name)
+fuseFoldrState ctx0 t k0 xs0 s0 = do
+  (k, xs) <- renamed2 k0 xs0
+  let ctx = noSelf ctx0
+      stTy = case snd (splitFun 3 (zonk (progSubst (cxProg ctx)) t)) of
+        TFun a _ -> a
+        other -> other
+  st <- freshName "st"
+  s0' <- genExpr ctx s0
+  case stateStepsOf ctx k of
+    Nothing -> error "fuseFoldrState: not a fold of a state"
+    Just (x, r, sv, body) -> do
+      let ctxS = bindLocals ctx [(st, 0)]
+      loop <- genLoop ctxS (prodOf ctx xs) $ \c e ->
+        ([mangle x ++ " := " ++ mangle e, "_ = " ++ mangle x, mangle sv ++ " := " ++ mangle st, "_ = " ++ mangle sv] ++)
+          <$> step r st (bindLocals c [(x, 0), (sv, 0)]) body
+      pure (["var " ++ mangle st ++ " " ++ goTy ctx stTy ++ " = " ++ s0', "{"] ++ loop ++ ["}"], bindLocals ctx0 [(st, 0)], st)
+  where
+    step r st c e = case e of
+      CApp (CForce _) [a] -> (\a' -> [mangle st ++ " = " ++ a']) <$> genExpr c a
+      CApp (CVar "primBindIO" _ _) [m, CLam [(v, vt)] _ b] -> (++) <$> genRun c (RBind v vt) m <*> step r st (bindLocals c [(v, 0)]) b
+      CApp (CVar "primThenIO" _ _) [a, CDelay _ b] -> (++) <$> genRun c RDiscard a <*> step r st c b
+      CIf cond a b _ -> do
+        cond' <- genExpr c cond
+        as <- step r st c a
+        bs <- step r st c b
+        pure (["if " ++ cond' ++ " {"] ++ as ++ ["} else {"] ++ bs ++ ["}"])
+      CLet bs b _ -> do
+        (c', ls) <- genBinds c bs
+        b' <- step r st c' b
+        pure (["{"] ++ ls ++ b' ++ ["}"])
+      CMatch [sc] [CRow [pat] [] [(Nothing, b)]] _ -> do
+        (ls, c', v) <- bindNew c sc
+        b' <- genPats c' [(mangle v, pat)] (\c'' -> step r st c'' b)
+        pure (["{"] ++ ls ++ b' ++ ["}"])
+      _ -> error "fuseFoldrState: not a step of a state"
 
 -- Literals ---------------------------------------------------------------------------
 

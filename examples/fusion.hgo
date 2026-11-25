@@ -3,6 +3,8 @@
 -- iterate become Go loops. These check that the loops compute what the
 -- lists would, stop where they would, and compute nothing more.
 import Control.Monad (forM_)
+import Control.Monad.State
+import qualified Data.Iter as Iter
 
 main :: IO ()
 main = do
@@ -34,3 +36,39 @@ main = do
     print j
   mapM_ print (filter odd [1 .. 7])
   forM_ [1, 2] $ \i -> forM_ [i .. 2] $ \j -> print (i, j)
+  -- actions of a monad that passes a state: the state in a variable
+  n <- execStateT (forM_ [1 .. 5] $ \i -> do
+    s <- get
+    lift (print (i, s))
+    when (even i) (put (s + i))) 100
+  print n
+  -- zip and zipWith: one list visited by loops, the other a step at a time
+  let ws = [10, 20, 30]
+  print (sum (zipWith (*) [1 ..] ws), sum (zipWith (*) ws [1 ..]))
+  print (sum (map fst (zip [1 .. 5] (filter even [1 ..]))), sum (map snd (zip (filter even [1 ..]) [1 .. 5])))
+  print (length (zip [1 .. 3] [1 .. 10]), length (zip [1 .. 10] (unpack "abc")))
+  -- an empty first list never reaches the second's elements
+  print (length (zip ([] :: [Int]) (map (\d -> 1 `div` d) [0 ..])))
+  print (sum (zipWith (+) (iterate (* 2) 1) [1 .. 10]), sum (zipWith (*) (repeat 3) [1 .. 4]))
+  print (sum (take 3 (zipWith (\a b -> if b > 3 then error "too far" else a + b) [10, 20 ..] (iterate (+ 1) 1))))
+  forM_ (zip [1 ..] ["one", "two"]) $ \(i, w) -> putStrLn (show i ++ " " ++ w)
+  print (and (zipWith (<=) [1, 2, 3, 5, 4] [2, 3, 4, 5, 6]), or (zipWith (>) [1 .. 5] [5, 4 .. 1]))
+  print (sum [a * b | (a, b) <- zip [1 .. 3] [4 .. 6]])
+  -- an Iter made by a do is one Go function with the loops; a fold or a
+  -- mapM_ of an Iter made right there is the loops
+  let triples n = do
+        c <- Iter.range 1 n
+        b <- Iter.range 1 c
+        a <- Iter.range 1 b
+        guard (a * a + b * b == c * c)
+        pure (a, b, c)
+  print (Iter.length (triples 30), Iter.length (triples 30) == length [() | c <- [1 .. 30], b <- [1 .. c], a <- [1 .. b], a * a + b * b == c * c])
+  print (Iter.sum (Iter.take 4 (do
+    x <- Iter.from 1
+    guard (odd x)
+    pure (x * x))))
+  Iter.mapM_ print (do
+    x <- Iter.range 1 3
+    y <- Iter.fromList [x, x * 10]
+    pure (x + y))
+  print (Iter.maximum (Iter.filter even (Iter.fromList [3, 8, 1, 6])), Iter.foldl (+) 0 (Iter.append (Iter.range 1 3) (Iter.singleton 10)))

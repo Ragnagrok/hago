@@ -521,8 +521,12 @@ comprensión, y no reserva ninguna celda: `length [(a, b, c) | c <- [1 .. 400], 
 a <- [1 .. b], a * a + b * b == c * c]` son tres loops `for`. Se calcula lo que tendría la
 lista, en el mismo orden: cada elemento (la cabeza de una celda es estricta, así que
 `length (map f xs)` igual calcula cada `f x`), y nada más de lo que pide el pliegue
-(`take 5 (iterate f x)` llama a `f` cuatro veces, `any p [1 ..]` se detiene). Una lista en una
-variable, o pasada a una función, es una lista como antes (`examples/fusion.hgo`).
+(`take 5 (iterate f x)` llama a `f` cuatro veces, `any p [1 ..]` se detiene). `zip` y
+`zipWith` también son loops: una lista se recorre con sus loops y la otra de a un paso, con la
+celda de la primera alcanzada antes que la de la segunda, como hace `zip`. También lo es
+`mapM_` en una mónada que pasa un estado, como `StateT s IO`: el estado es una variable del
+loop. Una lista en una variable, o pasada a una función, es una lista como antes
+(`examples/fusion.hgo`).
 
 Una función que se le pasa a una función de Go, como hacen `map`, `filter` y `foldl`, se genera
 como una función de Go de todos sus argumentos, así que un pipeline sobre un `Iter` corre como el
@@ -541,10 +545,10 @@ triples n = do
   pure (a, b, c)
 ```
 
-Es un valor que se puede pasar y consumir después, pero cada valor todavía reserva el `Iter`
-que devuelve su paso (`pure`, `guard`); un `map` y un `filter`, donde alcanzan, son veinte
-veces más rápidos (ver [Performance](#performance)). Una comprensión de listas que se pliega
-donde se escribe es más rápida que los dos: es los loops mismos. Las comprensiones y los
+Es un valor que se puede pasar y consumir después. Un `do` hecho con las funciones de
+`Data.Iter`, como este, se compila a una sola función de Go con los tres loops, que le da cada
+terna a quien la consume y no reserva nada por valor; un pliegue (`length`, `sum`, `foldl`) o un
+`mapM_` de un `Iter` armado donde se consume es los loops mismos. Las comprensiones y los
 rangos (`[x | x <- xs]`, `[1 ..]`) son siempre listas: hacerlos `Iter` cuando el tipo lo pide
 volvería su tipo una elección que la mayoría de los usos (`length`, `sum`, `mapM_`) deja abierta.
 
@@ -674,11 +678,11 @@ lado a lado con otros (`bench/run.sh HAGO_VIEJO HAGO_NUEVO`).
 | lo mismo con `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | <0,01 s | ~2 MB |
 | lo mismo sobre un `Data.Vector` de 3.000.000 de elementos | 0,02 s | ~58 MB |
 | ternas pitagóricas hasta 400, como comprensión de listas | <0,01 s | ~2 MB |
-| lo mismo como `do` sobre `Iter` | 0,61 s | ~8 MB |
-| lo mismo con `Iter.filter` para el último generador y la guarda | 0,03 s | ~7 MB |
+| lo mismo como `do` sobre `Iter` | <0,01 s | ~2 MB |
+| lo mismo con `Iter.filter` para el último generador y la guarda | <0,01 s | ~2 MB |
 | `mapM_` sobre un millón de elementos en IO | <0,01 s | ~2 MB |
 | un loop recursivo en IO de cinco millones de iteraciones | 0,05 s | ~7 MB |
-| `mapM_` sobre un millón de elementos en `StateT Int IO` | 0,12 s | ~8 MB |
+| `mapM_` sobre un millón de elementos en `StateT Int IO` | <0,01 s | ~2 MB |
 | cincuenta millones de sumas de un `newtype Meters = Meters Double` | 0,02 s | ~2 MB |
 | lo mismo con `data Meters = Meters Double` | 0,02 s | ~2 MB |
 | parsear e imprimir con formato 3,7 MB de JSON con `examples/json.hgo` (`jq .`: 0,09 s, 28 MB) | 0,24 s | ~72 MB |
@@ -746,7 +750,7 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
 | ternas pitagóricas hasta 400, como comprensión de listas | <0,01 s | <0,01 s |
 | `mapM_` sobre un millón de elementos en IO | <0,01 s | <0,01 s |
 | un loop recursivo en IO de cinco millones de iteraciones | 0,05 s | 0,01 s |
-| `mapM_` sobre un millón de elementos en `StateT Int IO` | 0,12 s | <0,01 s |
+| `mapM_` sobre un millón de elementos en `StateT Int IO` | <0,01 s | <0,01 s |
 | cincuenta millones de sumas de un `Meters`, `newtype` o `data` | 0,02 s | 0,02 s |
 | JSON, 3,7 MB, los mismos combinadores e impresor | 0,23 s, 68 MB | 0,28 s, 93 MB |
 | `fib 32` dieciséis veces con `map` (GHC lo calcula una vez) | 0,13 s | 0,01 s |
@@ -761,13 +765,12 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
 | lo mismo con un `Data.Map` | 1,56 s | 0,52 s |
 
 - **Parejos:** el código estricto en tipos concretos, los newtypes, los pliegues de listas que
-  se arman donde se pliegan (los dos los vuelven loops), `parMap`.
+  se arman donde se pliegan (los dos los vuelven loops, también en IO y en `StateT`), `parMap`.
 - **Adelante Hago:** el parser y el impresor de JSON, y la tabla hash, en tiempo y en memoria; y
   la memoria en general, como con `Data.Map` (la mitad que GHC).
 - **Adelante GHC:** el código que reserva mucho y por poco tiempo (`Data.Map`, la criba con un
   map), donde su recolector generacional anda mejor que el de Go; los arreglos mutables, por el
-  doble; `mapM_` en un transformador de mónadas, que Hago todavía no vuelve un loop; y un vector
-  en IO en un programa con hilos, que Hago bloquea en cada acceso y GHC no.
+  doble; y un vector en IO en un programa con hilos, que Hago bloquea en cada acceso y GHC no.
 
 ## Uso
 

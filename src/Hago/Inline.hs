@@ -47,7 +47,7 @@ import Hago.Syntax (Name)
 -- its body (simplified already).
 data Candidate = Candidate [Name] [(Name, Type)] CExpr
 
-data S = S {sNext :: Int, sCands :: M.Map Name Candidate}
+data S = S {sNext :: Int, sCands :: M.Map Name Candidate, sAliases :: M.Map Name CExpr}
 
 type M = State S
 
@@ -56,37 +56,62 @@ inlineSmall prog = prog {progBinds = map (done M.!) (map tbName (progBinds prog)
   where
     -- callees first: specialisation adds its copies after their callers
     order = flattenSCCs (stronglyConnComp [(tb, tbName tb, coreRefs (tbBody tb)) | tb <- progBinds prog])
-    done = M.fromList [(tbName tb, tb) | tb <- evalState (mapM top order) (S 0 M.empty)]
+    done = M.fromList [(tbName tb, tb) | tb <- evalState (mapM top order) (S 0 M.empty M.empty)]
     top tb = do
       body <- simp 0 (tbBody tb)
       let tb' = tb {tbBody = body}
-      when (candidate tb') $
+      -- a value that only names another (Iter's empty is none) is that one
+      when (null (tbParams tb) && tbArity tb == 0 && alias body) $
+        modify (\s -> s {sAliases = M.insert (tbName tb) body (sAliases s)})
+      when (candidate (progData prog) tb') $
         case body of
           CLam ps _ b -> modify (\s -> s {sCands = M.insert (tbName tb) (Candidate (tbParams tb) ps b) (sCands s)})
           _ -> pure ()
       pure tb'
+
+alias :: CExpr -> Bool
+alias = \case
+  CVar _ (Inst [] []) _ -> True
+  CVar _ (Inst _ []) _ -> True
+  _ -> False
 
 -- | Whether a top-level binding is copied where it is called: a function,
 -- not recursive, small, and either an action or an expression that is not
 -- a @case@, an @if@ or a @let@, which in the middle of an expression would
 -- become a Go function called on the spot instead of a call. The Prelude's
 -- @&&@ and @||@ are Go's operators already.
-candidate :: TopBind -> Bool
-candidate tb = case tbBody tb of
+candidate :: M.Map Name DataInfo -> TopBind -> Bool
+candidate datas tb = case tbBody tb of
   CLam ps r b ->
-    tbArity tb == length ps
-      && tbArity tb > 0
-      && not (tbShared tb)
+    -- a function, or a value that is one (StateT's get, once the newtype
+    -- is gone, is \s -> pure (s, s))
+    (tbArity tb == length ps && tbArity tb > 0 && not (tbShared tb) || tbArity tb == 0)
       && null (tbDicts tb)
       && tbName tb `notElem` ["&&", "||"]
       && tbName tb `notElem` coreRefs b
       && null [() | CVar _ SelfGroup _ <- everything b]
-      && size b <= 16
-      && (isIO r || not (branches b))
+      && (size b <= 16 || isFold b && size b <= 64 || isLam b && size b <= 32)
+      && (isIO r || foreignType r || not (branches b))
   _ -> False
   where
+    -- a fold of a list (mapM_ at a monad), copied whatever its size so that
+    -- it meets the list it folds, which code generation makes a loop of
+    isFold = \case
+      CApp (CVar f _ _) _ -> f `elem` ["listFoldr", "listFoldl"]
+      _ -> False
+    -- an action of a monad that is a function once newtypes are gone
+    -- (StateT's modify is \s -> ...), which the caller usually applies at
+    -- once
+    isLam = \case
+      CLam {} -> True
+      _ -> False
     isIO = \case
       TCon "IO" _ -> True
+      _ -> False
+    -- a Go type, as Iter: an if that gives one is a choice of loops where
+    -- the value is folded or made into an Iter (see Hago.CodeGen's Prod)
+    foreignType = \case
+      TCon c _ | Just di <- M.lookup c datas -> diForeign di /= Nothing
       _ -> False
     branches = \case
       CMatch {} -> True
@@ -122,6 +147,7 @@ simp d = \case
       CDelay _ y -> y
       _ -> CForce x'
   CDo m dict r ss -> CDo m dict r <$> mapM (simpStmt d) ss
+  e@(CVar x (Inst [] []) _) -> gets (maybe e id . M.lookup x . sAliases)
   e -> pure e
 
 simpBind :: Int -> CBind -> M CBind
@@ -155,8 +181,13 @@ app d f as = case f of
   CVar x (Inst ts _) _ | d < 8 -> do
     cands <- gets sCands
     case M.lookup x cands of
-      Just (Candidate tps ps b) | length ts == length tps, length as >= length ps -> do
+      Just (Candidate tps ps0 b0) | length ts == length tps, length as >= length ps0 -> do
         let s = M.fromList (zip tps ts)
+            -- the lambdas the body returns take the arguments left too
+            (ps, b) = absorb ps0 b0
+            absorb qs body = case body of
+              CLam rs _ inner | length as >= length qs + length rs -> absorb (qs ++ rs) inner
+              _ -> (qs, body)
         (ps', b') <- lamParts <$> freshen (outermostT (substTV s) (CLam ps tUnit b))
         let (now, later) = splitAt (length ps') as
         r <- bindArgs (zip ps' now) b'

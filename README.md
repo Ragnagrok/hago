@@ -502,7 +502,10 @@ cell is allocated: `length [(a, b, c) | c <- [1 .. 400], b <- [1 .. c], a <- [1 
 + b * b == c * c]` is three `for` loops. What is computed is what the list would hold, in the
 same order: every element (a cell's head is strict, so `length (map f xs)` still computes
 each `f x`), and no more than the fold asks for (`take 5 (iterate f x)` calls `f` four times,
-`any p [1 ..]` stops). A list in a variable, or given to a function, is a list as before
+`any p [1 ..]` stops). `zip` and `zipWith` are loops too: one list is visited by its loops and
+the other a step at a time, the first one's cell reached before the second's, as `zip` does.
+So is `mapM_` in a monad that passes a state, as `StateT s IO` does: the state is a variable
+of the loop. A list in a variable, or given to a function, is a list as before
 (`examples/fusion.hgo`).
 
 A function given to a Go function, as `map`, `filter` and `foldl` give theirs, is generated as a
@@ -522,10 +525,11 @@ triples n = do
   pure (a, b, c)
 ```
 
-It is a value that can be passed around and consumed later, but each value still allocates
-the `Iter` its step returns (`pure`, `guard`); a `map` and a `filter` where they are enough are
-twenty times faster (see [Performance](#performance)). A list comprehension folded where it is
-written is faster than both: it is the loops themselves. Comprehensions and ranges
+It is a value that can be passed around and consumed later. A `do` made of `Data.Iter`'s
+functions, as this one, compiles to one Go function with the three loops, which gives each
+triple to whoever consumes it and allocates nothing per value; a fold (`length`, `sum`,
+`foldl`) or a `mapM_` of an `Iter` made where it is consumed is the loops themselves.
+Comprehensions and ranges
 (`[x | x <- xs]`, `[1 ..]`) are always lists: making them `Iter`s when the type asks for one
 would make their type a choice that most uses (`length`, `sum`, `mapM_`) leave open.
 
@@ -651,11 +655,11 @@ side by side with others (`bench/run.sh OLD_HAGO NEW_HAGO`).
 | the same with `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | <0.01 s | ~2 MB |
 | the same over a `Data.Vector` of 3,000,000 elements | 0.02 s | ~58 MB |
 | Pythagorean triples up to 400, as a list comprehension | <0.01 s | ~2 MB |
-| the same as `do` over `Iter` | 0.61 s | ~8 MB |
-| the same with `Iter.filter` for the last generator and the guard | 0.03 s | ~7 MB |
+| the same as `do` over `Iter` | <0.01 s | ~2 MB |
+| the same with `Iter.filter` for the last generator and the guard | <0.01 s | ~2 MB |
 | `mapM_` over a million elements in IO | <0.01 s | ~2 MB |
 | a recursive IO loop of five million iterations | 0.05 s | ~7 MB |
-| `mapM_` over a million elements in `StateT Int IO` | 0.12 s | ~8 MB |
+| `mapM_` over a million elements in `StateT Int IO` | <0.01 s | ~2 MB |
 | fifty million additions of a `newtype Meters = Meters Double` | 0.02 s | ~2 MB |
 | the same with `data Meters = Meters Double` | 0.02 s | ~2 MB |
 | parse and pretty print 3.7 MB of JSON with `examples/json.hgo` (`jq .`: 0.09 s, 28 MB) | 0.24 s | ~72 MB |
@@ -718,7 +722,7 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
 | Pythagorean triples up to 400, as a list comprehension | <0.01 s | <0.01 s |
 | `mapM_` over a million elements in IO | <0.01 s | <0.01 s |
 | a recursive IO loop of five million iterations | 0.05 s | 0.01 s |
-| `mapM_` over a million elements in `StateT Int IO` | 0.12 s | <0.01 s |
+| `mapM_` over a million elements in `StateT Int IO` | <0.01 s | <0.01 s |
 | fifty million additions of a `Meters`, `newtype` or `data` | 0.02 s | 0.02 s |
 | JSON, 3.7 MB, the same combinators and printer | 0.23 s, 68 MB | 0.28 s, 93 MB |
 | `fib 32` sixteen times with `map` (GHC computes it once) | 0.13 s | 0.01 s |
@@ -733,13 +737,12 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
 | the same with a `Data.Map` | 1.56 s | 0.52 s |
 
 - **Even:** strict code at concrete types, newtypes, folds of lists made where they are
-  folded (both make loops of them), `parMap`.
+  folded (both make loops of them, in IO and in `StateT` too), `parMap`.
 - **Hago ahead:** the JSON parser and printer, and the hash table, in time and in memory; and
   memory in general, as with `Data.Map` (half of GHC's).
 - **GHC ahead:** code that allocates much and briefly (`Data.Map`, the sieve on a map), where
-  its generational collector does better than Go's; mutable arrays, by twice; `mapM_` in a
-  monad transformer, which Hago does not make a loop yet; and a vector in IO in a program with
-  threads, which Hago locks on each access and GHC does not.
+  its generational collector does better than Go's; mutable arrays, by twice; and a vector in
+  IO in a program with threads, which Hago locks on each access and GHC does not.
 
 ## Using it
 

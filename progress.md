@@ -415,11 +415,35 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       | `Data.Map`, 1M inserts, deletes, lookups (`length (filter ...)`) | 2.09 s, 102 MB | 1.78 s, 94 MB |
 
       The rest did not change.
-- [ ] **Folds that fusion does not reach yet:** `mapM_` in a monad other than IO and ST
-      (`StateT Int IO`: 0.12 s, GHC under 0.01 s), whose rest is inside the bind's lambda;
-      `zip` and `zipWith`, which need two lists in step; a `listFoldr` whose step uses its
-      rest inside an expression (`x + rest`), which is recursion and not a loop; `do` over
-      `Iter`, which still allocates the `Iter` of each step.
+- [x] **What fusion did not reach at first**, in this order:
+      - **`mapM_` in `StateT s IO`.** Once its newtype is gone, the fold makes a function of
+        the state, applied to the first one: `listFoldr (\x rest s -> ... rest s') z xs s0`.
+        Generated as a loop with the state in a variable. For the fold to meet its list,
+        `Hago.Inline` now copies a function whose body is a fold whatever its size (64 nodes
+        at most), one that returns a lambda up to 32 (a transformer's action: `modify`), and a
+        value that is a lambda (`get`); and a call with more arguments than parameters gives
+        the rest to the lambdas the body returns, so `put (s + x)` is copied. 0.12 s → <0.01 s.
+      - **`zip` and `zipWith`.** One list visited by its loops, the other a step at a time (a
+        range, a list that exists, `repeat`, `iterate`, a `map` of those): the second when it
+        can be, else the first, a step ahead, so that its cell is always reached before the
+        second's and an empty one ends it before the second is looked at, as `zip` does. A
+        list that exists moves to its tail only when the next pair is asked for. When neither
+        can be visited a step at a time, the second list is made and its cells visited.
+      - **`do` over `Iter`.** An `Iter` is Go's `iter.Seq`, so a do made of `Data.Iter`'s
+        functions (`concatMap` as `>>=`, `singleton`, `range`, `guard`) compiles to one Go
+        function with the loops, which gives each value to `yield` and returns when it says
+        to stop; `Iter.foldl` (and with it `length`, `sum`, `maximum`) and `Iter.mapM_` of an
+        Iter made right there are the loops. On the way: a `case` makes a list too (each row
+        its loops, then out), as `guard` is two clauses; a function whose result is a Go type
+        (`Iter`) is copied even with a `case` or an `if`; and a value that only names another
+        (`Iter`'s `empty` is `none`) is replaced by it. 0.59 s → <0.01 s; with `Iter.filter`,
+        0.04 s → <0.01 s.
+      `examples/fusion.hgo` checks each against the same computed with lists or by hand.
+- [ ] **What fusion still does not reach:** a `listFoldr` whose step uses its rest inside an
+      expression (`x + rest`), which is recursion and not a loop; one whose step drops its
+      rest to stop (a producer that ends early, other than `take` and `takeWhile`);
+      `Data.Iter`'s `find`, `any`, `all`, `elem`, `drop` and `dropWhile`, which stay calls;
+      `zip3` and `zipWith3`.
 - [ ] **What the garbage collector costs:** the last profiles of `Data.Map` and JSON (above)
       had it at about half the CPU. Profile them again, then fewer allocations (closures for
       known functions, cells), then measure `GOGC` again.
