@@ -36,6 +36,7 @@ progs=(
   "squares of multiples of 3, lists|bench/squares-list.hgo|squares-list||"
   "the same over a Vector (unboxed in GHC)|bench/squares-vector.hgo|squares-vector||"
   "Pythagorean triples, comprehension|bench/triples-list.hgo|triples-list||"
+  "foldr (+) over 10M, recursion|bench/foldr-sum.hgo|foldr-sum||"
   "mapM_ over 1M in IO|bench/mapm-io.hgo|mapm-io||"
   "recursive IO loop, 5M|bench/loop-io.hgo|loop-io||"
   "mapM_ over 1M in StateT Int IO|bench/mapm-statet.hgo|mapm-statet||"

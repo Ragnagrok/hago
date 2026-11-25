@@ -72,3 +72,22 @@ main = do
     y <- Iter.fromList [x, x * 10]
     pure (x + y))
   print (Iter.maximum (Iter.filter even (Iter.fromList [3, 8, 1, 6])), Iter.foldl (+) 0 (Iter.append (Iter.range 1 3) (Iter.singleton 10)))
+  -- a step of foldr that drops its rest ends the list there (a takeWhile by hand)
+  print (sum (foldr (\x rest -> if x < 5 then x : rest else []) [] [1 ..]))
+  print (length (foldr (\x rest -> if even x then [x, x] else [x]) [] [1 .. 5]))
+  print (sum (foldr (\x rest -> if x > 3 then [100] else x : rest) [999] [1 .. 10]))
+  -- drop, dropWhile, zip3, zipWith3
+  print (sum (drop 3 [1 .. 10]), sum (drop 0 [1 .. 3]), sum (drop 20 [1 .. 3]), sum (take 3 (drop 5 [1 ..])))
+  print (sum (dropWhile (< 5) [1 .. 10]), sum (dropWhile (< 5) [7, 1, 2]), length (dropWhile even [2, 4, 6]))
+  print (sum (zipWith3 (\a b c -> a * b + c) [1 .. 4] [10, 20 ..] (repeat 1)), length (zip3 [1 .. 5] [1 .. 3] [1 ..]))
+  print (sum (map (\(a, b, c) -> a + b + c) (zip3 [1, 2] [10, 20] [100, 200, 300])))
+  -- a foldr that is recursion: its elements kept, the step taken from the last back
+  print (foldr (\x acc -> x + 2 * acc) 0 [1 .. 10], foldr (-) 0 [1 .. 10], foldr (\x acc -> x - acc) 100 (filter odd [1 .. 9]))
+  print (foldr (+) 0 [1 .. 3000000])
+  -- Iter.drop, Iter.dropWhile, Iter.find and what is made of it
+  print (Iter.sum (Iter.drop 2 (Iter.range 1 5)), Iter.sum (Iter.dropWhile odd (Iter.fromList [1, 3, 4, 5])))
+  print (Iter.find (> 3) (Iter.map (* 2) (Iter.from 1)), Iter.any even (Iter.range 1 5), Iter.all odd (Iter.range 1 5), Iter.elem 4 (Iter.range 1 3))
+  print (Iter.head (do
+    x <- Iter.from 1
+    y <- Iter.range 1 x
+    if x * y == 12 then pure (x, y) else Iter.fromList []))

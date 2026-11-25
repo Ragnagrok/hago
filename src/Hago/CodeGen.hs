@@ -746,6 +746,19 @@ genExpr ctx e = case e of
           pure ("func() IOStep[" ++ goTy ctx b ++ "] {\n" ++ unlines ls ++ end ++ "\n}")
       | isTop ctx "listFoldr", [k, z, xs] <- args, fusable (prodOf ctx xs), Just _ <- exitsOf ctx k ->
           fuseFoldr ctx t k z xs
+      | isTop ctx "listFoldr", [k, z, xs] <- args, fusable (prodOf ctx xs), Just _ <- strictStepOf ctx k ->
+          fuseFoldrBack ctx t k z xs
+    -- Iter.find (any, all, elem, head) of an Iter made right there
+    CVar fn _ t | Just "rt_iterFind" <- foreignSym ctx fn, [q0, xs0] <- args
+                , let p = iterProdOf ctx xs0, iterKnown p, fusable p -> do
+      (q, xs) <- renamed2 q0 xs0
+      let c0 = noSelf ctx
+          r = snd (splitFun 2 (zonk (progSubst (cxProg ctx)) t))
+          targs = case r of TCon _ ts -> ts; _ -> []
+      loop <- genLoop c0 (iterProdOf c0 xs) $ \c x -> do
+        (ls, _, y) <- applyNew c q [x]
+        pure (ls ++ ["if " ++ mangle y ++ " {", "return " ++ conValue ctx "Right" targs [mangle x], "}"])
+      pure ("func() " ++ goTy ctx r ++ " {\n" ++ unlines loop ++ "return " ++ conValue ctx "Left" targs ["\"not found\""] ++ "\n}()")
     -- Iter.foldl (length, sum, maximum) of an Iter made right there: a loop
     CVar fn _ t | Just "rt_iterFoldl" <- foreignSym ctx fn, [g, z, xs] <- args
                , let p = iterProdOf ctx xs, iterKnown p, fusable p ->
@@ -1445,6 +1458,8 @@ data Prod
   | PFilter CExpr Prod
   | PTake CExpr Prod
   | PTakeWhile CExpr Prod
+  | PDrop CExpr Prod
+  | PDropWhile CExpr Prod
   | PRepeat CExpr
   | PIterate CExpr CExpr
   | PAppend Prod Prod
@@ -1457,6 +1472,9 @@ data Prod
   | PZip (Maybe CExpr) (Type, Type) Prod Prod
     -- ^ zipWith g xs ys, or zip xs ys (Nothing), with the types of the
     -- elements of each
+  | PZip3 (Maybe CExpr) (Type, Type, Type) Prod Prod Prod
+    -- ^ zipWith3 and zip3: the first list visited by its loops, the other
+    -- two a step at a time
   | PFold Name Prod Step Prod
     -- ^ listFoldr (\x rest -> step) end src, as concatMap and comprehensions
     -- make it: for each x of src, the elements of step, then those of end
@@ -1465,7 +1483,13 @@ data Prod
 data RangeStep = By CExpr | Then CExpr
 
 -- | What a step of a fold that makes a list gives before its rest.
-data Step = SNext | SYield CExpr Step | SEach Prod Step | SIf CExpr Step Step | SLet [CBind] Step
+data Step
+  = SNext
+  | SYield CExpr Step
+  | SEach Prod Step
+  | SIf CExpr Step Step
+  | SLet [CBind] Step
+  | SStop Prod   -- ^ these elements, and the list ends: the step dropped its rest
 
 -- | The type of an Iter's values.
 iterElem :: Type -> Maybe Type
@@ -1491,11 +1515,15 @@ prodOf ctx e = case e of
     ("filter", [q, xs]) -> PFilter q (prodOf ctx xs)
     ("take", [n, xs]) -> PTake n (prodOf ctx xs)
     ("takeWhile", [q, xs]) -> PTakeWhile q (prodOf ctx xs)
+    ("drop", [n, xs]) -> PDrop n (prodOf ctx xs)
+    ("dropWhile", [q, xs]) -> PDropWhile q (prodOf ctx xs)
     ("repeat", [x]) -> PRepeat x
     ("iterate", [g, x]) -> PIterate g x
     ("append", [xs, ys]) -> PAppend (prodOf ctx xs) (prodOf ctx (forced ys))
     ("zip", [xs, ys]) | Just tys <- elemTypes 0 -> PZip Nothing tys (prodOf ctx xs) (second xs ys)
     ("zipWith", [g, xs, ys]) | Just tys <- elemTypes 1 -> PZip (Just g) tys (prodOf ctx xs) (second xs ys)
+    ("zip3", [xs, ys, zs]) | Just tys <- elemTypes3 0 -> PZip3 Nothing tys (prodOf ctx xs) (stepped ys) (stepped zs)
+    ("zipWith3", [g, xs, ys, zs]) | Just tys <- elemTypes3 1 -> PZip3 (Just g) tys (prodOf ctx xs) (stepped ys) (stepped zs)
     ("listFoldr", [k, z, xs])
       | Just (x, r, body) <- lam2 k, Just st <- stepOf ctx r body -> PFold x (prodOf ctx xs) st (prodOf ctx z)
     _ -> PCells e
@@ -1524,6 +1552,12 @@ prodOf ctx e = case e of
     second xs ys
       | pullable (prodOf ctx ys) || pullable (prodOf ctx xs) = prodOf ctx ys
       | otherwise = PCells ys
+    stepped ys = if pullable (prodOf ctx ys) then prodOf ctx ys else PCells ys
+    elemTypes3 n = case e of
+      CApp (CVar _ _ t) _ -> case fst (splitFun (n + 3) (zonk (progSubst (cxProg ctx)) t)) of
+        ts | [TCon "[]" [a], TCon "[]" [b], TCon "[]" [c]] <- drop n ts -> Just (a, b, c)
+        _ -> Nothing
+      _ -> Nothing
 
 -- | The Go function a foreign name calls.
 foreignSym :: Ctx -> Name -> Maybe String
@@ -1544,6 +1578,8 @@ iterProdOf ctx e = case e of
     ("rt_iterFilter", [q, xs]) -> PFilter q (iterProdOf ctx xs)
     ("rt_iterTakeWhile", [q, xs]) -> PTakeWhile q (iterProdOf ctx xs)
     ("rt_iterTake", [n, xs]) -> PTake n (iterProdOf ctx xs)
+    ("rt_iterDrop", [n, xs]) -> PDrop n (iterProdOf ctx xs)
+    ("rt_iterDropWhile", [q, xs]) -> PDropWhile q (iterProdOf ctx xs)
     ("rt_iterRepeat", [x]) -> PRepeat x
     ("rt_iterIterate", [g, x]) -> PIterate g x
     ("rt_iterAppend", [a, b]) -> PAppend (iterProdOf ctx a) (iterProdOf ctx b)
@@ -1565,6 +1601,8 @@ iterWorthIt = \case
   PFilter _ q -> iterWorthIt q
   PTake _ q -> iterWorthIt q
   PTakeWhile _ q -> iterWorthIt q
+  PDrop _ q -> iterWorthIt q
+  PDropWhile _ q -> iterWorthIt q
   PAppend a b -> iterWorthIt a || iterWorthIt b
   PIf _ a b -> iterWorthIt a || iterWorthIt b
   PLet _ q -> iterWorthIt q
@@ -1595,6 +1633,7 @@ isRest r = \case
 
 stepOf :: Ctx -> Name -> CExpr -> Maybe Step
 stepOf ctx r e = case e of
+  _ | free e -> Just (SStop (prodOf ctx e))
   CForce (CVar v _ _) | v == r -> Just SNext
   CApp (CVar "append" _ _) [q, t] | isTop ctx "append", free q -> SEach (prodOf ctx q) <$> lazyStep t
   CApp (CVar "primAppend" (Inst [TCon "[]" _] _) _) [q, t] | isPrim ctx "primAppend", free q -> SEach (prodOf ctx q) <$> lazyStep t
@@ -1625,7 +1664,10 @@ fusable p = sites p <= 8
       PFilter _ q -> sites q
       PTake _ q -> sites q
       PTakeWhile _ q -> sites q
+      PDrop _ q -> sites q
+      PDropWhile _ q -> sites q
       PZip _ _ a b -> sites a + sites b
+      PZip3 _ _ a _ _ -> sites a
       PFold _ src st end -> sites src * max 1 (stepSites st) + sites end
       _ -> 1 :: Int
     stepSites = \case
@@ -1634,6 +1676,7 @@ fusable p = sites p <= 8
       SEach q s -> sites q + stepSites s
       SIf _ a b -> stepSites a + stepSites b
       SLet _ s -> stepSites s
+      SStop q -> sites q
 
 -- | The same, for listFoldl, which the Prelude already runs as a loop over
 -- a list that exists: the loops are worth it only where the list does not.
@@ -1726,6 +1769,21 @@ genLoop ctx p k = case p of
       b <- k c' x
       pure (ls ++ ["if !" ++ mangle y ++ " {", "break " ++ lab, "}"] ++ b)
     pure ([lab ++ ":", "for {"] ++ inner ++ ["break", "}"])
+  PDrop n q -> do
+    cnt <- freshName "n"
+    n' <- genExpr ctx n
+    inner <- genLoop ctx q $ \c x -> do
+      b <- k c x
+      pure (["if " ++ cnt ++ " > 0 {", cnt ++ "--", "} else {"] ++ b ++ ["}"])
+    pure (["{", cnt ++ " := " ++ n'] ++ inner ++ ["}"])
+  -- dropWhile: the test is computed only while dropping
+  PDropWhile f q -> do
+    dropping <- freshName "dropping"
+    inner <- genLoop ctx q $ \c x -> do
+      (ls, _, y) <- applyNew c f [x]
+      b <- k c x
+      pure (["if " ++ dropping ++ " {"] ++ ls ++ ["if !" ++ mangle y ++ " {", dropping ++ " = false", "}", "}", "if !" ++ dropping ++ " {"] ++ b ++ ["}"])
+    pure (["{", dropping ++ " := true"] ++ inner ++ ["}"])
   PRepeat e -> do
     (ls, c, y) <- bindNew ctx e
     b <- visit c y
@@ -1779,11 +1837,34 @@ genLoop ctx p k = case p of
           pure (ls' ++ kb ++ ls ++ [mangle cur ++ " = " ++ mangle x1])
         pure (initA ++ first ++ [mangle cur ++ " := " ++ mangle x0, "_ = " ++ mangle cur] ++ inner)
     pure ([lab ++ ":", "for {"] ++ body ++ ["break " ++ lab, "}"])
-  PFold x src st end -> do
-    each <- genLoop ctx src $ \c e ->
-      ([mangle x ++ " := " ++ mangle e, "_ = " ++ mangle x] ++) <$> genStep (bindLocals c [(x, 0)]) st k
-    after <- genLoop ctx end k
-    pure (each ++ after)
+  -- zip3: the first list's cell, then the second's, then the third's
+  PZip3 g (ta, tb, tc) a b cq -> do
+    lab <- freshName "L"
+    let end = "break " ++ lab
+    (initB, nextB) <- genPull ctx b
+    (initC, nextC) <- genPull ctx cq
+    inner <- genLoop ctx a $ \c x -> do
+      (ls1, c1, y) <- nextB c end
+      (ls2, c2, z) <- nextC c1 end
+      (ls3, c3, w) <- case g of
+        Just f -> applyNew c2 f [x, y, z]
+        Nothing -> bindNew c2 (CApp (CCon "(,,)" [ta, tb, tc] (TFun ta (TFun tb (TFun tc (TCon "(,,)" [ta, tb, tc])))))
+                                  [CVar x (Inst [] []) ta, CVar y (Inst [] []) tb, CVar z (Inst [] []) tc])
+      (\kb -> ls1 ++ ls2 ++ ls3 ++ kb) <$> k c3 w
+    pure ([lab ++ ":", "for {"] ++ initB ++ initC ++ inner ++ ["break " ++ lab, "}"])
+  PFold x src st end
+    | stops st -> do
+        -- a step that drops its rest ends the whole list, the end too
+        lab <- freshName "L"
+        each <- genLoop ctx src $ \c e ->
+          ([mangle x ++ " := " ++ mangle e, "_ = " ++ mangle x] ++) <$> genStep (bindLocals c [(x, 0)]) (Just lab) st k
+        after <- genLoop ctx end k
+        pure ([lab ++ ":", "for {"] ++ each ++ after ++ ["break " ++ lab, "}"])
+    | otherwise -> do
+        each <- genLoop ctx src $ \c e ->
+          ([mangle x ++ " := " ++ mangle e, "_ = " ++ mangle x] ++) <$> genStep (bindLocals c [(x, 0)]) Nothing st k
+        after <- genLoop ctx end k
+        pure (each ++ after)
   where
     visit c x = (\b -> ["{"] ++ b ++ ["}"]) <$> k c x
 
@@ -1854,24 +1935,37 @@ genPull ctx p = case p of
     pure (ls, next)
   _ -> error "genPull: not a list visited a step at a time"
 
-genStep :: Ctx -> Step -> (Ctx -> Name -> Gen [String]) -> Gen [String]
-genStep ctx st k = case st of
+-- | Whether a step can end the list.
+stops :: Step -> Bool
+stops = \case
+  SStop _ -> True
+  SYield _ s -> stops s
+  SEach _ s -> stops s
+  SIf _ a b -> stops a || stops b
+  SLet _ s -> stops s
+  SNext -> False
+
+-- | A step's elements; lab is the label that ends the list, for a step
+-- that drops its rest.
+genStep :: Ctx -> Maybe String -> Step -> (Ctx -> Name -> Gen [String]) -> Gen [String]
+genStep ctx lab st k = case st of
   SNext -> pure []
   SYield h s -> do
     (ls, c, y) <- bindNew ctx h
     b <- k c y
-    rest <- genStep ctx s k
+    rest <- genStep ctx lab s k
     pure (["{"] ++ ls ++ b ++ ["}"] ++ rest)
-  SEach p s -> (++) <$> genLoop ctx p k <*> genStep ctx s k
+  SEach p s -> (++) <$> genLoop ctx p k <*> genStep ctx lab s k
   SIf c a b -> do
     c' <- genExpr ctx c
-    as <- genStep ctx a k
-    bs <- genStep ctx b k
+    as <- genStep ctx lab a k
+    bs <- genStep ctx lab b k
     pure (["if " ++ c' ++ " {"] ++ as ++ ["} else {"] ++ bs ++ ["}"])
   SLet bs s -> do
     (ctx', ls) <- genBinds ctx bs
-    b <- genStep ctx' s k
+    b <- genStep ctx' lab s k
     pure (["{"] ++ ls ++ b ++ ["}"])
+  SStop p -> (++ maybe [] (\l -> ["break " ++ l]) lab) <$> genLoop ctx p k
 
 -- | A new variable holding the value of e.
 bindNew :: Ctx -> CExpr -> Gen ([String], Ctx, Name)
@@ -1961,6 +2055,81 @@ fuseFoldr ctx0 t k0 z xs0 = do
         b' <- exit r c' b
         pure (["{"] ++ ls ++ b' ++ ["}"])
       _ -> error "fuseFoldr: not a step that stops"
+
+-- | The step of a listFoldr that forces its rest once, whatever happens,
+-- and does nothing else that could fail: x + rest, max x rest. It is
+-- recursion, not a loop, but the elements can be kept in a Go slice and
+-- the step taken from the last one back, without the Go stack and the
+-- suspension per element that the Prelude's listFoldr takes. Since nothing
+-- but the rest can fail, taking the steps backwards computes the same.
+strictStepOf :: Ctx -> CExpr -> Maybe (Name, Name, CExpr)
+strictStepOf ctx k = case lam2 k of
+  Just (x, r, body) | uses r body == 1, forcedOnce r body -> Just (x, r, body)
+  _ -> Nothing
+  where
+    uses r body = length [() | CVar v _ _ <- everything body, v == r]
+    -- the rest is forced (used once, not in a branch, a lambda or a
+    -- suspension), and the rest of the step is total
+    forcedOnce r e = case e of
+      CForce (CVar v _ _) -> v == r
+      _ | r `notElem` coreRefs e -> total e
+      CApp f as | totalHead f -> all (\a -> r `notElem` coreRefs a && total a || forcedOnce r a) as
+      CLet bs b _ -> all (\(CBind _ _ _ x) -> r `notElem` coreRefs x && total x) bs && forcedOnce r b
+      _ -> False
+    totalHead = \case
+      CCon {} -> True
+      CVar p _ _ | isPrim ctx p -> p `elem` totalPrims
+      CVar op _ _ -> op `elem` ["&&", "||"] && isTop ctx op
+      _ -> False
+    total = \case
+      CVar {} -> True
+      CLit _ -> True
+      CNum {} -> True
+      CFrac {} -> True
+      CCon {} -> True
+      CDelay {} -> True
+      CLam {} -> True
+      CApp (CCon {}) as -> all total as
+      CApp (CVar p _ _) as | isPrim ctx p, p `elem` totalPrims -> all total as
+      CApp (CVar op _ _) as | op `elem` ["&&", "||"], isTop ctx op -> all total as
+      CIf c a b _ -> total c && total a && total b
+      CLet bs b _ -> all (\(CBind _ _ _ x) -> total x) bs && total b
+      CForce (CVar {}) -> True
+      _ -> False
+    totalPrims =
+      [ "primAdd", "primSub", "primMul", "primNeg", "primEq", "primNeq", "primLt", "primLe", "primGt", "primGe"
+      , "primIntToDouble", "primFDiv" ]
+
+-- | Such a listFoldr: its elements into a slice, z, then the step from the
+-- last element back, with the rest the value so far.
+fuseFoldrBack :: Ctx -> Type -> CExpr -> CExpr -> CExpr -> Gen String
+fuseFoldrBack ctx0 t k0 z xs0 = do
+  (k, xs) <- renamed2 k0 xs0
+  let ctx = noSelf ctx0
+      (argTys, resTy) = splitFun 3 (zonk (progSubst (cxProg ctx)) t)
+      elTy = case argTys of
+        [_, _, TCon "[]" [a]] -> a
+        _ -> tUnit
+      b = goTy ctx resTy
+  case strictStepOf ctx k of
+    Nothing -> error "fuseFoldrBack: not a strict step"
+    Just (x, r, body) -> do
+      acc <- freshName "acc"
+      xsV <- freshName "xs"
+      i <- freshName "i"
+      z' <- genExpr ctx z
+      loop <- genLoop ctx (prodOf ctx xs) $ \_ e -> pure [xsV ++ " = append(" ++ xsV ++ ", " ++ mangle e ++ ")"]
+      let ctxA = bindLocals ctx [(acc, 0), (x, 0)]
+          body' = everywhere (\case
+            CForce (CVar v _ _) | v == r -> CVar acc (Inst [] []) resTy
+            other -> other) body
+      step <- genExpr ctxA body'
+      pure $ intercalate "\n"
+        ( ["func() " ++ b ++ " {", "var " ++ mangle acc ++ " " ++ b ++ " = " ++ z', "var " ++ xsV ++ " []" ++ goTy ctx elTy]
+            ++ loop
+            ++ [ "for " ++ i ++ " := len(" ++ xsV ++ ") - 1; " ++ i ++ " >= 0; " ++ i ++ "-- {"
+               , mangle x ++ " := " ++ xsV ++ "[" ++ i ++ "]", "_ = " ++ mangle x
+               , mangle acc ++ " = " ++ step, "}", "return " ++ mangle acc, "}()" ] )
 
 -- | The step of a listFoldr of actions that runs some and then its rest:
 -- mapM_, forM_, traverse_, sequence_.

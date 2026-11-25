@@ -29,6 +29,7 @@ progs=(
   "Pythagorean triples, comprehension|bench/triples-list.hgo|"
   "the same as do over Iter|bench/triples-iter.hgo|"
   "the same with Iter.filter|bench/triples-filter.hgo|"
+  "foldr (+) over 10M, recursion|bench/foldr-sum.hgo|"
   "mapM_ over 1M in IO|bench/mapm-io.hgo|"
   "recursive IO loop, 5M|bench/loop-io.hgo|"
   "mapM_ over 1M in StateT Int IO|bench/mapm-statet.hgo|"

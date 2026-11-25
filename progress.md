@@ -439,11 +439,26 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
         (`Iter`'s `empty` is `none`) is replaced by it. 0.59 s → <0.01 s; with `Iter.filter`,
         0.04 s → <0.01 s.
       `examples/fusion.hgo` checks each against the same computed with lists or by hand.
-- [ ] **What fusion still does not reach:** a `listFoldr` whose step uses its rest inside an
-      expression (`x + rest`), which is recursion and not a loop; one whose step drops its
-      rest to stop (a producer that ends early, other than `take` and `takeWhile`);
-      `Data.Iter`'s `find`, `any`, `all`, `elem`, `drop` and `dropWhile`, which stay calls;
-      `zip3` and `zipWith3`.
+- [x] **The rest of what fusion did not reach:**
+      - **A step that drops its rest** ends the list there (`foldr (\x rest -> if x < 5 then
+        x : rest else []) [] [1 ..]`): its elements, then a labelled break out of the fold's
+        loops, the end of the fold too, which foldr would never reach.
+      - **`drop` and `dropWhile`,** of lists and of `Iter`s: a counter, and a flag that stops
+        computing the test once it failed. **`zip3` and `zipWith3`:** the first list visited
+        by its loops, the other two a step at a time (made, when they cannot be).
+        **`Iter.find`,** and with it `any`, `all`, `elem` and `head`: a loop that returns the
+        first value that satisfies the test.
+      - **A `foldr` that is recursion** (`foldr (+) 0 xs`): when the step forces its rest once,
+        outside branches, lambdas and suspensions, and everything else in it is total
+        (variables, constructors, suspensions, the primitives that cannot fail: `+`, `-`,
+        `*`, comparisons, `/` of `Double`), its elements go into a Go slice and the step is
+        taken from the last back, the rest being the value so far. Nothing but the rest can
+        fail, so the order of the steps cannot be seen. `foldr (+) 0 [1 .. 10000000]` ran out
+        of the Go stack (1 GB) before; now 0.10 s and 190 MB, GHC 0.13 s and 169 MB.
+      `examples/fusion.hgo` checks the lists' cases against GHC and the `Iter`s' by hand.
+- [ ] **Left as recursion:** a `foldr` whose step calls a function not known to be total
+      (`max x rest` stays a call to `max`, `x `div` rest` can fail). The backwards fold's
+      slice holds every element at once and grows by doubling: 190 MB for ten million.
 - [ ] **What the garbage collector costs:** the last profiles of `Data.Map` and JSON (above)
       had it at about half the CPU. Profile them again, then fewer allocations (closures for
       known functions, cells), then measure `GOGC` again.
