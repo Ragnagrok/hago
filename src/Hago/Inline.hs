@@ -30,7 +30,7 @@
 --
 -- Otherwise the call stays a call. Names bound in a copied body are
 -- renamed, so nothing in it can capture a variable of the arguments.
-module Hago.Inline (inlineSmall) where
+module Hago.Inline (inlineSmall, renameBinders) where
 
 import Control.Monad (when)
 import Control.Monad.State
@@ -244,13 +244,21 @@ substVars s = everywhere $ \case
 
 -- | The expression with every name it binds made new: x becomes x#n.
 freshen :: CExpr -> M CExpr
-freshen = expr M.empty
+freshen = renameBinders fresh
   where
     fresh :: Name -> M Name
     fresh x = do
       n <- gets sNext
       modify (\s -> s {sNext = n + 1})
       pure (takeWhile (/= '#') x ++ "#" ++ show n)
+
+-- | Every name the expression binds replaced by what fresh makes of it, in
+-- its scope: parameters, local bindings, pattern variables, variables of
+-- do blocks. Free variables stay.
+renameBinders :: forall m. Monad m => (Name -> m Name) -> CExpr -> m CExpr
+renameBinders fresh = expr M.empty
+  where
+    freshAll :: M.Map Name Name -> [Name] -> m (M.Map Name Name)
     freshAll env xs = do
       ys <- mapM fresh xs
       pure (foldr (uncurry M.insert) env (zip xs ys))

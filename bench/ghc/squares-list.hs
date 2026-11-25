@@ -1,0 +1,2 @@
+main :: IO ()
+main = print (sum (map (\x -> x * x) (filter (\x -> x `mod` 3 == 0) [1 .. 3000000 :: Int])))

@@ -480,7 +480,7 @@ Hago has three kinds of sequence, each for its own job:
 | Adding in front, sharing the rest | O(1) | no | copies |
 | Consumed twice | computed once, shared | computed twice | stored |
 | Infinite | yes | yes | no |
-| A pipeline over millions of values | one allocation per cell | no allocation per value | stores them all |
+| A pipeline over millions of values | one allocation per cell, none when folded where it is made | no allocation per value | stores them all |
 | Reaching the n-th element | O(n) | O(n) | O(1) |
 
 - **A list is a data structure:** for recursion and patterns, for building a result one element
@@ -492,6 +492,18 @@ Hago has three kinds of sequence, each for its own job:
   which is what a list is.
 - **A `Vector` is data already computed,** reached by position, and the type Go functions give
   and take for slices: `foreign import go "strings.Split" split :: String -> String -> Vector String`.
+
+**A list made only to be folded is never made.** When `sum`, `length`, `foldl`, `maximum`,
+`any`, `all`, `elem`, `find`, `and`, `or`, `mapM_`, `forM_` or `traverse_` is given a list
+built right there from ranges, `map`, `filter`, `take`, `takeWhile`, `repeat`, `iterate`,
+`replicate`, `++`, `concatMap`, `if`, `let` and literals, or a comprehension of them, the
+compiler generates the Go loops that visit its elements, nested for a comprehension, and no
+cell is allocated: `length [(a, b, c) | c <- [1 .. 400], b <- [1 .. c], a <- [1 .. b], a * a
++ b * b == c * c]` is three `for` loops. What is computed is what the list would hold, in the
+same order: every element (a cell's head is strict, so `length (map f xs)` still computes
+each `f x`), and no more than the fold asks for (`take 5 (iterate f x)` calls `f` four times,
+`any p [1 ..]` stops). A list in a variable, or given to a function, is a list as before
+(`examples/fusion.hgo`).
 
 A function given to a Go function, as `map`, `filter` and `foldl` give theirs, is generated as a
 Go function of all its arguments, so a pipeline over an `Iter` runs like the Go loop it stands
@@ -510,9 +522,10 @@ triples n = do
   pure (a, b, c)
 ```
 
-It runs twice as fast as the same list comprehension, but each value still allocates the
-`Iter` its step returns (`pure`, `guard`); a `map` and a `filter` where they are enough are
-thirty times faster again (see [Performance](#performance)). Comprehensions and ranges
+It is a value that can be passed around and consumed later, but each value still allocates
+the `Iter` its step returns (`pure`, `guard`); a `map` and a `filter` where they are enough are
+twenty times faster (see [Performance](#performance)). A list comprehension folded where it is
+written is faster than both: it is the loops themselves. Comprehensions and ranges
 (`[x | x <- xs]`, `[1 ..]`) are always lists: making them `Iter`s when the type asks for one
 would make their type a choice that most uses (`length`, `sum`, `mapM_`) leave open.
 
@@ -634,13 +647,13 @@ side by side with others (`bench/run.sh OLD_HAGO NEW_HAGO`).
 | `nfib 40`, hand-written Go | 0.35 s | — |
 | `nfib 40 :: Int -> Int`, Hago | 0.37 s | — |
 | `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, at `Int` | 0.36 s | — |
-| sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.12 s | ~8 MB |
+| sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | <0.01 s | ~2 MB |
 | the same with `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | <0.01 s | ~2 MB |
 | the same over a `Data.Vector` of 3,000,000 elements | 0.02 s | ~58 MB |
-| Pythagorean triples up to 400, as a list comprehension | 1.14 s | ~8 MB |
-| the same as `do` over `Iter` | 0.59 s | ~8 MB |
+| Pythagorean triples up to 400, as a list comprehension | <0.01 s | ~2 MB |
+| the same as `do` over `Iter` | 0.61 s | ~8 MB |
 | the same with `Iter.filter` for the last generator and the guard | 0.03 s | ~7 MB |
-| `mapM_` over a million elements in IO | 0.06 s | ~7 MB |
+| `mapM_` over a million elements in IO | <0.01 s | ~2 MB |
 | a recursive IO loop of five million iterations | 0.05 s | ~7 MB |
 | `mapM_` over a million elements in `StateT Int IO` | 0.12 s | ~8 MB |
 | fifty million additions of a `newtype Meters = Meters Double` | 0.02 s | ~2 MB |
@@ -648,7 +661,7 @@ side by side with others (`bench/run.sh OLD_HAGO NEW_HAGO`).
 | parse and pretty print 3.7 MB of JSON with `examples/json.hgo` (`jq .`: 0.09 s, 28 MB) | 0.24 s | ~72 MB |
 | `fib 32` sixteen times with `map` | 0.13 s | — |
 | the same with `parMap`, on 16 processors | 0.03 s | — |
-| a million `Data.Map` inserts, then half a million deletes with `foldl`, and lookups | 2.1 s | ~100 MB |
+| a million `Data.Map` inserts, then half a million deletes with `foldl`, and lookups | 1.8 s | ~94 MB |
 | the primes up to a million, sieve of Eratosthenes on an `STVector` (`examples/sieve.hgo`) | <0.01 s | ~3 MB |
 | the same with a `Data.Map` (the incremental sieve) | 1.65 s | ~19 MB |
 | the primes up to ten million, on an `STVector` | 0.06 s | ~11 MB |
@@ -656,7 +669,7 @@ side by side with others (`bench/run.sh OLD_HAGO NEW_HAGO`).
 | the same on an `IOVector`, in a program with threads | 0.37 s | ~12 MB |
 | the same with a `Data.Map` | 27 s | ~133 MB |
 | the same, hand-written Go | 0.03 s | ~12 MB |
-| how often each of a million numbers appears, in a `HashTable` in ST (`examples/frequencies.hgo`) | 0.17 s | ~15 MB |
+| how often each of a million numbers appears, in a `HashTable` in ST (`examples/frequencies.hgo`) | 0.11 s | ~13 MB |
 | the same with a `Data.Map` | 1.43 s | ~19 MB |
 
 The JSON is the one `bench/json-input.go` writes, always the same:
@@ -671,9 +684,11 @@ The JSON is the one `bench/json-input.go` writes, always the same:
   in IO or ST is a Go loop (see [Loops and the stack](#loops-and-the-stack)).
 - **Constrained and constructor-polymorphic code** (`Num a =>`, `Monad m =>`) costs nothing
   extra, because it is specialised. The price is code size: one copy per type it is used at.
-- **The lazy list pipeline** streams in constant memory, but every cell allocates its thunk with
-  it, and the closure that computes the rest, so it is much slower than a Go loop. The same
-  pipeline over an `Iter` is a Go loop.
+- **A list folded where it is made** (the pipeline of squares, the comprehension of triples,
+  `mapM_` over a range) is a Go loop and allocates nothing (see
+  [Lists, iterators and vectors](#lists-iterators-and-vectors)). A list kept in a variable and
+  folded later is made: every cell allocates its thunk with it, and the closure that computes
+  the rest.
 - **Parser combinators** need care. `Text.Parser`'s reply to each step is one constructor small
   enough to be kept by value (the value as a `Maybe`, the input left, what was expected there),
   so a step allocates nothing; whether it consumed input is whether what it left is what it was
@@ -686,6 +701,45 @@ The JSON is the one `bench/json-input.go` writes, always the same:
   loop over a mutable vector is Go's loop with a check of the index at each access, about twice
   the time of Go's. In a program with threads, a vector made in IO also takes a lock on each
   access (the sieve in IO: 0.06 s alone, 0.37 s in a program with threads).
+
+### Against GHC
+
+The same programs written for GHC 9.12 (`ghc -O2`) are in `bench/ghc/`, and
+`bench/ghc/run.sh` builds both and times them side by side, on the same machine. They do the
+same work: the same algorithms, Hago's strict fields as strict fields in Haskell, and JSON's
+combinators, reply and pretty printer ported line by line onto `Data.Text`.
+
+| Program | Hago | GHC |
+|---|---|---|
+| `nfib 40` | 0.37 s | 0.35 s |
+| `nfib 40 :: (Ord a, Num a) => a -> a`, at `Int` | 0.37 s | 0.35 s |
+| sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | <0.01 s | <0.01 s |
+| the same over a `Data.Vector` (unboxed in GHC) | 0.02 s | 0.01 s |
+| Pythagorean triples up to 400, as a list comprehension | <0.01 s | <0.01 s |
+| `mapM_` over a million elements in IO | <0.01 s | <0.01 s |
+| a recursive IO loop of five million iterations | 0.05 s | 0.01 s |
+| `mapM_` over a million elements in `StateT Int IO` | 0.12 s | <0.01 s |
+| fifty million additions of a `Meters`, `newtype` or `data` | 0.02 s | 0.02 s |
+| JSON, 3.7 MB, the same combinators and printer | 0.23 s, 68 MB | 0.28 s, 93 MB |
+| `fib 32` sixteen times with `map` (GHC computes it once) | 0.13 s | 0.01 s |
+| the same, GHC without full laziness | 0.12 s | 0.13 s |
+| the same with `parMap`, on 16 processors | 0.04 s | 0.05 s |
+| a million `Data.Map` inserts, half a million deletes, lookups | 1.80 s, 95 MB | 1.37 s, 218 MB |
+| the primes up to a million with a `Data.Map` | 1.77 s | 0.32 s |
+| the primes up to ten million, on an `STVector` (`STUArray` in GHC) | 0.07 s | 0.03 s |
+| the same on an `IOVector` (`IOUArray`) | 0.07 s | 0.04 s |
+| the same, in a program with threads | 0.36 s | 0.04 s |
+| frequencies of a million numbers, in a hash table in ST | 0.11 s, 12 MB | 0.20 s, 45 MB |
+| the same with a `Data.Map` | 1.56 s | 0.52 s |
+
+- **Even:** strict code at concrete types, newtypes, folds of lists made where they are
+  folded (both make loops of them), `parMap`.
+- **Hago ahead:** the JSON parser and printer, and the hash table, in time and in memory; and
+  memory in general, as with `Data.Map` (half of GHC's).
+- **GHC ahead:** code that allocates much and briefly (`Data.Map`, the sieve on a map), where
+  its generational collector does better than Go's; mutable arrays, by twice; `mapM_` in a
+  monad transformer, which Hago does not make a loop yet; and a vector in IO in a program with
+  threads, which Hago locks on each access and GHC does not.
 
 ## Using it
 
@@ -869,6 +923,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `editors/vscode/` | the VS Code extension: the TextMate grammar, and `hago check` on save |
 | `bench/json-input.go` | writes the JSON of the benchmark in [Performance](#performance) |
 | `bench/run.sh` | the programs of [Performance](#performance), built and timed, with one compiler or several side by side |
+| `bench/ghc/` | the same programs for GHC, and `run.sh`, which times them against Hago's |
 
 ## License
 

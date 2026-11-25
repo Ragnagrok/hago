@@ -1,0 +1,11 @@
+-- Hago's fields are strict, so the field is strict here too.
+data Meters = Meters !Double
+
+add :: Meters -> Meters -> Meters
+add (Meters a) (Meters b) = Meters (a + b)
+
+loop :: Int -> Meters -> Meters
+loop n m = if n == 0 then m else loop (n - 1) (add m (Meters 1.5))
+
+main :: IO ()
+main = case loop 50000000 (Meters 0) of Meters d -> print d

@@ -382,13 +382,53 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       (`ping`/`pong` in `examples/io-loops.hgo`), and so does one to an action passed as an
       argument. A run form for the whole group, one Go function with a loop over which of
       them is running, would make it a loop.
-- [ ] **`mapM_` and `forM_` over a list** go through `foldr` with a suspended rest, so each
-      element still makes an action and a closure.
+- [x] **Lists made only to be folded are loops** (2026-11-25). Against GHC 9.12 with `-O2`,
+      on the same programs, the largest gaps were its fusion: the pipeline of squares 0.13 s
+      against under 0.01 s, the comprehension of Pythagorean triples 1.10 s against under
+      0.01 s, `mapM_` over a million 0.06 s against under 0.01 s. Done in `Hago.CodeGen`, not
+      with rewrite rules: once `Hago.Inline` has copied the Prelude's folds in, every
+      consumer of `Foldable` over a list is `listFoldl` (`sum`, `length`, `maximum`, `foldl`)
+      or `listFoldr` (`any`, `all`, `elem`, `find`, `and`, `or`, `null`; `mapM_`, `forM_`,
+      `traverse_` for actions), and when the list it gets is made by producers (ranges and
+      the `Enum Int` methods, `map`, `filter`, `take`, `takeWhile`, `repeat`, `iterate`,
+      `++`, `if`, `let`, literals, and `listFoldr` steps that end in their rest, which is
+      what `concatMap` and comprehensions become) it is generated as nested `for` loops that
+      visit the elements. A `listFoldr` is a loop when its step either ends in its rest or
+      does not use it (it stops there, returning from a Go function called on the spot), or,
+      for actions, runs some and then its rest (run with `genRun`). Every element a cell
+      would hold is still computed, in order (`failing/fusion-strict-elements.hgo`), and no
+      more than the fold asks for: `take` and `takeWhile` break out of all the loops, and
+      `iterate` computes its next element only after the fold took the last one. The names
+      the fold binds are renamed first (`Hago.Inline.renameBinders`), so nested Go blocks
+      never hide one another. `examples/fusion.hgo` checks the edges (steps, empty ranges,
+      the ends of `Int`, infinite lists cut by `take` or a fold that stops) against GHC's
+      output. A `listFoldr` over a list that exists is a loop too, since the Prelude's
+      allocates a suspension per element; a `listFoldl` over one is not, since the Prelude's
+      is already a loop. Measured, before and after:
+
+      | Program | Before | After |
+      | --- | --- | --- |
+      | squares of multiples of 3, lists | 0.12 s, 8 MB | <0.01 s, 2 MB |
+      | Pythagorean triples, comprehension | 1.1 s, 8 MB | <0.01 s, 2 MB |
+      | `mapM_` over 1M in IO | 0.06 s, 8 MB | <0.01 s, 2 MB |
+      | frequencies of 1M, `HashTable` (`mapM_` over a list) | 0.17 s, 18 MB | 0.11 s, 13 MB |
+      | `Data.Map`, 1M inserts, deletes, lookups (`length (filter ...)`) | 2.09 s, 102 MB | 1.78 s, 94 MB |
+
+      The rest did not change.
+- [ ] **Folds that fusion does not reach yet:** `mapM_` in a monad other than IO and ST
+      (`StateT Int IO`: 0.12 s, GHC under 0.01 s), whose rest is inside the bind's lambda;
+      `zip` and `zipWith`, which need two lists in step; a `listFoldr` whose step uses its
+      rest inside an expression (`x + rest`), which is recursion and not a loop; `do` over
+      `Iter`, which still allocates the `Iter` of each step.
 - [ ] **What the garbage collector costs:** the last profiles of `Data.Map` and JSON (above)
       had it at about half the CPU. Profile them again, then fewer allocations (closures for
       known functions, cells), then measure `GOGC` again.
-- [ ] **The same programs in GHC,** to know where Hago stands against Haskell and not only
-      against Go.
+- [x] **The same programs in GHC** (`bench/ghc/`, `bench/ghc/run.sh`; the README's "Against
+      GHC"). Even on strict code and on folds of lists made where they are folded; Hago ahead
+      on JSON (0.23 s against 0.28 s, the combinators and printer ported line by line) and on
+      the hash table (0.11 s against 0.20 s), and in memory everywhere; GHC ahead on what
+      allocates much (`Data.Map` 1.37 s against 1.80 s, the sieve on a map 0.32 s against
+      1.77 s), on mutable arrays (twice), and on `mapM_` in `StateT`.
 
 Next, tools around the language, in this order:
 

@@ -1,0 +1,6 @@
+-- expects: error: runtime error: integer divide by zero
+-- A list's elements are computed when its cells are made, so length of a
+-- map computes every element, even where the list is never made (a fold
+-- of a map is a loop): this fails, as the list would.
+main :: IO ()
+main = print (length (map (\x -> 10 `div` x) [1, 2, 0]))

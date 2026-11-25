@@ -1,0 +1,2 @@
+main :: IO ()
+main = print (length [(a, b, c) | c <- [1 .. 400 :: Int], b <- [1 .. c], a <- [1 .. b], a * a + b * b == c * c])
