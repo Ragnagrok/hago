@@ -5,17 +5,28 @@
 -- size. Keys need an order, and values are computed when they are put in,
 -- as everything in Hago is. Many names are the Prelude's, so this module is
 -- meant to be imported qualified: import qualified Data.Map as Map.
+--
+-- A map built by a fold (foldl (\m x -> Map.insert ...) m0 xs, fromList,
+-- fromListWith) or by a loop that passes it to itself (go (Map.insert k v
+-- m) rest) is built in place: the nodes the fold or the loop made are
+-- changed instead of copied, since nothing else can see them. The map it
+-- starts from, and every map made before, stay as they were.
 module Data.Map
   ( Map, empty, singleton, fromList, fromListWith, insert, insertWith, delete, adjust, alter
   , lookup, (!?), findWithDefault, member, notMember, size, null, toList, toAscList, toDescList
   , keys, elems, assocs, map, mapWithKey, filter, filterWithKey, foldr, foldrWithKey
   , foldlWithKey, union, unionWith, unions, unionsWith, intersectionWith, difference
-  , lookupMin, lookupMax, deleteMin, deleteMax, partition, split
+  , lookupMin, lookupMax, deleteMin, deleteMax, partition, split, valid
   ) where
 
 infixl 9 !?
 
-data Map k v = Tip | Bin Int k v (Map k v) (Map k v)
+data Map k v = Tip | Bin Int k v (Map k v) (Map k v) Owner
+
+foreign import go type "*rt_owner" Owner
+foreign import go "rt_noOwner" noOwner :: Owner
+foreign import go "rt_owns" owns :: Owner -> Owner -> Bool
+foreign import go "rt_overwrite" overwrite :: a -> a -> a
 
 -- Building ---------------------------------------------------------------------------
 
@@ -23,7 +34,7 @@ empty :: Map k v
 empty = Tip
 
 singleton :: k -> v -> Map k v
-singleton k v = Bin 1 k v Tip Tip
+singleton k v = Bin 1 k v Tip Tip noOwner
 
 -- From pairs; of two pairs with the same key, the last one wins.
 fromList :: Ord k => [(k, v)] -> Map k v
@@ -40,18 +51,10 @@ insert k v m = insertWith (\new _ -> new) k v m
 
 -- If the key is there, its value becomes f new old.
 insertWith :: Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
-insertWith _ k v Tip = singleton k v
-insertWith f k v (Bin n k' v' l r) = case compare k k' of
-  LT -> balance k' v' (insertWith f k v l) r
-  GT -> balance k' v' l (insertWith f k v r)
-  EQ -> Bin n k (f v v') l r
+insertWith f k v m = insertWithT noOwner f k v m
 
 delete :: Ord k => k -> Map k v -> Map k v
-delete _ Tip = Tip
-delete k (Bin _ k' v' l r) = case compare k k' of
-  LT -> balance k' v' (delete k l) r
-  GT -> balance k' v' l (delete k r)
-  EQ -> glue l r
+delete k m = deleteT noOwner k m
 
 -- The value at the key changed with f, if the key is there.
 adjust :: Ord k => (v -> v) -> k -> Map k v -> Map k v
@@ -68,7 +71,7 @@ alter f k m = case f (lookup k m) of
 
 lookup :: Ord k => k -> Map k v -> Maybe v
 lookup _ Tip = Nothing
-lookup k (Bin _ k' v l r) = case compare k k' of
+lookup k (Bin _ k' v l r _) = case compare k k' of
   LT -> lookup k l
   GT -> lookup k r
   EQ -> Just v
@@ -93,7 +96,7 @@ notMember k m = not (member k m)
 
 size :: Map k v -> Int
 size Tip = 0
-size (Bin n _ _ _ _) = n
+size (Bin n _ _ _ _ _) = n
 
 null :: Map k v -> Bool
 null Tip = True
@@ -101,23 +104,19 @@ null _ = False
 
 lookupMin :: Map k v -> Maybe (k, v)
 lookupMin Tip = Nothing
-lookupMin (Bin _ k v Tip _) = Just (k, v)
-lookupMin (Bin _ _ _ l _) = lookupMin l
+lookupMin (Bin _ k v Tip _ _) = Just (k, v)
+lookupMin (Bin _ _ _ l _ _) = lookupMin l
 
 lookupMax :: Map k v -> Maybe (k, v)
 lookupMax Tip = Nothing
-lookupMax (Bin _ k v _ Tip) = Just (k, v)
-lookupMax (Bin _ _ _ _ r) = lookupMax r
+lookupMax (Bin _ k v _ Tip _) = Just (k, v)
+lookupMax (Bin _ _ _ _ r _) = lookupMax r
 
 deleteMin :: Map k v -> Map k v
-deleteMin Tip = Tip
-deleteMin (Bin _ _ _ Tip r) = r
-deleteMin (Bin _ k v l r) = balance k v (deleteMin l) r
+deleteMin m = deleteMinT noOwner m
 
 deleteMax :: Map k v -> Map k v
-deleteMax Tip = Tip
-deleteMax (Bin _ _ _ l Tip) = l
-deleteMax (Bin _ k v l r) = balance k v l (deleteMax r)
+deleteMax m = deleteMaxT noOwner m
 
 -- Lists ------------------------------------------------------------------------------
 
@@ -147,14 +146,14 @@ map f m = mapWithKey (\_ v -> f v) m
 
 mapWithKey :: (k -> a -> b) -> Map k a -> Map k b
 mapWithKey _ Tip = Tip
-mapWithKey f (Bin n k v l r) = Bin n k (f k v) (mapWithKey f l) (mapWithKey f r)
+mapWithKey f (Bin n k v l r _) = Bin n k (f k v) (mapWithKey f l) (mapWithKey f r) noOwner
 
 filter :: (v -> Bool) -> Map k v -> Map k v
 filter p m = filterWithKey (\_ v -> p v) m
 
 filterWithKey :: (k -> v -> Bool) -> Map k v -> Map k v
 filterWithKey _ Tip = Tip
-filterWithKey p (Bin _ k v l r)
+filterWithKey p (Bin _ k v l r _)
   | p k v = link k v (filterWithKey p l) (filterWithKey p r)
   | otherwise = merge (filterWithKey p l) (filterWithKey p r)
 
@@ -164,7 +163,7 @@ partition p m = (filter p m, filter (\v -> not (p v)) m)
 -- The keys smaller than k, and those larger.
 split :: Ord k => k -> Map k v -> (Map k v, Map k v)
 split _ Tip = (Tip, Tip)
-split k (Bin _ k' v l r) = case compare k k' of
+split k (Bin _ k' v l r _) = case compare k k' of
   LT -> let (ll, lr) = split k l in (ll, link k' v lr r)
   GT -> let (rl, rr) = split k r in (link k' v l rl, rr)
   EQ -> (l, r)
@@ -174,11 +173,11 @@ foldr f z m = foldrWithKey (\_ v acc -> f v acc) z m
 
 foldrWithKey :: (k -> v -> b -> b) -> b -> Map k v -> b
 foldrWithKey _ z Tip = z
-foldrWithKey f z (Bin _ k v l r) = foldrWithKey f (f k v (foldrWithKey f z r)) l
+foldrWithKey f z (Bin _ k v l r _) = foldrWithKey f (f k v (foldrWithKey f z r)) l
 
 foldlWithKey :: (b -> k -> v -> b) -> b -> Map k v -> b
 foldlWithKey _ z Tip = z
-foldlWithKey f z (Bin _ k v l r) = foldlWithKey f (f (foldlWithKey f z l) k v) r
+foldlWithKey f z (Bin _ k v l r _) = foldlWithKey f (f (foldlWithKey f z l) k v) r
 
 -- Of a key in both, the value of the first map.
 union :: Ord k => Map k v -> Map k v -> Map k v
@@ -208,66 +207,138 @@ fromDistinctAscList kvs = fromList kvs
 -- Balancing --------------------------------------------------------------------------
 
 bin :: k -> v -> Map k v -> Map k v -> Map k v
-bin k v l r = Bin (size l + size r + 1) k v l r
+bin k v l r = Bin (size l + size r + 1) k v l r noOwner
 
 -- A node whose subtrees were balanced, and one of which grew or shrank by
 -- one element.
 balance :: k -> v -> Map k v -> Map k v -> Map k v
-balance k v l r
-  | sl + sr <= 1 = bin k v l r
-  | sr > 3 * sl = rotateL k v l r
-  | sl > 3 * sr = rotateR k v l r
-  | otherwise = bin k v l r
+balance k v l r = balanceT noOwner Tip k v l r
+
+-- Two trees, every key of the first smaller than every key of the second.
+glue :: Map k v -> Map k v -> Map k v
+glue l r = glueT noOwner l r
+
+-- Whether the tree is as it should be: its keys in order, the size kept in
+-- each node right, and every node balanced, as containers' valid checks.
+valid :: Ord k => Map k v -> Bool
+valid m = ordered (keys m) && sized m && balanced m
+  where
+    ordered (a : rest@(b : _)) = a < b && ordered rest
+    ordered _ = True
+    sized Tip = True
+    sized (Bin n _ _ l r _) = n == size l + size r + 1 && sized l && sized r
+    balanced Tip = True
+    balanced (Bin _ _ _ l r _) =
+      (size l + size r <= 1 || size l <= 3 * size r && size r <= 3 * size l) && balanced l && balanced r
+
+-- Building in place -----------------------------------------------------------------
+
+-- A node keeps the owner that made it. The operations that change a map
+-- take an owner. With noOwner they are the
+-- persistent operations: every node on the way is a new one, and the map
+-- given is not changed. A fold that builds a map, from one it does not keep
+-- (Hago's code generation sees it and gives it an owner of its own, active
+-- while the fold runs), changes in place the nodes it made itself, which
+-- nothing else can see, and copies the others, which it gives to no one.
+
+ownerOf :: Map k v -> Owner
+ownerOf Tip = noOwner
+ownerOf (Bin _ _ _ _ _ w) = w
+
+-- t with these fields: t itself, changed, if o made it; a new node of o's
+-- otherwise.
+nodeT :: Owner -> Map k v -> Int -> k -> v -> Map k v -> Map k v -> Map k v
+nodeT o t n k v l r = if owns o (ownerOf t) then overwrite t (Bin n k v l r o) else Bin n k v l r o
+
+insertWithT :: Ord k => Owner -> (v -> v -> v) -> k -> v -> Map k v -> Map k v
+insertWithT o _ k v Tip = Bin 1 k v Tip Tip o
+insertWithT o f k v t@(Bin n k' v' l r _) = case compare k k' of
+  LT -> balanceT o t k' v' (insertWithT o f k v l) r
+  GT -> balanceT o t k' v' l (insertWithT o f k v r)
+  EQ -> nodeT o t n k (f v v') l r
+
+deleteT :: Ord k => Owner -> k -> Map k v -> Map k v
+deleteT _ _ Tip = Tip
+deleteT o k t@(Bin _ k' v' l r _) = case compare k k' of
+  LT -> balanceT o t k' v' (deleteT o k l) r
+  GT -> balanceT o t k' v' l (deleteT o k r)
+  EQ -> glueT o l r
+
+deleteMinT :: Owner -> Map k v -> Map k v
+deleteMinT _ Tip = Tip
+deleteMinT _ (Bin _ _ _ Tip r _) = r
+deleteMinT o t@(Bin _ k v l r _) = balanceT o t k v (deleteMinT o l) r
+
+deleteMaxT :: Owner -> Map k v -> Map k v
+deleteMaxT _ Tip = Tip
+deleteMaxT _ (Bin _ _ _ l Tip _) = l
+deleteMaxT o t@(Bin _ k v l r _) = balanceT o t k v l (deleteMaxT o r)
+
+glueT :: Owner -> Map k v -> Map k v -> Map k v
+glueT _ Tip r = r
+glueT _ l Tip = l
+glueT o l r
+  | size l > size r = case lookupMax l of
+      Just (k, v) -> balanceT o Tip k v (deleteMaxT o l) r
+      Nothing -> r
+  | otherwise = case lookupMin r of
+      Just (k, v) -> balanceT o Tip k v l (deleteMinT o r)
+      Nothing -> l
+
+-- k, v, l and r as a node, rebalanced: t itself if o made it and no
+-- rotation is needed.
+balanceT :: Owner -> Map k v -> k -> v -> Map k v -> Map k v -> Map k v
+balanceT o t k v l r
+  | sl + sr <= 1 = nodeT o t (sl + sr + 1) k v l r
+  | sr > 3 * sl = rotateL o t k v l r
+  | sl > 3 * sr = rotateR o t k v l r
+  | otherwise = nodeT o t (sl + sr + 1) k v l r
   where
     sl = size l
     sr = size r
 
-rotateL :: k -> v -> Map k v -> Map k v -> Map k v
-rotateL k v l r@(Bin _ _ _ rl rr)
-  | size rl < 2 * size rr = singleL k v l r
-  | otherwise = doubleL k v l r
-rotateL k v l Tip = bin k v l Tip
+-- A node of the size its subtrees make: n itself, changed, if o made it.
+binT :: Owner -> Map k v -> k -> v -> Map k v -> Map k v -> Map k v
+binT o n k v l r = nodeT o n (size l + size r + 1) k v l r
 
-rotateR :: k -> v -> Map k v -> Map k v -> Map k v
-rotateR k v l@(Bin _ _ _ ll lr) r
-  | size lr < 2 * size ll = singleR k v l r
-  | otherwise = doubleR k v l r
-rotateR k v Tip r = bin k v Tip r
+-- The rotations take the node t being rebuilt and reuse it, and the nodes
+-- they move, when o made them; with noOwner every node is new.
+rotateL :: Owner -> Map k v -> k -> v -> Map k v -> Map k v -> Map k v
+rotateL o t k v l r@(Bin _ _ _ rl rr _)
+  | size rl < 2 * size rr = singleL o t k v l r
+  | otherwise = doubleL o t k v l r
+rotateL o t k v l Tip = binT o t k v l Tip
 
-singleL :: k -> v -> Map k v -> Map k v -> Map k v
-singleL k1 v1 t1 (Bin _ k2 v2 t2 t3) = bin k2 v2 (bin k1 v1 t1 t2) t3
-singleL k v l Tip = bin k v l Tip
+rotateR :: Owner -> Map k v -> k -> v -> Map k v -> Map k v -> Map k v
+rotateR o t k v l@(Bin _ _ _ ll lr _) r
+  | size lr < 2 * size ll = singleR o t k v l r
+  | otherwise = doubleR o t k v l r
+rotateR o t k v Tip r = binT o t k v Tip r
 
-singleR :: k -> v -> Map k v -> Map k v -> Map k v
-singleR k1 v1 (Bin _ k2 v2 t1 t2) t3 = bin k2 v2 t1 (bin k1 v1 t2 t3)
-singleR k v Tip r = bin k v Tip r
+singleL :: Owner -> Map k v -> k -> v -> Map k v -> Map k v -> Map k v
+singleL o t k1 v1 t1 r@(Bin _ k2 v2 t2 t3 _) = binT o r k2 v2 (binT o t k1 v1 t1 t2) t3
+singleL o t k v l Tip = binT o t k v l Tip
 
-doubleL :: k -> v -> Map k v -> Map k v -> Map k v
-doubleL k1 v1 t1 (Bin _ k2 v2 (Bin _ k3 v3 t2 t3) t4) = bin k3 v3 (bin k1 v1 t1 t2) (bin k2 v2 t3 t4)
-doubleL k v l r = singleL k v l r
+singleR :: Owner -> Map k v -> k -> v -> Map k v -> Map k v -> Map k v
+singleR o t k1 v1 l@(Bin _ k2 v2 t1 t2 _) t3 = binT o l k2 v2 t1 (binT o t k1 v1 t2 t3)
+singleR o t k v Tip r = binT o t k v Tip r
 
-doubleR :: k -> v -> Map k v -> Map k v -> Map k v
-doubleR k1 v1 (Bin _ k2 v2 t1 (Bin _ k3 v3 t2 t3)) t4 = bin k3 v3 (bin k2 v2 t1 t2) (bin k1 v1 t3 t4)
-doubleR k v l r = singleR k v l r
+doubleL :: Owner -> Map k v -> k -> v -> Map k v -> Map k v -> Map k v
+doubleL o t k1 v1 t1 r@(Bin _ k2 v2 rl@(Bin _ k3 v3 t2 t3 _) t4 _) =
+  binT o rl k3 v3 (binT o t k1 v1 t1 t2) (binT o r k2 v2 t3 t4)
+doubleL o t k v l r = singleL o t k v l r
 
--- Two trees, every key of the first smaller than every key of the second.
-glue :: Map k v -> Map k v -> Map k v
-glue Tip r = r
-glue l Tip = l
-glue l r
-  | size l > size r = case lookupMax l of
-      Just (k, v) -> balance k v (deleteMax l) r
-      Nothing -> r
-  | otherwise = case lookupMin r of
-      Just (k, v) -> balance k v l (deleteMin r)
-      Nothing -> l
+doubleR :: Owner -> Map k v -> k -> v -> Map k v -> Map k v -> Map k v
+doubleR o t k1 v1 l@(Bin _ k2 v2 t1 lr@(Bin _ k3 v3 t2 t3 _) _) t4 =
+  binT o lr k3 v3 (binT o l k2 v2 t1 t2) (binT o t k1 v1 t3 t4)
+doubleR o t k v l r = singleR o t k v l r
 
 merge :: Map k v -> Map k v -> Map k v
 merge l r = glue' l r
   where
     glue' Tip b = b
     glue' a Tip = a
-    glue' a@(Bin sa ka va la ra) b@(Bin sb kb vb lb rb)
+    glue' a@(Bin sa ka va la ra _) b@(Bin sb kb vb lb rb _)
       | 3 * sa < sb = balance kb vb (glue' a lb) rb
       | 3 * sb < sa = balance ka va la (glue' ra b)
       | otherwise = glue a b
@@ -277,18 +348,18 @@ merge l r = glue' l r
 link :: k -> v -> Map k v -> Map k v -> Map k v
 link k v Tip r = insertMin k v r
 link k v l Tip = insertMax k v l
-link k v l@(Bin sl kl vl ll lr) r@(Bin sr kr vr rl rr)
+link k v l@(Bin sl kl vl ll lr _) r@(Bin sr kr vr rl rr _)
   | 3 * sl < sr = balance kr vr (link k v l rl) rr
   | 3 * sr < sl = balance kl vl ll (link k v lr r)
   | otherwise = bin k v l r
 
 insertMin :: k -> v -> Map k v -> Map k v
 insertMin k v Tip = singleton k v
-insertMin k v (Bin _ k' v' l r) = balance k' v' (insertMin k v l) r
+insertMin k v (Bin _ k' v' l r _) = balance k' v' (insertMin k v l) r
 
 insertMax :: k -> v -> Map k v -> Map k v
 insertMax k v Tip = singleton k v
-insertMax k v (Bin _ k' v' l r) = balance k' v' l (insertMax k v r)
+insertMax k v (Bin _ k' v' l r _) = balance k' v' l (insertMax k v r)
 
 -- Instances ----------------------------------------------------------------------------
 

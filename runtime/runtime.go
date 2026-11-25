@@ -748,3 +748,24 @@ func rt_timeHour(t rt_time.Time) int    { return t.Hour() }
 func rt_timeMinute(t rt_time.Time) int  { return t.Minute() }
 func rt_timeSecond(t rt_time.Time) int  { return t.Second() }
 func rt_timeWeekday(t rt_time.Time) int { return int(t.Weekday()) }
+
+// Building a tree in place (Data.Map): a node keeps the owner that made it.
+// A fold that builds a map gets an owner of its own, active while it runs,
+// and changes in place the nodes it made, which nothing else can see; any
+// other node is copied. Nodes made outside such a fold have no owner, and
+// are never changed. Once the fold is done its owner is not active, so the
+// map it made is as immutable as any other.
+type rt_owner struct{ active bool }
+
+var rt_noOwner *rt_owner
+
+func rt_newOwner() *rt_owner     { return &rt_owner{active: true} }
+func rt_endOwner(o *rt_owner)    { o.active = false }
+func rt_owns(o, n *rt_owner) bool { return o != nil && o == n && o.active }
+
+// *dst becomes *src, and dst is returned: a node changed in place. src does
+// not escape, so the node it points to need not be on the heap.
+func rt_overwrite[P ~*E, E any](dst, src P) P {
+	*dst = *src
+	return dst
+}

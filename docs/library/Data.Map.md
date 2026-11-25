@@ -8,6 +8,12 @@ size. Keys need an order, and values are computed when they are put in,
 as everything in Hago is. Many names are the Prelude's, so this module is
 meant to be imported qualified: import qualified Data.Map as Map.
 
+A map built by a fold (foldl (\m x -> Map.insert ...) m0 xs, fromList,
+fromListWith) or by a loop that passes it to itself (go (Map.insert k v
+m) rest) is built in place: the nodes the fold or the loop made are
+changed instead of copied, since nothing else can see them. The map it
+starts from, and every map made before, stay as they were.
+
 Its source is [`lib/Data/Map.hgo`](../../lib/Data/Map.hgo).
 
 ```haskell
@@ -157,3 +163,12 @@ difference :: Ord k => Map k a -> Map k b -> Map k a
 ```
 
 The first map without the keys of the second.
+
+## Balancing
+
+```haskell
+valid :: Ord k => Map k v -> Bool
+```
+
+Whether the tree is as it should be: its keys in order, the size kept in
+each node right, and every node balanced, as containers' valid checks.

@@ -459,9 +459,48 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
 - [ ] **Left as recursion:** a `foldr` whose step calls a function not known to be total
       (`max x rest` stays a call to `max`, `x `div` rest` can fail). The backwards fold's
       slice holds every element at once and grows by doubling: 190 MB for ten million.
-- [ ] **What the garbage collector costs:** the last profiles of `Data.Map` and JSON (above)
-      had it at about half the CPU. Profile them again, then fewer allocations (closures for
-      known functions, cells), then measure `GOGC` again.
+- [x] **What the garbage collector costs, and `Data.Map`** (2026-11-25). pprof had Go's
+      collector marking at two thirds of the CPU of the `Data.Map` programs, and the nodes of
+      the tree at 84 % to 97 % of what they allocated (2.3 GB for the sieve to a million): a
+      persistent insert copies the path to its key. GHC allocates as much; its generational
+      collector makes most of it free. Two changes:
+      - **`GOGC=200` by default** (`debug.SetGCPercent` in the generated `main`, unless
+        `GOGC` is set): what marking costs is what is allocated times 100/GOGC. Measured at
+        100, 200, 300, 400, nine runs interleaved: 200 takes a fifth off `Data.Map` and a
+        tenth off JSON for half again as much memory, which is about GHC's own default (a
+        heap three times what is alive); 400 takes a third off for two and a half times the
+        memory, and made the backwards `foldr` slower.
+      - **Maps built in place.** Each `Bin` keeps the owner that made it (for `Map Int Int`
+        that word fits in the size class Go already gave the node). `insertWith`, `delete`,
+        `deleteMin`, `deleteMax`, the rebalancing and the rotations take an owner (`...T` in
+        `Data.Map`); given `noOwner`, as the persistent operations give them, every node is
+        new. A node whose owner is the one given, and active, is changed in place
+        (`rt_overwrite`, which Go inlines, so the node it copies from stays off the heap).
+        Code generation gives an owner of its own to a fused `foldl` whose step is such an
+        operation on the accumulator, used nowhere else (fromList, fromListWith, folds of
+        inserts), and to a loop (a function calling itself at the end) whose map parameter
+        is only read before (given at once to functions whose result has no map) and then
+        given back through such operations or such a fold; the owner ends when the fold
+        ends or the call returns (`defer`). The map a fold starts from is never changed,
+        whoever else holds it. `examples/map-in-place.hgo` checks kept maps, two folds from
+        one map, a map given from one fold to another, a loop from a kept map, and twenty
+        thousand random inserts and deletes against `alter`, which is never in place, and
+        `Data.Map.valid` (new, as containers' `valid`); GHC's containers print the same.
+      Allocated: a million inserts and deletes, 1.4 GB → 22 MB; the sieve to a million, 2.3 GB
+      → 254 MB. Measured, before and after:
+
+      | Program | Before | After | GHC |
+      | --- | --- | --- | --- |
+      | `Data.Map`, 1M inserts, deletes, lookups | 1.69 s, 93 MB | 0.48 s, 66 MB | 1.43 s, 218 MB |
+      | sieve to 1M, `Data.Map` | 1.48 s | 0.61 s | 0.31 s |
+      | sieve to 10M, `Data.Map` | 27 s | 8.7 s | |
+      | frequencies of 1M, `Data.Map` | 1.11 s | 0.49 s | 0.60 s |
+      | JSON, 3.7 MB | 0.24 s, 71 MB | 0.22 s, 101 MB | 0.31 s, 93 MB |
+- [ ] **What is left of the map programs:** the sieve on a map is still twice GHC's: each step
+      allocates its lists (`[p]`, `++`) and the curried closure of the function given to
+      `insertWith`, which a copy of `insertWith` for that function would not need. `alter`
+      and `adjust` use the map twice, so they are never in place; `Data.Set` is not in place
+      yet.
 - [x] **The same programs in GHC** (`bench/ghc/`, `bench/ghc/run.sh`; the README's "Against
       GHC"). Even on strict code and on folds of lists made where they are folded; Hago ahead
       on JSON (0.23 s against 0.28 s, the combinators and printer ported line by line) and on

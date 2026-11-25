@@ -100,6 +100,7 @@ generate runtime prog =
       [ "rt_bufio \"bufio\""
       , "rt_fmt \"fmt\""
       , "rt_os \"os\""
+      , "rt_debug \"runtime/debug\""
       , "rt_strconv \"strconv\""
       , "rt_strings \"strings\""
       , "rt_sync \"sync\""
@@ -172,7 +173,16 @@ generate runtime prog =
       TCon "IO" [_] -> True
       _ -> False
     -- drop the global reference first, so actions already run can be collected
-    mainFn = ["func main() {", "defer rt_failed()", "m := " ++ mangle "main", mangle "main" ++ " = nil", "rt_run(m)", "}"]
+    -- The garbage collector runs when the heap has grown by 200% of what was
+    -- left alive, not Go's 100%: a functional program allocates much and
+    -- briefly, and Go's collector, which is not generational, marks
+    -- everything alive on each cycle, so a cycle costs what is alive and
+    -- the cycles are fewer. The heap reaches three times what is alive, as
+    -- GHC's does by default. GOGC still decides, if it is set.
+    mainFn =
+      [ "func main() {", "defer rt_failed()"
+      , "if rt_os.Getenv(\"GOGC\") == \"\" {", "rt_debug.SetGCPercent(200)", "}"
+      , "m := " ++ mangle "main", mangle "main" ++ " = nil", "rt_run(m)", "}" ]
 
 -- Names -------------------------------------------------------------------------
 
@@ -502,16 +512,114 @@ genTop ctx0 deferred (TopBind n tps dicts t ar body shared) = do
 -- | Parameters, result type and body of a function, with self tail calls
 -- turned into a loop.
 genFunction :: Ctx -> Maybe (Name, Int) -> [(String, String)] -> [(Name, Type)] -> Type -> CExpr -> Gen String
-genFunction ctx self extra ps r inner = do
+genFunction ctx self extra ps r inner0 = do
   saved <- gets gsLoop
   modify (\s -> s {gsLoop = False})
-  let ctx' = (bindLocals ctx [(p, 0) | (p, _) <- ps]) {cxSelf = self, cxSelfParams = map fst ps}
+  -- a loop that builds a map in a parameter builds it in place (see 'ownedLoop')
+  o <- freshName "o"
+  let owned = case self of
+        Just (n, ar) -> ownedLoop ctx n ar ps inner0
+        Nothing -> Nothing
+      inner = maybe inner0 (\f -> f o) owned
+      ctx' = (bindLocals ctx ([(p, 0) | (p, _) <- ps] ++ [(o, 0)])) {cxSelf = self, cxSelfParams = map fst ps}
   ls <- genStmts ctx' inner
   looped <- gets gsLoop
   modify (\s -> s {gsLoop = saved})
   let params = commas ([d ++ " " ++ ty | (d, ty) <- extra] ++ [mangle p ++ " " ++ goTy ctx pt | (p, pt) <- ps])
-      body = if looped then ["for {"] ++ ls ++ ["}"] else ls
+      start = case owned of
+        Just _ -> [mangle o ++ " := rt_newOwner()", "defer rt_endOwner(" ++ mangle o ++ ")"]
+        Nothing -> []
+      body = start ++ if looped then ["for {"] ++ ls ++ ["}"] else ls
   pure (unlines (["(" ++ params ++ ") " ++ goTy ctx r ++ " {"] ++ body ++ ["}"]))
+
+-- | A function that calls itself at the end, a loop, with a parameter that
+-- is a map it builds: go (Map.insert k v m) rest. The map can be built in
+-- place, with an owner of the call's own (see Data.Map), if on every path
+-- that goes round again the map is only read before (given, at once, to a
+-- function whose result has no map in it, as Map.lookup) and then given to
+-- the call again through operations that take an owner, appearing in none
+-- of the call's other arguments. Paths that leave the loop may do anything
+-- with it: once the call returns, its owner is no longer active. The result
+-- is the body with the owner (a variable) given to those operations.
+ownedLoop :: Ctx -> Name -> Int -> [(Name, Type)] -> CExpr -> Maybe (Name -> CExpr)
+ownedLoop ctx self ar ps body = case [i | (i, (_, t)) <- zip [0 ..] ps, Just c <- [mapCon t], ok i c] of
+  i : _ -> Just (\o -> give i o body)
+  [] -> Nothing
+  where
+    mapCon t = case zonk (progSubst (cxProg ctx)) t of
+      TCon c _ | c == "Data.Map.Map" -> Just c
+      _ -> Nothing
+    -- the names the parameter goes by: itself, and what patterns call it
+    aliases i = grow (S.singleton (fst (ps !! i)))
+    grow as =
+      let more = S.fromList [x | CMatch ss rows _ <- everything body, (CVar a _ _, j) <- zip ss [0 :: Int ..], S.member a as
+                             , CRow pats _ _ <- rows, Just (CPVar x _) <- [nth j pats]]
+       in if more `S.isSubsetOf` as then as else grow (S.union as more)
+    nth j xs = if j < length xs then Just (xs !! j) else Nothing
+    ok i c = let as = aliases i in path i c as body && worth i body
+    selfCall = \case
+      CApp (CVar f _ _) args | f == self, length args == ar -> Just args
+      _ -> Nothing
+    mentions as e = any (`S.member` as) (coreRefs e)
+    path i c as e = case e of
+      _ | Just args <- selfCall e ->
+          and [if j == i then chain as a else not (mentions as a) | (j, a) <- zip [0 ..] args]
+      CMatch ss rows _ -> all (\sc -> isAlias as sc || readOnly c as sc) ss && all (row i c as) rows
+      CIf cond a b _ -> readOnly c as cond && path i c as a && path i c as b
+      CLet bs b _ -> all (\(CBind _ _ _ x) -> readOnly c as x) bs && path i c as b
+      -- leaves the loop: anything goes
+      _ -> True
+    row i c as (CRow _ bs gs) =
+      all (\(CBind _ _ _ x) -> readOnly c as x) bs && all (\(g, b) -> maybe True (readOnly c as) g && path i c as b) gs
+    isAlias as = \case
+      CVar a _ _ -> S.member a as
+      _ -> False
+    -- the map given to the next round: itself, or changed by an operation
+    -- that takes an owner, or by a fold that builds it in place
+    chain as = \case
+      CVar a _ _ -> S.member a as
+      CApp (CVar f _ _) (CVar o _ _ : rest)
+        | isTop ctx f, Just "rt_noOwner" <- foreignSym ctx o, not (null rest) ->
+            chain as (last rest) && not (any (mentions as) (init rest))
+      CApp (CVar "listFoldl" _ _) [g, z, xs] | isTop ctx "listFoldl" ->
+        chain as z && ownedStep ctx g && not (mentions as g) && not (mentions as xs)
+      _ -> False
+    -- the map read, at once, by functions whose results hold no map
+    readOnly c as e = case e of
+      CVar a _ _ -> not (S.member a as)
+      CApp (CVar f _ t) args ->
+        let res = snd (splitFun (length args) (zonk (progSubst (cxProg ctx)) t))
+         in (f /= self) && all (\a -> if isAlias as a then c `notElem` tyCons res else readOnly c as a) args
+      CApp f args -> readOnly c as f && all (readOnly c as) args
+      CIf a b d _ -> all (readOnly c as) [a, b, d]
+      CLet bs b _ -> all (\(CBind _ _ _ x) -> readOnly c as x) bs && readOnly c as b
+      CMatch ss rows _ -> all (readOnly c as) ss && and [all (\(CBind _ _ _ x) -> readOnly c as x) bs && all (\(g, b) -> maybe True (readOnly c as) g && readOnly c as b) gs | CRow _ bs gs <- rows]
+      _ -> not (mentions as e)
+    tyCons = \case
+      TCon c ts -> c : concatMap tyCons ts
+      TFun a b -> tyCons a ++ tyCons b
+      TApp a b -> tyCons a ++ tyCons b
+      _ -> []
+    -- worth it only if some round changes the map
+    worth i e = or [any changes (take 1 (drop i args)) | x <- everything e, Just args <- [selfCall x]]
+      where
+        changes = \case
+          CApp (CVar _ _ _) (CVar o _ _ : _) | Just "rt_noOwner" <- foreignSym ctx o -> True
+          CApp (CVar "listFoldl" _ _) [_, z, _] -> changes z
+          _ -> False
+    -- the owner given to the operations of every chain
+    give i o = \case
+      e | Just args <- selfCall e, CApp f _ <- e -> CApp f [if j == i then giveChain o a else a | (j, a) <- zip [0 ..] args]
+      CMatch ss rows t -> CMatch ss [CRow pats bs [(g, give i o b) | (g, b) <- gs] | CRow pats bs gs <- rows] t
+      CIf c a b t -> CIf c (give i o a) (give i o b) t
+      CLet bs b t -> CLet bs (give i o b) t
+      e -> e
+    giveChain o = \case
+      CApp f@(CVar _ _ _) (CVar n ref t : rest) | Just "rt_noOwner" <- foreignSym ctx n ->
+        CApp f (CVar o ref t : init rest ++ [giveChain o (last rest)])
+      -- a fold in the chain builds in place with the loop's owner too
+      CApp f@(CVar "listFoldl" _ _) [g, z, xs] -> CApp f [giveOwner ctx o g, giveChain o z, xs]
+      e -> e
 
 bindLocals :: Ctx -> [(Name, Int)] -> Ctx
 bindLocals ctx bs =
@@ -734,8 +842,10 @@ genExpr ctx e = case e of
     -- a call to Go: functions given to it are generated as Go functions of
     -- all their arguments at once (see 'foreignArg')
     -- a fold of a list made only to be folded: a loop (see 'Prod')
-    CVar "listFoldl" _ t | isTop ctx "listFoldl", [g, z, xs] <- args, fusableFoldl (prodOf ctx xs) ->
-      fuseFoldl ctx t g z xs
+    CVar "listFoldl" _ t
+      | isTop ctx "listFoldl", [g, z, xs] <- args
+      , fusableFoldl (prodOf ctx xs) || fusable (prodOf ctx xs) && (ownedStep ctx g || stepHasOwner g) ->
+          fuseFoldl ctx t g z xs
     CVar "listFoldr" _ t
       | isTop ctx "listFoldr", [k, z, xs] <- args, fusable (prodOf ctx xs)
       , Just b <- ioResult ctx (snd (splitFun 3 t)), Just _ <- ioStepsOf ctx k -> do
@@ -1996,16 +2106,72 @@ fuseFoldl = fuseFoldlWith prodOf
 
 fuseFoldlWith :: (Ctx -> CExpr -> Prod) -> Ctx -> Type -> CExpr -> CExpr -> CExpr -> Gen String
 fuseFoldlWith prodFor ctx0 t g0 z xs0 = do
-  (g, xs) <- renamed2 g0 xs0
+  (g1, xs) <- renamed2 g0 xs0
   let ctx = noSelf ctx0
       b = goTy ctx (snd (splitFun 3 t))
   acc <- freshName "acc"
+  o <- freshName "o"
   z' <- genExpr ctx z
-  let ctxA = bindLocals ctx [(acc, 0)]
+  -- a map built in place, with an owner of the loop's own (see Data.Map)
+  let owned = ownedStep ctx g1
+      g = if owned then giveOwner ctx o g1 else g1
+      ctxA = bindLocals ctx [(acc, 0), (o, 0)]
   loop <- genLoop ctxA (prodFor ctx xs) $ \c x -> do
     (ls, _, y) <- applyNew c g [acc, x]
     pure (ls ++ [mangle acc ++ " = " ++ mangle y])
-  pure ("func() " ++ b ++ " {\nvar " ++ mangle acc ++ " " ++ b ++ " = " ++ z' ++ "\n" ++ unlines loop ++ "return " ++ mangle acc ++ "\n}()")
+  pure $ "func() " ++ b ++ " {\nvar " ++ mangle acc ++ " " ++ b ++ " = " ++ z' ++ "\n"
+    ++ (if owned then mangle o ++ " := rt_newOwner()\n" else "")
+    ++ unlines loop
+    ++ (if owned then "rt_endOwner(" ++ mangle o ++ ")\n" else "")
+    ++ "return " ++ mangle acc ++ "\n}()"
+
+-- | The step of a fold that changes its accumulator, a map, in place: an
+-- operation of Data.Map that takes an owner, given none (insertWith,
+-- insert and delete are those, given noOwner), whose map is the
+-- accumulator, used nowhere else. The accumulator's earlier values are
+-- then seen by no one, so the nodes the loop made can be changed. It may
+-- be under a let or a case of a pair, as fromList's step is.
+ownedStep :: Ctx -> CExpr -> Bool
+ownedStep ctx g = case lam2 g of
+  Just (acc, _, body) -> length [() | CVar v _ _ <- everything body, v == acc] == 1 && go acc body
+  Nothing -> False
+  where
+    go acc = \case
+      CApp (CVar f _ _) (CVar o _ _ : rest)
+        | isTop ctx f, Just "rt_noOwner" <- foreignSym ctx o, not (null rest), CVar a _ _ <- last rest -> a == acc
+      CLet bs b _ -> all (\(CBind _ _ _ x) -> acc `notElem` coreRefs x) bs && go acc b
+      CMatch [sc] [CRow [p] [] [(Nothing, b)]] _ -> acc `notElem` coreRefs sc && irrefutable p && go acc b
+      _ -> False
+    irrefutable = \case
+      CPVar _ _ -> True
+      CPWild -> True
+      CPCon c _ qs | Just _ <- tupleArity c -> all irrefutable qs
+      _ -> False
+
+-- | A step already given an owner, by a loop around (see 'ownedLoop').
+stepHasOwner :: CExpr -> Bool
+stepHasOwner g = case lam2 g of
+  Just (_, _, body) -> go body
+  Nothing -> False
+  where
+    go = \case
+      CApp (CVar _ _ _) (CVar _ _ (TCon "Data.Map.Owner" []) : _) -> True
+      CLet _ b _ -> go b
+      CMatch _ [CRow _ _ [(Nothing, b)]] _ -> go b
+      _ -> False
+
+-- | The step given the owner o in place of none.
+giveOwner :: Ctx -> Name -> CExpr -> CExpr
+giveOwner ctx o g = case g of
+  CLam ps r b | length ps == 2 -> CLam ps r (go b)
+  CLam ps r (CLam qs r' b) -> CLam ps r (CLam qs r' (go b))
+  _ -> g
+  where
+    go = \case
+      CApp f@(CVar _ _ _) (CVar n ref t : rest) | Just "rt_noOwner" <- foreignSym ctx n -> CApp f (CVar o ref t : rest)
+      CLet bs b t -> CLet bs (go b) t
+      CMatch ss [CRow ps bs [(Nothing, b)]] t -> CMatch ss [CRow ps bs [(Nothing, go b)]] t
+      e -> e
 
 -- | The step of a listFoldr whose rest is either the value (the fold goes
 -- on) or not used (the fold stops with that value): any, all, elem, find,

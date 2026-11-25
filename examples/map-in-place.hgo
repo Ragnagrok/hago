@@ -1,0 +1,51 @@
+-- A fold that builds a map changes in place the nodes it made itself, and
+-- copies any other: the map it starts from, and every map made before, are
+-- what they were. These check that, and that the maps it makes are the ones
+-- the persistent operations make, balanced as they are.
+import qualified Data.Map as Map
+
+-- the same with alter, which uses the map twice, so it is never built in
+-- place: every insert and delete persistent
+persistently :: Map.Map Int Int -> [Int] -> Map.Map Int Int
+persistently m [] = m
+persistently m (k : ks) = persistently (Map.alter (const (if even k then Just k else Nothing)) (k `mod` 1000) m) ks
+
+-- a loop that builds its map in place: it reads it, then changes it
+build :: Map.Map Int Int -> [Int] -> Map.Map Int Int
+build m [] = m
+build m (k : ks)
+  | Map.member (k `mod` 1000) m && odd k = build (Map.delete (k `mod` 1000) m) ks
+  | even k = build (Map.insert (k `mod` 1000) k m) ks
+  | otherwise = build m ks
+
+-- a sequence of pseudo-random numbers
+numbers :: Int -> [Int]
+numbers n = take n (iterate (\x -> (x * 1103515245 + 12345) `mod` 2147483648) 7)
+
+main :: IO ()
+main = do
+  -- the map a fold starts from is not changed
+  let base = Map.fromList [(i, i) | i <- [1 .. 10]]
+      grown = foldl (\m k -> Map.insert k (k * 100) m) base [5 .. 15]
+  print (Map.toList base, Map.size grown, Map.lookup 5 grown, Map.lookup 5 base)
+  -- nor the map another fold made, given to this one and kept
+  let shrunk = foldl (\m k -> Map.delete k m) grown [1, 3 .. 15]
+  print (Map.size grown, Map.lookup 3 grown, Map.toList shrunk)
+  -- two folds from the same map
+  let a = foldl (\m k -> Map.insert k 1 m) base [20 .. 25]
+      b = foldl (\m k -> Map.insert k 2 m) base [20 .. 25]
+  print (Map.lookup 20 a, Map.lookup 20 b, Map.size a, Map.size b, Map.size base)
+  print (Map.toList (Map.fromListWith (++) [(k `mod` 3, [k]) | k <- [1 .. 7]]))
+  -- many inserts and deletes: the same map as the persistent operations
+  -- make, every node balanced and of the right size
+  let ks = numbers 20000
+      inPlace = foldl (\m k -> if even k then Map.insert (k `mod` 1000) k m else Map.delete (k `mod` 1000) m) Map.empty ks
+      persistent = persistently Map.empty ks
+      looped = build Map.empty ks
+      wellMade = foldl (\m k -> Map.insertWith (+) (k `mod` 1000) 1 m) Map.empty ks
+  print (Map.toList inPlace == Map.toList persistent, Map.toList looped == Map.toList persistent, Map.size inPlace)
+  print (all Map.valid [base, grown, shrunk, a, b, inPlace, persistent, looped], Map.valid wellMade)
+  -- a loop that starts from a map that is kept
+  let again = build base [2, 4, 3, 30]
+  print (Map.toList base, Map.toList again)
+  print (Map.size wellMade, sum (Map.elems wellMade))

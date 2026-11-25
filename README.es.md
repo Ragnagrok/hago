@@ -685,25 +685,25 @@ lado a lado con otros (`bench/run.sh HAGO_VIEJO HAGO_NUEVO`).
 | ternas pitagóricas hasta 400, como comprensión de listas | <0,01 s | ~2 MB |
 | lo mismo como `do` sobre `Iter` | <0,01 s | ~2 MB |
 | lo mismo con `Iter.filter` para el último generador y la guarda | <0,01 s | ~2 MB |
-| `foldr (+) 0 [1 .. 10000000]` | 0,10 s | ~190 MB |
+| `foldr (+) 0 [1 .. 10000000]` | 0,12 s | ~215 MB |
 | `mapM_` sobre un millón de elementos en IO | <0,01 s | ~2 MB |
 | un loop recursivo en IO de cinco millones de iteraciones | 0,05 s | ~7 MB |
 | `mapM_` sobre un millón de elementos en `StateT Int IO` | <0,01 s | ~2 MB |
 | cincuenta millones de sumas de un `newtype Meters = Meters Double` | 0,02 s | ~2 MB |
 | lo mismo con `data Meters = Meters Double` | 0,02 s | ~2 MB |
-| parsear e imprimir con formato 3,7 MB de JSON con `examples/json.hgo` (`jq .`: 0,09 s, 28 MB) | 0,24 s | ~72 MB |
+| parsear e imprimir con formato 3,7 MB de JSON con `examples/json.hgo` (`jq .`: 0,09 s, 28 MB) | 0,22 s | ~101 MB |
 | `fib 32` dieciséis veces con `map` | 0,13 s | — |
 | lo mismo con `parMap`, en 16 procesadores | 0,03 s | — |
-| un millón de inserciones en un `Data.Map`, después medio millón de borrados con `foldl`, y búsquedas | 1,8 s | ~94 MB |
+| un millón de inserciones en un `Data.Map`, después medio millón de borrados con `foldl`, y búsquedas | 0,48 s | ~66 MB |
 | los primos hasta un millón, criba de Eratóstenes sobre un `STVector` (`examples/sieve.hgo`) | <0,01 s | ~3 MB |
-| lo mismo con un `Data.Map` (la criba incremental) | 1,65 s | ~19 MB |
+| lo mismo con un `Data.Map` (la criba incremental) | 0,61 s | ~25 MB |
 | los primos hasta diez millones, sobre un `STVector` | 0,06 s | ~11 MB |
 | lo mismo sobre un `IOVector` | 0,06 s | ~11 MB |
 | lo mismo sobre un `IOVector`, en un programa con hilos | 0,37 s | ~12 MB |
-| lo mismo con un `Data.Map` | 27 s | ~133 MB |
+| lo mismo con un `Data.Map` | 8,7 s | ~187 MB |
 | lo mismo, Go escrito a mano | 0,03 s | ~12 MB |
 | cuántas veces aparece cada uno de un millón de números, en una `HashTable` en ST (`examples/frequencies.hgo`) | 0,11 s | ~13 MB |
-| lo mismo con un `Data.Map` | 1,43 s | ~19 MB |
+| lo mismo con un `Data.Map` | 0,49 s | ~20 MB |
 
 El JSON es el que escribe `bench/json-input.go`, siempre el mismo:
 `go run bench/json-input.go > input.json`, y después `hago run examples/json.hgo input.json`.
@@ -733,6 +733,17 @@ El JSON es el que escribe `bench/json-input.go`, siempre el mismo:
   así que un número nunca se arma con sus pedazos. Eso llevó el benchmark de JSON de 1,86 s a
   0,32 s; casi todo lo que queda son los documentos y las listas del pretty-printer, y el
   recolector de basura de Go.
+- **El recolector de basura de Go no es generacional:** cada ciclo marca todo lo que está vivo,
+  así que lo que cuesta crece con lo que un programa reserva, y un programa funcional reserva
+  mucho y por poco tiempo. Dos cosas lo abaratan. Los programas corren con `GOGC=200` salvo que
+  `GOGC` esté definido: el heap llega a tres veces lo que está vivo, como el de GHC por defecto,
+  y los ciclos son la mitad (`Data.Map` 1,79 s → 1,44 s, JSON 0,24 s → 0,22 s, un tercio más de
+  memoria). Y **un map construido por un pliegue o un loop se construye en el lugar:** insertar
+  en un árbol persistente copia el camino hasta la clave, veinte nodos en un map de un millón,
+  pero los nodos que hizo el propio pliegue no los puede ver nadie más, así que el pliegue los
+  cambia en vez de copiarlos (cada nodo guarda el dueño que lo hizo; ver `Data.Map`). El map del
+  que parte, y todo map hecho antes, quedan como estaban (`examples/map-in-place.hgo`). Un
+  millón de inserciones y borrados reservaban 1,4 GB; ahora 22 MB.
 - **Las estructuras mutables** son más rápidas que los árboles de `Data.Map` para lo que sirven,
   y un loop sobre un vector mutable es el loop de Go con una revisión del índice en cada acceso,
   más o menos el doble del tiempo del de Go. En un programa con hilos, un vector creado en IO
@@ -754,29 +765,30 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
 | suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | <0,01 s | <0,01 s |
 | lo mismo sobre un `Data.Vector` (unboxed en GHC) | 0,02 s | 0,01 s |
 | ternas pitagóricas hasta 400, como comprensión de listas | <0,01 s | <0,01 s |
-| `foldr (+) 0 [1 .. 10000000]` | 0,10 s, 190 MB | 0,13 s, 169 MB |
+| `foldr (+) 0 [1 .. 10000000]` | 0,12 s, 216 MB | 0,14 s, 164 MB |
 | `mapM_` sobre un millón de elementos en IO | <0,01 s | <0,01 s |
 | un loop recursivo en IO de cinco millones de iteraciones | 0,05 s | 0,01 s |
 | `mapM_` sobre un millón de elementos en `StateT Int IO` | <0,01 s | <0,01 s |
 | cincuenta millones de sumas de un `Meters`, `newtype` o `data` | 0,02 s | 0,02 s |
-| JSON, 3,7 MB, los mismos combinadores e impresor | 0,23 s, 68 MB | 0,28 s, 93 MB |
+| JSON, 3,7 MB, los mismos combinadores e impresor | 0,23 s, 109 MB | 0,31 s, 93 MB |
 | `fib 32` dieciséis veces con `map` (GHC lo calcula una vez) | 0,13 s | 0,01 s |
 | lo mismo, GHC sin full laziness | 0,12 s | 0,13 s |
 | lo mismo con `parMap`, en 16 procesadores | 0,04 s | 0,05 s |
-| un millón de inserciones en un `Data.Map`, medio millón de borrados, búsquedas | 1,80 s, 95 MB | 1,37 s, 218 MB |
-| los primos hasta un millón con un `Data.Map` | 1,77 s | 0,32 s |
+| un millón de inserciones en un `Data.Map`, medio millón de borrados, búsquedas | 0,48 s, 65 MB | 1,43 s, 218 MB |
+| los primos hasta un millón con un `Data.Map` | 0,63 s | 0,31 s |
 | los primos hasta diez millones, sobre un `STVector` (`STUArray` en GHC) | 0,07 s | 0,03 s |
 | lo mismo sobre un `IOVector` (`IOUArray`) | 0,07 s | 0,04 s |
 | lo mismo, en un programa con hilos | 0,36 s | 0,04 s |
 | frecuencias de un millón de números, en una tabla hash en ST | 0,11 s, 12 MB | 0,20 s, 45 MB |
-| lo mismo con un `Data.Map` | 1,56 s | 0,52 s |
+| lo mismo con un `Data.Map` | 0,50 s | 0,60 s |
 
 - **Parejos:** el código estricto en tipos concretos, los newtypes, los pliegues de listas que
   se arman donde se pliegan (los dos los vuelven loops, también en IO y en `StateT`), `parMap`.
-- **Adelante Hago:** el parser y el impresor de JSON, y la tabla hash, en tiempo y en memoria; y
-  la memoria en general, como con `Data.Map` (la mitad que GHC).
-- **Adelante GHC:** el código que reserva mucho y por poco tiempo (`Data.Map`, la criba con un
-  map), donde su recolector generacional anda mejor que el de Go; los arreglos mutables, por el
+- **Adelante Hago:** un `Data.Map` construido por un pliegue o un loop, que Hago construye en el
+  lugar (tres veces más rápido, un tercio de la memoria); el parser y el impresor de JSON; la
+  tabla hash; y la memoria en general.
+- **Adelante GHC:** la criba con un map, que en cada paso todavía reserva listas y clausuras, y
+  donde el recolector generacional de GHC anda mejor que el de Go; los arreglos mutables, por el
   doble; y un vector en IO en un programa con hilos, que Hago bloquea en cada acceso y GHC no.
 
 ## Uso
