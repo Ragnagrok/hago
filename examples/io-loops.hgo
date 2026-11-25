@@ -1,8 +1,8 @@
 -- Loops in IO and ST, written as recursion, run in constant stack: a call
--- to itself at the end is a loop, and so is one through `when`; functions
--- that end calling each other, or an action passed as an argument, go
--- through the trampoline. Each of these would need gigabytes of Go stack
--- otherwise.
+-- to itself at the end is a loop, and so is one through `when`, and so are
+-- calls at the end between functions that call each other (one loop over
+-- which of them is running); an action passed as an argument goes through
+-- the trampoline. Each of these would need gigabytes of Go stack otherwise.
 import Control.Monad.ST
 import Data.IORef
 import Data.STRef
@@ -42,6 +42,60 @@ parity n = runST $ do
   evenStep n
   readSTRef r
 
+-- three functions in a ring that give a value, over a list, with `case`
+stateA :: IORef Int -> [Char] -> Int -> IO Int
+stateA r cs acc = case cs of
+  [] -> pure acc
+  c : rest -> if c == 'a' then stateB r rest (acc + 1) else stateA r rest acc
+
+stateB :: IORef Int -> [Char] -> Int -> IO Int
+stateB r cs acc = case cs of
+  [] -> pure (acc * 10)
+  c : rest -> do
+    modifyIORef' r (+ 1)
+    if c == 'b' then stateC r rest acc else stateA r rest acc
+
+stateC :: IORef Int -> [Char] -> Int -> IO Int
+stateC r cs acc = case cs of
+  [] -> pure (acc * 100)
+  _ : rest -> stateA r rest (acc + 2)
+
+-- polymorphic: the loop takes the functions' type parameters
+drain :: IORef [a] -> [a] -> Int -> IO Int
+drain r xs n = case xs of
+  [] -> pure n
+  x : rest -> do
+    writeIORef r [x]
+    refill r rest (n + 1)
+
+refill :: IORef [a] -> [a] -> Int -> IO Int
+refill r xs n = drain r xs n
+
+-- in one group, functions that give different types: report gives (), and
+-- is called by odds before its call at the end, and calls evens itself
+evens :: IORef Int -> Int -> IO Int
+evens r n = if n == 0 then pure 0 else odds r (n - 1)
+
+odds :: IORef Int -> Int -> IO Int
+odds r n = if n == 0 then pure 1 else do
+  when (n == 5) (report r 3)
+  evens r (n - 1)
+
+report :: IORef Int -> Int -> IO ()
+report r n = when (n > 0) (do
+  k <- evens r n
+  modifyIORef' r (+ (k + 10 * n))
+  report r (n - 1))
+
+-- each round's closures keep that round's arguments
+collect :: IORef [Int -> Int] -> Int -> IO ()
+collect r n = if n == 0 then pure () else do
+  modifyIORef r ((\x -> x * n) :)
+  collect' r (n - 1)
+
+collect' :: IORef [Int -> Int] -> Int -> IO ()
+collect' r n = collect r n
+
 main :: IO ()
 main = do
   let n = 10000000
@@ -57,3 +111,18 @@ main = do
   s <- newIORef 0
   mapM_ (\x -> modifyIORef' s (+ x)) [1 .. 1000000]
   readIORef s >>= print
+  stateA s (take n (cycle (unpack "abcxaab"))) 0 >>= print
+  readIORef s >>= print
+  t <- newIORef []
+  drain t [1 .. n] 0 >>= print
+  readIORef t >>= print
+  w <- newIORef []
+  drain w (unpack "hago") 0 >>= print
+  readIORef w >>= putStrLn . pack
+  u <- newIORef 0
+  evens u 10 >>= print
+  odds u n >>= print
+  readIORef u >>= print
+  fs <- newIORef []
+  collect fs 4
+  readIORef fs >>= \gs -> print (map (\g -> g 10) gs)

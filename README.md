@@ -187,9 +187,10 @@ calls. Hago handles this in three ways, following PureScript and Scala's Cats:
   that is run as soon as it is made (a statement of a `do` block, or what a function returns
   when the action of its call is run) is not made at all: a function that returns an action
   also has a Go function that does what the action would, and its call to itself at the end is
-  a `for` loop, through `when` or `if` too. A call at the end to a function that may call it
-  back, or to an action passed as an argument, still goes through the trampoline, so loops of
-  functions that call each other stay flat (`examples/io-loops.hgo`).
+  a `for` loop, through `when` or `if` too. Functions that end calling each other are one
+  `for` loop over which of them is running, and `main` runs its body instead of making its
+  action, so `main = loop 0` is that loop. A call at the end to an action passed as an argument
+  still goes through the trampoline, and stays flat (`examples/io-loops.hgo`).
 - **So is `Identity`,** the library's pure monad, and with it every transformer over it: the
   library's `State s` is `StateT s Identity`, as are `Reader` and `Except`. Ten million steps of
   `loop n = do { modify (+ n); loop (n - 1) }` run in 10 MB, and a million run faster than in a
@@ -670,7 +671,8 @@ side by side with others (`bench/run.sh OLD_HAGO NEW_HAGO`).
 | the same with `Iter.filter` for the last generator and the guard | <0.01 s | ~2 MB |
 | `foldr (+) 0 [1 .. 10000000]` | 0.12 s | ~215 MB |
 | `mapM_` over a million elements in IO | <0.01 s | ~2 MB |
-| a recursive IO loop of five million iterations | 0.05 s | ~7 MB |
+| a recursive IO loop of five million iterations | <0.01 s | ~2 MB |
+| the same as two functions that call each other | <0.01 s | ~2 MB |
 | `mapM_` over a million elements in `StateT Int IO` | <0.01 s | ~2 MB |
 | fifty million additions of a `newtype Meters = Meters Double` | 0.02 s | ~2 MB |
 | the same with `data Meters = Meters Double` | 0.02 s | ~2 MB |
@@ -751,7 +753,8 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
 | Pythagorean triples up to 400, as a list comprehension | <0.01 s | <0.01 s |
 | `foldr (+) 0 [1 .. 10000000]` | 0.12 s, 216 MB | 0.14 s, 164 MB |
 | `mapM_` over a million elements in IO | <0.01 s | <0.01 s |
-| a recursive IO loop of five million iterations | 0.05 s | 0.01 s |
+| a recursive IO loop of five million iterations | <0.01 s | 0.01 s |
+| the same as two functions that call each other | <0.01 s | 0.01 s |
 | `mapM_` over a million elements in `StateT Int IO` | <0.01 s | <0.01 s |
 | fifty million additions of a `Meters`, `newtype` or `data` | 0.02 s | 0.02 s |
 | JSON, 3.7 MB, the same combinators and printer | 0.20 s, 100 MB | 0.29 s, 93 MB |
@@ -767,14 +770,13 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
 | the same with a `Data.Map` | 0.39 s | 0.58 s |
 
 - **Even:** strict code at concrete types, newtypes, folds of lists made where they are
-  folded (both make loops of them, in IO and in `StateT` too), mutable arrays, in ST, in IO
-  and in a program with threads, `parMap`.
+  folded (both make loops of them, in IO and in `StateT` too), recursive IO loops, mutable
+  arrays, in ST, in IO and in a program with threads, `parMap`.
 - **Hago ahead:** a `Data.Map` built by a fold or a loop, which Hago builds in place (four
   times faster, a third of the memory); the JSON parser and printer; the hash table; and
   memory in general.
 - **GHC ahead:** the sieve on a map, by a half again: every step still allocates the lists it
-  keeps (`[p]`, `++`), where GHC's generational collector does better than Go's; and a
-  recursive IO loop.
+  keeps (`[p]`, `++`), where GHC's generational collector does better than Go's.
 
 ## Using it
 

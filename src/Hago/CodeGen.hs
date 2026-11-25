@@ -12,7 +12,7 @@ import Control.Monad.State
 import Data.Char
 import Data.Data (Data, gmapQ)
 import Data.Graph (SCC (..), flattenSCCs, stronglyConnComp)
-import Data.List (intercalate, isPrefixOf, nub, sort)
+import Data.List (find, intercalate, isPrefixOf, nub, sort)
 import qualified Data.IntMap as IM
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -50,9 +50,15 @@ data Ctx = Ctx
   , cxConfined :: M.Map Name [Bool]
     -- ^ for each top-level function, which of its parameters, mutable
     -- structures, it keeps in the thread that calls it (see 'unshare')
+  , cxLoop :: (Int, M.Map Name (Int, [String]))
+    -- ^ while generating a run form inside a loop over several (see
+    -- 'genRunLoop'): which one this is, and for each, which it is and the
+    -- variables its arguments are given in for the next round
   }
 
-data GS = GS {gsNext :: Int, gsLoop :: Bool}
+-- | gsLoop: a self tail call went round the loop; gsJumped: a tail call
+-- went to another function of the loop (see 'genRunLoop').
+data GS = GS {gsNext :: Int, gsLoop :: Bool, gsJumped :: Bool}
 
 type Gen = State GS
 
@@ -77,7 +83,7 @@ data RuntimePart = RuntimePart
 -- | The Go program.
 generate :: Runtime -> Program -> String
 generate runtime prog =
-  unlines (header ++ [rtCore runtime concurrent] ++ map rpSource parts ++ tupleDecls ++ dataDecls ++ hkDecls ++ foreignUses ++ tops ++ initBlock ++ mainFn)
+  unlines (header ++ [rtCore runtime concurrent] ++ map rpSource parts ++ tupleDecls ++ dataDecls ++ hkDecls ++ foreignUses ++ tops ++ loopFns ++ initBlock ++ mainFn)
   where
     usedForeign = S.fromList (concatMap (coreRefs . tbBody) (progBinds prog))
     used = [f | (n, f) <- M.toList (progForeign prog), S.member n usedForeign]
@@ -135,6 +141,7 @@ generate runtime prog =
       , cxRun = M.fromList [(tbName b, (runName (tbName b), tbArity b)) | b <- progBinds prog, hasRunForm prog b]
       , cxGroup = S.empty
       , cxConfined = confinedParams ctx0 {cxConfined = M.empty} prog
+      , cxLoop = (0, M.empty)
       }
     -- a struct for each size of tuple the program uses
     tupleDecls =
@@ -150,7 +157,29 @@ generate runtime prog =
     dataDecls = concatMap (genData prog unboxed)
       [(n, d) | (n, d) <- M.toList (progData prog), n `notElem` ["[]", "Bool"], null (hkPositions prog n), diForeign d == Nothing]
     hkDecls = concatMap (genHkData prog) (hkInstances prog)
-    (tops, inits) = flip evalState (GS 0 False) (unzip <$> mapM (\b -> genTop ctx0 {cxGroup = groupOf (tbName b)} (S.member (tbName b) deferred) b) initOrder)
+    (loopFns, tops, inits, mainRun) = flip evalState (GS 0 False False) $ do
+      loops <- forM topLoops $ \bs -> case bs of
+        [] -> pure Nothing
+        b0 : _ -> do
+          let name = "hgloop_" ++ mangle (tbName b0)
+              ctx = ctx0 {cxGroup = groupOf (tbName b0), cxTParams = tbParams b0}
+          r <- genRunLoop ctx name [(tbName b, ps, inner) | b <- bs, CLam ps _ inner <- [tbBody b]] (runResult b0)
+          pure (fmap (\(fn, entries) -> ("func " ++ name ++ tparamList (tbParams b0) ++ fn, entries)) r)
+      let entries = M.fromList (concat [es | Just (_, es) <- loops])
+      (ts, is) <- unzip <$> mapM (\b -> genTop ctx0 {cxGroup = groupOf (tbName b)} (S.member (tbName b) deferred) (M.lookup (tbName b) entries) b) (filter (not . isMainRun) initOrder)
+      ms <- case mainBind of
+        Just b | isMainRun b -> Just <$> genRun ctx0 {cxGroup = groupOf "main"} RDiscard (tbBody b)
+        _ -> pure Nothing
+      pure ([fn | Just (fn, _) <- loops], ts, is, ms)
+    -- main, when nothing refers to it, is not an action made and then run:
+    -- its body is run (see 'genRun'), so that a loop it calls is its run form
+    mainBind = find ((== "main") . tbName) (progBinds prog)
+    isMainRun b = tbName b == "main" && tbArity b == 0 && not (any (elem "main" . coreRefs . tbBody) (progBinds prog))
+    -- the run forms of functions that end calling each other, as loops
+    topLoops = concat [runLoops [(b, (tbParams b, runResult b)) | b <- bs, hasRunForm prog b] | CyclicSCC bs <- sccs]
+    runResult b = case tbBody b of
+      CLam _ r _ | Just x <- ioResult ctx0 r -> x
+      _ -> error ("runResult: " ++ tbName b)
     -- the functions of each one's group of mutually recursive ones, itself among them
     groupOf n = M.findWithDefault (S.singleton n) n groups
     groups = M.fromList [(tbName b, S.fromList (map tbName bs)) | CyclicSCC bs <- sccs, b <- bs]
@@ -186,7 +215,7 @@ generate runtime prog =
     mainFn =
       [ "func main() {", "defer rt_failed()"
       , "if rt_os.Getenv(\"GOGC\") == \"\" {", "rt_debug.SetGCPercent(200)", "}"
-      , "m := " ++ mangle "main", mangle "main" ++ " = nil", "rt_run(m)", "}" ]
+      ] ++ fromMaybe ["m := " ++ mangle "main", mangle "main" ++ " = nil", "rt_run(m)"] mainRun ++ ["}"]
 
 -- Names -------------------------------------------------------------------------
 
@@ -368,7 +397,7 @@ genHkData prog (c, canon) =
     s = M.fromList (zip hkParams canon)
     name = instName c canon
     marker = "is" ++ name
-    ctx = Ctx M.empty Nothing [] params prog S.empty M.empty M.empty S.empty M.empty
+    ctx = Ctx M.empty Nothing [] params prog S.empty M.empty M.empty S.empty M.empty (0, M.empty)
     recv k = name ++ "_" ++ suffix k ++ (if null params then "" else "[" ++ commas (map tyVar params) ++ "]")
     suffix = conSuffix
     con k =
@@ -472,7 +501,7 @@ genData prog unboxed (n, DataInfo ps _ ks _ _)
   where
     marker = "is" ++ typeName n
     recv k = conStruct prog k ++ (if null ps then "" else "[" ++ commas (map tyVar ps) ++ "]")
-    ctx = Ctx M.empty Nothing [] ps prog S.empty M.empty M.empty S.empty M.empty
+    ctx = Ctx M.empty Nothing [] ps prog S.empty M.empty M.empty S.empty M.empty (0, M.empty)
     con k =
       let ci = progCons prog M.! k
           fields = [ "F" ++ show i ++ " " ++ goTy ctx (if lz then tLazy t else t) | (i, (lz, t)) <- zip [0 :: Int ..] (ciFields ci)]
@@ -481,9 +510,10 @@ genData prog unboxed (n, DataInfo ps _ ks _ _)
 
 -- Top-level bindings ----------------------------------------------------------------
 
--- | A top-level binding: its declaration, and its initialisation if it is a CAF.
-genTop :: Ctx -> Bool -> TopBind -> Gen (String, [String])
-genTop ctx0 deferred (TopBind n tps dicts t ar body shared) = do
+-- | A top-level binding: its declaration, and its initialisation if it is a
+-- CAF. Its run form may be given, as the entry to a loop (see 'genRunLoop').
+genTop :: Ctx -> Bool -> Maybe String -> TopBind -> Gen (String, [String])
+genTop ctx0 deferred entry (TopBind n tps dicts t ar body shared) = do
   -- specialisation leaves no dictionary
   unless (null dicts) (error ("codegen: dictionaries left in " ++ n))
   let ctx = ctx0 {cxTParams = tps}
@@ -507,8 +537,9 @@ genTop ctx0 deferred (TopBind n tps dicts t ar body shared) = do
       pure (unlines (["func " ++ mangle n ++ tparamList tps ++ "() " ++ goTy ctx t ++ " {"] ++ ls ++ ["}"]), [])
     (_, CLam ps r inner) -> do
       fn <- genFunction ctx (Just (n, ar)) [] ps r inner
-      runFn <- case (M.lookup n (cxRun ctx), ioResult ctx r) of
-        (Just (rn, _), Just x) -> (\f -> "\nfunc " ++ rn ++ tparamList tps ++ f) <$> genRunFunction ctx (Just (n, ar)) ps x inner
+      runFn <- case (M.lookup n (cxRun ctx), ioResult ctx r, entry) of
+        (Just (rn, _), Just _, Just f) -> pure ("\nfunc " ++ rn ++ tparamList tps ++ f)
+        (Just (rn, _), Just x, Nothing) -> (\f -> "\nfunc " ++ rn ++ tparamList tps ++ f) <$> genRunFunction ctx (Just (n, ar)) ps x inner
         _ -> pure ""
       pure ("func " ++ mangle n ++ tparamList tps ++ fn ++ runFn, [])
     _ -> error ("genTop: " ++ n)
@@ -642,12 +673,13 @@ bindLocals ctx bs =
   ctx { cxVars = foldr (\(n, a) -> M.insert n (VKLocal a)) (cxVars ctx) bs
       , cxPending = foldr (S.delete . fst) (cxPending ctx) bs
       , cxRun = foldr (M.delete . fst) (cxRun ctx) bs
+      , cxLoop = fmap (\m -> foldr (M.delete . fst) m bs) (cxLoop ctx)
       , cxSelf = case cxSelf ctx of
           Just (n, _) | n `elem` map fst bs -> Nothing
           self -> self }
 
 noSelf :: Ctx -> Ctx
-noSelf ctx = ctx {cxSelf = Nothing}
+noSelf ctx = ctx {cxSelf = Nothing, cxLoop = (0, M.empty)}
 
 freshName :: String -> Gen String
 freshName base = do
@@ -821,20 +853,36 @@ genBinds ctx binds = do
             ty = if ar == 0 then goTy ctx t else "func(" ++ commas (map (goTy ctx) ps) ++ ") " ++ goTy ctx r
          in "var " ++ mangle n ++ " " ++ ty
       runDecl (n, ps, x) = "var " ++ runName n ++ " func(" ++ commas (map (goTy ctx . snd) ps) ++ ") " ++ goTy ctx x
-  assigns <- forM (zip ordered (tails' (map (\(CBind n _ _ _) -> n) ordered))) $ \(CBind n _ ar body, pending) ->
+      orderedNames = [n | CBind n _ _ _ <- ordered]
+      pendingFrom n = S.union (S.fromList (dropWhile (/= n) orderedNames)) (cxPending ctx')
+      -- the run forms of functions that end calling each other, as loops
+      localLoops = concat
+        [ runLoops [((n, ps, inner, x), x) | CBind n _ _ (CLam ps _ inner) <- bs, (m, _, x) <- runs, m == n]
+        | CyclicSCC bs <- sccs ]
+  loops <- forM localLoops $ \ms -> case ms of
+    [] -> pure Nothing
+    (n0, _, _, x) : _ -> do
+      let name = "hgloop_" ++ mangle n0
+          c = (noSelf ctx') {cxPending = pendingFrom n0, cxGroup = groupOf n0}
+          ty = "func(" ++ commas ("int" : [goTy ctx pt | (_, ps, _, _) <- ms, (_, pt) <- ps]) ++ ") " ++ goTy ctx x
+      r <- genRunLoop c name [(n, ps, inner) | (n, ps, inner, _) <- ms] x
+      pure (fmap (\(fn, es) -> (["var " ++ name ++ " " ++ ty, name ++ " = func" ++ fn], es)) r)
+  let entries = M.fromList (concat [es | Just (_, es) <- loops])
+  assigns <- forM (zip ordered (tails' orderedNames)) $ \(CBind n _ ar body, pending) ->
     let c = (noSelf ctx') {cxPending = S.union (S.fromList pending) (cxPending ctx')}
      in case body of
           CLam ps r inner | ar > 0 -> do
             let c' = c {cxGroup = groupOf n}
             fn <- genFunction c' (Just (n, ar)) [] ps r inner
-            runFn <- case (M.lookup n (cxRun ctx'), ioResult ctx r) of
-              (Just (rn, _), Just x) -> (\f -> [rn ++ " = func" ++ f]) <$> genRunFunction c' (Just (n, ar)) ps x inner
+            runFn <- case (M.lookup n (cxRun ctx'), ioResult ctx r, M.lookup n entries) of
+              (Just (rn, _), Just _, Just f) -> pure [rn ++ " = func" ++ f]
+              (Just (rn, _), Just x, Nothing) -> (\f -> [rn ++ " = func" ++ f]) <$> genRunFunction c' (Just (n, ar)) ps x inner
               _ -> pure []
             pure ((mangle n ++ " = func" ++ fn) : runFn)
           _ -> do
             e <- genExpr c body
             pure [mangle n ++ " = " ++ e]
-  pure (ctx', map decl binds ++ map runDecl runs ++ concat assigns ++ ["_ = " ++ mangle n | n <- names] ++ ["_ = " ++ runName n | (n, _, _) <- runs])
+  pure (ctx', map decl binds ++ map runDecl runs ++ concat [ls | Just (ls, _) <- loops] ++ concat assigns ++ ["_ = " ++ mangle n | n <- names] ++ ["_ = " ++ runName n | (n, _, _) <- runs])
   where
     -- each binding, with itself and the ones after it, which are not assigned yet
     tails' xs = [drop i xs | i <- [0 .. length xs - 1]]
@@ -1420,12 +1468,16 @@ genDo ctx0 r stmts = do
 --
 -- The trampoline is there so that loops written as recursion, and
 -- functions that end calling each other, run in constant stack. In a run
--- form, a tail call to itself becomes a loop, as in a pure function; one to
--- a function that cannot call it back (a later one in dependency order) is
--- a direct call, so a chain of them is as long as the program has
--- functions. A tail call to one that may call it back goes through the
--- trampoline, and so does every action whose source is not known (a
--- parameter, a suspension). Once on the trampoline, a loop stays on it.
+-- form, a tail call to itself becomes a loop, as in a pure function, and
+-- the run forms of functions that call each other and give the same type
+-- are one loop (see 'genRunLoop'), around which a tail call to any of them
+-- goes; one to a function that cannot call it back (a later one in
+-- dependency order) is a direct call, so a chain of them is as long as the
+-- program has functions. A tail call to one that may call it back
+-- otherwise (one that gives another type, a function around a local one)
+-- goes through the trampoline, and so does every action whose source is
+-- not known (a parameter, a suspension). Once on the trampoline, a loop
+-- stays on it. main, when nothing refers to it, is run the same way.
 
 -- | What becomes of an action's result: returned (True: from a run form,
 -- where tail calls loop; False: from a Go function called on the spot),
@@ -1469,6 +1521,42 @@ genRunFunction ctx self ps x inner = do
   let params = commas [(if looped then nextName p else mangle p) ++ " " ++ goTy ctx pt | (p, pt) <- ps]
       body = if looped then ["for {"] ++ roundStart (map fst ps) ++ ls ++ ["}"] else ls
   pure (unlines (["(" ++ params ++ ") " ++ goTy ctx x ++ " {"] ++ body ++ ["}"]))
+
+-- | The run forms of functions that end calling each other, as one Go
+-- function: a loop over which of them is running, whose tail calls to one
+-- another (and to themselves) assign the arguments and go round again.
+-- They have the same type parameters (the enclosing context's) and give
+-- the same type, x. The result, unless none of them calls another at the
+-- end: the loop, as a function's parameters, result and body, and for each
+-- of them, its run form, which enters the loop there.
+genRunLoop :: Ctx -> String -> [(Name, [(Name, Type)], CExpr)] -> Type -> Gen (Maybe (String, [(Name, String)]))
+genRunLoop ctx loopName members x = do
+  saved <- gets gsJumped
+  modify (\s -> s {gsJumped = False})
+  let nexts = [[loopNext i p | (p, _) <- ps] | (i, (_, ps, _)) <- zip [0 :: Int ..] members]
+      loop = M.fromList [(n, (i, ns)) | (i, (n, _, _), ns) <- zip3 [0 ..] members nexts]
+  cases <- forM (zip3 [0 :: Int ..] members nexts) $ \(i, (_, ps, body), ns) -> do
+    let ctx' = bindLocals ((noSelf ctx) {cxLoop = (i, loop)}) [(p, 0) | (p, _) <- ps]
+    ls <- genRun ctx' (RReturn True) body
+    pure (["case " ++ show i ++ ":"] ++ concat [[mangle p ++ " := " ++ nx, "_ = " ++ mangle p] | ((p, _), nx) <- zip ps ns] ++ ls)
+  jumped <- gets gsJumped
+  modify (\s -> s {gsJumped = saved})
+  let params = commas ("hg_which int" : [nx ++ " " ++ goTy ctx pt | ((_, ps, _), ns) <- zip members nexts, ((_, pt), nx) <- zip ps ns])
+      fn = unlines (["(" ++ params ++ ") " ++ goTy ctx x ++ " {", "for {", "switch hg_which {"] ++ concat cases ++ ["}", "}", "}"])
+      insts = if null (cxTParams ctx) then "" else "[" ++ commas (map tyVar (cxTParams ctx)) ++ "]"
+      entry :: Int -> (Name, [(Name, Type)], CExpr) -> (Name, String)
+      entry i (n, ps, _) =
+        let args = show i : concat [if j == i then map (mangle . fst) qs else ["*new(" ++ goTy ctx qt ++ ")" | (_, qt) <- qs] | (j, (_, qs, _)) <- zip [0 ..] members]
+         in (n, unlines ["(" ++ commas [mangle p ++ " " ++ goTy ctx pt | (p, pt) <- ps] ++ ") " ++ goTy ctx x ++ " {", "return " ++ loopName ++ insts ++ "(" ++ commas args ++ ")", "}"])
+  pure (if jumped then Just (fn, zipWith entry [0 ..] members) else Nothing)
+  where
+    loopNext i p = "hg_next" ++ show i ++ "_" ++ mangle p
+
+-- | The groups of functions whose run forms can be one loop (see
+-- 'genRunLoop'): of a group of mutually recursive ones, those that have a
+-- run form, by the type they give; at least two in each.
+runLoops :: Eq k => [(a, k)] -> [[a]]
+runLoops ms = filter ((> 1) . length) [[n | (n, k') <- ms, k' == k] | k <- nub (map snd ms)]
 
 -- | Statements that run the action and do with its result what k says.
 genRun :: Ctx -> RunK -> CExpr -> Gen [String]
@@ -1534,6 +1622,12 @@ genRun ctx k e = case e of
       (ls ++) <$> genRun ctx' k body
   CForce x -> (\x' -> finish ("rt_run(" ++ x' ++ ".force())")) <$> genExpr ctx x
   CApp (CVar f ref _) args
+    -- a tail call to one of the loop's functions: round the loop again, as it
+    | RReturn True <- k, (from, loop) <- cxLoop ctx, Just (j, ns) <- M.lookup f loop, length args == length ns
+    , sameInstance ref -> do
+        as <- mapM (genExpr ctx) args
+        when (j /= from) (modify (\s -> s {gsJumped = True}))
+        pure [commas ns ++ " = " ++ commas as, "hg_which = " ++ show j, "continue"]
     -- a tail call to itself: round the loop again
     | RReturn True <- k, Just (self, n) <- cxSelf ctx, f == self, length args == n, M.member f (cxRun ctx) -> do
         as <- mapM (genExpr ctx) args
@@ -1560,6 +1654,11 @@ genRun ctx k e = case e of
   _ -> trampolined
   where
     trampolined = (\e' -> finish ("rt_run(" ++ e' ++ ")")) <$> genExpr ctx e
+    -- the functions of a loop have the same type parameters (local ones,
+    -- none of their own), and a call that goes round it must be at those
+    sameInstance ref = case refTypes ctx ref of
+      [] -> True
+      ts -> ts == map TVar (cxTParams ctx)
     finish v = case k of
       RReturn _ -> ["return " ++ v]
       RDiscard -> ["_ = " ++ v]

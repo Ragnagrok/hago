@@ -197,9 +197,10 @@ Cats de Scala:
   que devuelve una función cuando se ejecuta la acción de su llamada) no llega a crearse: una
   función que devuelve una acción tiene además una función de Go que hace lo que haría la
   acción, y su llamada a sí misma al final es un loop `for`, también a través de `when` o de un
-  `if`. Una llamada al final a una función que puede volver a llamarla, o a una acción recibida
-  como argumento, sigue pasando por el trampolín, así que los loops de funciones que se llaman
-  entre sí no hacen crecer la pila (`examples/io-loops.hgo`).
+  `if`. Las funciones que terminan llamándose entre sí son un solo loop `for` sobre cuál de
+  ellas está corriendo, y `main` ejecuta su cuerpo en vez de armar su acción, así que
+  `main = loop 0` es ese loop. Una llamada al final a una acción recibida como argumento sigue
+  pasando por el trampolín, y no hace crecer la pila (`examples/io-loops.hgo`).
 - **`Identity` también,** la mónada pura de la biblioteca, y con ella todo transformador encima:
   el `State s` de la biblioteca es `StateT s Identity`, igual que `Reader` y `Except`. Diez
   millones de pasos de `loop n = do { modify (+ n); loop (n - 1) }` corren en 10 MB, y un millón
@@ -693,7 +694,8 @@ lado a lado con otros (`bench/run.sh HAGO_VIEJO HAGO_NUEVO`).
 | lo mismo con `Iter.filter` para el último generador y la guarda | <0,01 s | ~2 MB |
 | `foldr (+) 0 [1 .. 10000000]` | 0,12 s | ~215 MB |
 | `mapM_` sobre un millón de elementos en IO | <0,01 s | ~2 MB |
-| un loop recursivo en IO de cinco millones de iteraciones | 0,05 s | ~7 MB |
+| un loop recursivo en IO de cinco millones de iteraciones | <0,01 s | ~2 MB |
+| lo mismo con dos funciones que se llaman entre sí | <0,01 s | ~2 MB |
 | `mapM_` sobre un millón de elementos en `StateT Int IO` | <0,01 s | ~2 MB |
 | cincuenta millones de sumas de un `newtype Meters = Meters Double` | 0,02 s | ~2 MB |
 | lo mismo con `data Meters = Meters Double` | 0,02 s | ~2 MB |
@@ -779,7 +781,8 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
 | ternas pitagóricas hasta 400, como comprensión de listas | <0,01 s | <0,01 s |
 | `foldr (+) 0 [1 .. 10000000]` | 0,12 s, 216 MB | 0,14 s, 164 MB |
 | `mapM_` sobre un millón de elementos en IO | <0,01 s | <0,01 s |
-| un loop recursivo en IO de cinco millones de iteraciones | 0,05 s | 0,01 s |
+| un loop recursivo en IO de cinco millones de iteraciones | <0,01 s | 0,01 s |
+| lo mismo con dos funciones que se llaman entre sí | <0,01 s | 0,01 s |
 | `mapM_` sobre un millón de elementos en `StateT Int IO` | <0,01 s | <0,01 s |
 | cincuenta millones de sumas de un `Meters`, `newtype` o `data` | 0,02 s | 0,02 s |
 | JSON, 3,7 MB, los mismos combinadores e impresor | 0,20 s, 100 MB | 0,29 s, 93 MB |
@@ -795,14 +798,13 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
 | lo mismo con un `Data.Map` | 0,39 s | 0,58 s |
 
 - **Parejos:** el código estricto en tipos concretos, los newtypes, los pliegues de listas que
-  se arman donde se pliegan (los dos los vuelven loops, también en IO y en `StateT`), los
-  arreglos mutables, en ST, en IO y en un programa con hilos, `parMap`.
+  se arman donde se pliegan (los dos los vuelven loops, también en IO y en `StateT`), los loops
+  recursivos en IO, los arreglos mutables, en ST, en IO y en un programa con hilos, `parMap`.
 - **Adelante Hago:** un `Data.Map` construido por un pliegue o un loop, que Hago construye en el
   lugar (cuatro veces más rápido, un tercio de la memoria); el parser y el impresor de JSON; la
   tabla hash; y la memoria en general.
 - **Adelante GHC:** la criba con un map, por la mitad más: cada paso todavía reserva las listas
-  que guarda (`[p]`, `++`), donde el recolector generacional de GHC anda mejor que el de Go; y un
-  loop recursivo en IO.
+  que guarda (`[p]`, `++`), donde el recolector generacional de GHC anda mejor que el de Go.
 
 ## Uso
 

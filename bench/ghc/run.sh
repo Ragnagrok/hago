@@ -39,6 +39,7 @@ progs=(
   "foldr (+) over 10M, recursion|bench/foldr-sum.hgo|foldr-sum||"
   "mapM_ over 1M in IO|bench/mapm-io.hgo|mapm-io||"
   "recursive IO loop, 5M|bench/loop-io.hgo|loop-io||"
+  "the same, two functions calling each other|bench/loop-io-mutual.hgo|loop-io-mutual||"
   "mapM_ over 1M in StateT Int IO|bench/mapm-statet.hgo|mapm-statet||"
   "50M additions, newtype|bench/meters-newtype.hgo|meters-newtype||"
   "50M additions, data|bench/meters-data.hgo|meters-data||"

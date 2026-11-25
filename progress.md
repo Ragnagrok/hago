@@ -378,10 +378,36 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       measured with the ones now in `bench/`, close to the earlier ones but not the same: the
       keys of the `Data.Map` program are scattered, so it takes 2.1 s where the earlier one
       took 1.57 s, with either compiler.
-- [ ] **A tail call between functions that call each other** goes through the trampoline
-      (`ping`/`pong` in `examples/io-loops.hgo`), and so does one to an action passed as an
-      argument. A run form for the whole group, one Go function with a loop over which of
-      them is running, would make it a loop.
+- [x] **A tail call between functions that call each other** (2026-11-25) went through the
+      trampoline (`ping`/`pong` in `examples/io-loops.hgo`). Two parts:
+      - **One loop for the group** (`genRunLoop` in `Hago.CodeGen`). Of a group of mutually
+        recursive functions, those with a run form that give the same type and have the same
+        type parameters get one Go function, `hgloop_f`: a `for` around a `switch` over which
+        of them is running, each with its own variables for the next round's arguments. A
+        call at the end to one of them (at those type parameters) assigns its arguments, says
+        which, and goes round again, as a call to itself already did; each one's run form
+        enters the loop at its own case. Local functions too (`evenStep`/`oddStep` in ST). A
+        call in the middle is still a direct call; a call at the end to one that gives
+        another type, or to an action passed as an argument (`hop`/`bounce`), still goes
+        through the trampoline; and a group in which none calls another at the end keeps its
+        run forms apart. `examples/io-loops.hgo` adds three functions in a ring that give a
+        value, over a list, with `case`; a polymorphic pair; a group with one that gives
+        another type, called in the middle by the others and calling them; and closures made
+        in each round, which keep that round's arguments. GHC prints the same.
+      - **`main` runs its body.** Measuring showed that neither this nor a loop calling itself
+        was reached from `main = loop 5000000 0` (`bench/loop-io.hgo`): `main` was an action,
+        made in `init` and run by the trampoline, so it was `loop`'s action that ran, not its
+        run form, and every step went through the trampoline. A `main` that nothing refers to
+        is no longer a value: `main()` runs its body (`genRun`). One that something refers to
+        is still made and run (`examples/loops.hgo`).
+      Only these two programs' hot code changed; the rest of `bench/` differs in `main()`
+      alone. Before and after, nine runs interleaved; GHC 9.12 with `-O2`:
+
+      | Program | Before | After | GHC |
+      | --- | --- | --- | --- |
+      | recursive IO loop, 5M | 0.05 s, 11 MB | <0.01 s, 2 MB | 0.01 s, 4 MB |
+      | the same, two functions calling each other (`bench/loop-io-mutual.hgo`) | 0.05 s, 12 MB | <0.01 s, 2 MB | 0.01 s, 4 MB |
+      | `examples/io-loops.hgo` (two rounds) | 2.7 s, 3.2 s | 2.0 s, 1.7 s | |
 - [x] **Lists made only to be folded are loops** (2026-11-25). Against GHC 9.12 with `-O2`,
       on the same programs, the largest gaps were its fusion: the pipeline of squares 0.13 s
       against under 0.01 s, the comprehension of Pythagorean triples 1.10 s against under

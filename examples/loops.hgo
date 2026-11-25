@@ -18,5 +18,7 @@ main = do
   print (collatz 27)
   print (and (map (< 10) [1..]))
   print (length (filter even [1..100]))
+  -- a main that something refers to (here itself) is an action, made and run
+  when (collatz 27 < 0) main
   where
     even k = k `mod` 2 == 0
