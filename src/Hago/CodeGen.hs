@@ -47,6 +47,9 @@ data Ctx = Ctx
   , cxGroup :: S.Set Name
     -- ^ while generating a run form, the functions a tail call to which goes
     -- through the trampoline: those that may call this one back
+  , cxConfined :: M.Map Name [Bool]
+    -- ^ for each top-level function, which of its parameters, mutable
+    -- structures, it keeps in the thread that calls it (see 'unshare')
   }
 
 data GS = GS {gsNext :: Int, gsLoop :: Bool}
@@ -131,6 +134,7 @@ generate runtime prog =
       , cxUnboxed = unboxed
       , cxRun = M.fromList [(tbName b, (runName (tbName b), tbArity b)) | b <- progBinds prog, hasRunForm prog b]
       , cxGroup = S.empty
+      , cxConfined = confinedParams ctx0 {cxConfined = M.empty} prog
       }
     -- a struct for each size of tuple the program uses
     tupleDecls =
@@ -364,7 +368,7 @@ genHkData prog (c, canon) =
     s = M.fromList (zip hkParams canon)
     name = instName c canon
     marker = "is" ++ name
-    ctx = Ctx M.empty Nothing [] params prog S.empty M.empty M.empty S.empty
+    ctx = Ctx M.empty Nothing [] params prog S.empty M.empty M.empty S.empty M.empty
     recv k = name ++ "_" ++ suffix k ++ (if null params then "" else "[" ++ commas (map tyVar params) ++ "]")
     suffix = conSuffix
     con k =
@@ -468,7 +472,7 @@ genData prog unboxed (n, DataInfo ps _ ks _ _)
   where
     marker = "is" ++ typeName n
     recv k = conStruct prog k ++ (if null ps then "" else "[" ++ commas (map tyVar ps) ++ "]")
-    ctx = Ctx M.empty Nothing [] ps prog S.empty M.empty M.empty S.empty
+    ctx = Ctx M.empty Nothing [] ps prog S.empty M.empty M.empty S.empty M.empty
     con k =
       let ci = progCons prog M.! k
           fields = [ "F" ++ show i ++ " " ++ goTy ctx (if lz then tLazy t else t) | (i, (lz, t)) <- zip [0 :: Int ..] (ciFields ci)]
@@ -525,11 +529,11 @@ genFunction ctx self extra ps r inner0 = do
   ls <- genStmts ctx' inner
   looped <- gets gsLoop
   modify (\s -> s {gsLoop = saved})
-  let params = commas ([d ++ " " ++ ty | (d, ty) <- extra] ++ [mangle p ++ " " ++ goTy ctx pt | (p, pt) <- ps])
+  let params = commas ([d ++ " " ++ ty | (d, ty) <- extra] ++ [(if looped then nextName p else mangle p) ++ " " ++ goTy ctx pt | (p, pt) <- ps])
       start = case owned of
         Just _ -> [mangle o ++ " := rt_newOwner()", "defer rt_endOwner(" ++ mangle o ++ ")"]
         Nothing -> []
-      body = start ++ if looped then ["for {"] ++ ls ++ ["}"] else ls
+      body = start ++ if looped then ["for {"] ++ roundStart (map fst ps) ++ ls ++ ["}"] else ls
   pure (unlines (["(" ++ params ++ ") " ++ goTy ctx r ++ " {"] ++ body ++ ["}"]))
 
 -- | A function that calls itself at the end, a loop, with a parameter that
@@ -621,6 +625,18 @@ ownedLoop ctx self ar ps body = case [i | (i, (_, t)) <- zip [0 ..] ps, Just c <
       CApp f@(CVar "listFoldl" _ _) [g, z, xs] -> CApp f [giveOwner ctx o g, giveChain o z, xs]
       e -> e
 
+-- A function whose calls to itself at the end are a loop takes its
+-- arguments in variables of their own (nextName), which each call assigns
+-- before going round again; each round starts by copying them into new
+-- variables of the parameters' names. A closure or a suspension made in a
+-- round keeps that round's values, as it would in the recursion: were the
+-- parameters themselves assigned, it would see the next round's.
+nextName :: Name -> String
+nextName p = "hg_next_" ++ mangle p
+
+roundStart :: [Name] -> [String]
+roundStart ps = concat [[mangle p ++ " := " ++ nextName p, "_ = " ++ mangle p] | p <- ps]
+
 bindLocals :: Ctx -> [(Name, Int)] -> Ctx
 bindLocals ctx bs =
   ctx { cxVars = foldr (\(n, a) -> M.insert n (VKLocal a)) (cxVars ctx) bs
@@ -656,7 +672,7 @@ genStmts ctx e = case e of
     | Just (self, n) <- cxSelf ctx, x == self, length args == n, isSelf (M.lookup x (cxVars ctx)) n -> do
         as <- mapM (genExpr ctx) args
         modify (\s -> s {gsLoop = True})
-        pure [commas (map mangle (cxSelfParams ctx)) ++ " = " ++ commas as, "continue"]
+        pure [commas (map nextName (cxSelfParams ctx)) ++ " = " ++ commas as, "continue"]
   _ -> do
     e' <- genExpr ctx e
     pure ["return " ++ e']
@@ -675,8 +691,11 @@ genMatch tl ctx scruts rows = do
       s' <- genExpr ctx s
       -- a constructor's Go value has its struct type; matching needs the
       -- interface of its data type
+      -- (only for a constructor given all its fields: one given fewer is a
+      -- function)
       let decl = case conHead s of
-            Just (k, targs) | tupleArity k == Nothing, k `notElem` ["()", "True", "False"] ->
+            Just (k, targs) | tupleArity k == Nothing, k `notElem` ["()", "True", "False"]
+                            , Just ci <- M.lookup k (progCons (cxProg ctx)), conArgs s == length (ciFields ci) ->
               "var " ++ n ++ " " ++ goTy ctx (TCon (ciType (progCons (cxProg ctx) M.! k)) targs) ++ " = " ++ s'
             _ -> n ++ " := " ++ s'
       pure ([decl, "_ = " ++ n], n)
@@ -684,6 +703,12 @@ genMatch tl ctx scruts rows = do
     ls <- genPats ctx (zip (map snd prepared) pats) (\ctx' -> genRow tl ctx' binds guards)
     pure (["{"] ++ ls ++ ["}"])
   pure (concatMap fst prepared ++ concat rowLines ++ ["panic(\"pattern match failure\")"])
+
+-- | How many arguments a constructor application gives.
+conArgs :: CExpr -> Int
+conArgs = \case
+  CApp f as -> conArgs f + length as
+  _ -> 0
 
 conHead :: CExpr -> Maybe (Name, [Type])
 conHead = \case
@@ -869,6 +894,17 @@ genExpr ctx e = case e of
         (ls, _, y) <- applyNew c q [x]
         pure (ls ++ ["if " ++ mangle y ++ " {", "return " ++ conValue ctx "Right" targs [mangle x], "}"])
       pure ("func() " ++ goTy ctx r ++ " {\n" ++ unlines loop ++ "return " ++ conValue ctx "Left" targs ["\"not found\""] ++ "\n}()")
+    -- a node changed in place (Data.Map's nodeT): its fields assigned, which
+    -- Go does with a store each, instead of copying a whole node made for it
+    CVar fn _ t | Just "rt_overwrite" <- foreignSym ctx fn, [dst, CApp (CCon k _ _) fs] <- args
+                , Just ci <- M.lookup k (progCons (cxProg ctx)), Just Pointer <- M.lookup (ciType ci) (cxUnboxed ctx)
+                , length fs == length (ciFields ci), not (null fs) -> do
+      d <- genExpr ctx dst
+      vs <- mapM (genExpr ctx) fs
+      let ty = goTy ctx (snd (splitFun 2 (zonk (progSubst (cxProg ctx)) t)))
+      pure ("func() " ++ ty ++ " {\nhg_d := " ++ d ++ "\n"
+              ++ commas ["hg_d.F" ++ show i | i <- [0 .. length fs - 1]] ++ " = " ++ commas vs
+              ++ "\nreturn hg_d\n}()")
     -- Iter.foldl (length, sum, maximum) of an Iter made right there: a loop
     CVar fn _ t | Just "rt_iterFoldl" <- foreignSym ctx fn, [g, z, xs] <- args
                , let p = iterProdOf ctx xs, iterKnown p, fusable p ->
@@ -1163,6 +1199,33 @@ foreignRun ctx f targs as = case declared of
   where
     (declared, t, goCall, eitherBody) = foreignParts ctx f targs True as
 
+-- | A read or a write of a mutable vector, run at once: written out where
+-- it is, for the case without a lock and with the index in range (uint(i)
+-- < len is both tests, and Go then checks nothing more), since Go does not
+-- inline the runtime's generic functions here; the rest, the lock and the
+-- error, is the runtime's.
+vectorAccess :: Ctx -> Foreign -> [Type] -> [String] -> Gen (Maybe ([String], String))
+vectorAccess ctx fo targs as = case (fSymbol fo, as) of
+  ("rt_mvecWrite", [v, i, x]) -> do
+    vv <- freshName "v"
+    iv <- freshName "i"
+    xv <- freshName "x"
+    pure $ Just
+      ( [ vv ++ " := " ++ v, iv ++ " := " ++ i, xv ++ " := " ++ x
+        , "if " ++ vv ++ ".mu == nil && uint(" ++ iv ++ ") < uint(len(" ++ vv ++ ".xs)) {"
+        , vv ++ ".xs[" ++ iv ++ "] = " ++ xv, "} else {", "rt_mvecWriteSlow(" ++ vv ++ ", " ++ iv ++ ", " ++ xv ++ ")", "}" ]
+      , "struct{}{}" )
+  ("rt_mvecRead", [v, i]) | TCon "IO" [el] <- snd (splitFun 2 (foreignInst fo targs)) -> do
+    vv <- freshName "v"
+    iv <- freshName "i"
+    yv <- freshName "y"
+    pure $ Just
+      ( [ vv ++ " := " ++ v, iv ++ " := " ++ i, "var " ++ yv ++ " " ++ goTy ctx el
+        , "if " ++ vv ++ ".mu == nil && uint(" ++ iv ++ ") < uint(len(" ++ vv ++ ".xs)) {"
+        , yv ++ " = " ++ vv ++ ".xs[" ++ iv ++ "]", "} else {", yv ++ " = rt_mvecReadSlow(" ++ vv ++ ", " ++ iv ++ ")", "}" ]
+      , yv )
+  _ -> pure Nothing
+
 -- | Whether a function from Go makes an action.
 foreignIO :: Foreign -> Bool
 foreignIO f = case snd (splitFun (fArity f) (fType f)) of
@@ -1339,7 +1402,7 @@ genDo ctx0 r stmts = do
     go ctx (s : rest) = case s of
       CSExpr _ e -> (++) <$> genRun ctx RDiscard e <*> go ctx rest
       CSBind "_" _ e -> (++) <$> genRun ctx RDiscard e <*> go ctx rest
-      CSBind x t e -> (++) <$> genRun ctx (RBind x t) e <*> go (bindLocals ctx [(x, 0)]) rest
+      CSBind x t e -> (\a b -> a ++ unshare ctx x e rest ++ b) <$> genRun ctx (RBind x t) e <*> go (bindLocals ctx [(x, 0)]) rest
       CSLet bs -> do
         (ctx', ls) <- genBinds ctx bs
         (ls ++) <$> go ctx' rest
@@ -1403,8 +1466,8 @@ genRunFunction ctx self ps x inner = do
   ls <- genRun ctx' (RReturn True) inner
   looped <- gets gsLoop
   modify (\s -> s {gsLoop = saved})
-  let params = commas [mangle p ++ " " ++ goTy ctx pt | (p, pt) <- ps]
-      body = if looped then ["for {"] ++ ls ++ ["}"] else ls
+  let params = commas [(if looped then nextName p else mangle p) ++ " " ++ goTy ctx pt | (p, pt) <- ps]
+      body = if looped then ["for {"] ++ roundStart (map fst ps) ++ ls ++ ["}"] else ls
   pure (unlines (["(" ++ params ++ ") " ++ goTy ctx x ++ " {"] ++ body ++ ["}"]))
 
 -- | Statements that run the action and do with its result what k says.
@@ -1475,7 +1538,7 @@ genRun ctx k e = case e of
     | RReturn True <- k, Just (self, n) <- cxSelf ctx, f == self, length args == n, M.member f (cxRun ctx) -> do
         as <- mapM (genExpr ctx) args
         modify (\s -> s {gsLoop = True})
-        pure [commas (map mangle (cxSelfParams ctx)) ++ " = " ++ commas as, "continue"]
+        pure [commas (map nextName (cxSelfParams ctx)) ++ " = " ++ commas as, "continue"]
     | Just (rn, n) <- M.lookup f (cxRun ctx), length args == n -> case k of
         RReturn True | S.member f (cxGroup ctx) -> trampolined
         _ -> do
@@ -1485,7 +1548,7 @@ genRun ctx k e = case e of
         let targs = refTypes ctx ref
             (params, _) = splitFun (fArity fo) (foreignInst fo targs)
         as <- zipWith3M (foreignArg ctx (isRuntimeSymbol fo)) (fst (splitFun (fArity fo) (fType fo))) params args
-        let (ls, v) = foreignRun ctx fo targs as
+        (ls, v) <- vectorAccess ctx fo targs as >>= maybe (pure (foreignRun ctx fo targs as)) pure
         pure (ls ++ finishValue v)
     | f `elem` ["putStrLn", "putStr"], isPrim ctx f, [a] <- args -> do
         a' <- genExpr ctx a
@@ -1527,10 +1590,143 @@ runStmts ctx k = \case
   [CSExpr _ e] -> genRun ctx k e
   CSExpr _ e : rest -> (++) <$> genRun ctx RDiscard e <*> runStmts ctx k rest
   CSBind "_" _ e : rest -> (++) <$> genRun ctx RDiscard e <*> runStmts ctx k rest
-  CSBind x t e : rest -> (++) <$> genRun ctx (RBind x t) e <*> runStmts (bindLocals ctx [(x, 0)]) k rest
+  CSBind x t e : rest -> (\a b -> a ++ unshare ctx x e rest ++ b) <$> genRun ctx (RBind x t) e <*> runStmts (bindLocals ctx [(x, 0)]) k rest
   CSLet bs : rest -> do
     (ctx', ls) <- genBinds ctx bs
     (ls ++) <$> runStmts ctx' k rest
+
+-- Structures that stay in one thread ------------------------------------------------
+
+-- A mutable vector or hash table made in IO, in a program that has threads,
+-- takes a lock on each operation, since another thread could reach it. When
+-- the action that makes it binds it to a variable that only the
+-- operations of its module are given, in this action (its statements, the
+-- binds and folds that run here, local functions it only calls), no other
+-- thread can: it is unshared at once, and takes no lock.
+
+-- | The statement that unshares x, bound to what e made, if what comes after
+-- (rest) keeps it in this thread.
+unshare :: Ctx -> Name -> CExpr -> [CStmt] -> [String]
+unshare ctx x e rest = case madeBy ctx e of
+  Just kind | confinedStmts ctx (S.singleton x) rest -> [kind ++ "(" ++ mangle x ++ ")"]
+  _ -> []
+
+-- | Whether e makes a new mutable vector or hash table: the unsharing
+-- function, if so.
+madeBy :: Ctx -> CExpr -> Maybe String
+madeBy ctx e = case e of
+  -- a bind gives what its last action gives (replicate, copied in, is a
+  -- bind of primShared)
+  CApp (CVar p _ _) [_, CLam [_] _ b] | p == "primBindIO", isPrim ctx p -> madeBy ctx b
+  CApp (CVar p _ _) [_, b] | p == "primThenIO", isPrim ctx p -> madeBy ctx (case b of CDelay _ x -> x; _ -> b)
+  CApp (CVar f _ _) _ -> byName f
+  CVar f _ _ -> byName f
+  _ -> Nothing
+  where
+    byName f
+      | any (made f) ["Data.Vector.Mutable.replicate", "Data.Vector.Mutable.generate", "Data.Vector.Mutable.thaw", "Data.Vector.Mutable.fromList"]
+          || foreignSym ctx f `elem` map Just ["rt_mvecReplicate", "rt_mvecGenerate", "rt_mvecThaw"] = Just "rt_mvecUnshare"
+      | any (made f) ["Data.HashTable.new", "Data.HashTable.fromList"] || foreignSym ctx f == Just "rt_tableNew" = Just "rt_tableUnshare"
+      | otherwise = Nothing
+    made f base = f == base || (base ++ "__") `isPrefixOf` f
+
+-- | An operation of the mutable structures' modules, which does nothing
+-- with the structure but use it.
+structOp :: Ctx -> Name -> Bool
+structOp ctx f = any (`isPrefixOf` f) ["Data.Vector.Mutable.", "Data.HashTable."]
+  || maybe False (\sym -> any (`isPrefixOf` sym) ["rt_mvec", "rt_table"]) (foreignSym ctx f)
+
+-- | Whether the names in t (the structure, and the local functions that
+-- use it) are used only where they stay in this thread.
+confined :: Ctx -> S.Set Name -> CExpr -> Bool
+confined ctx t e
+  | not (mentions e) = True
+  | otherwise = case e of
+      CApp (CVar f _ _) args
+        | structOp ctx f -> all (\a -> isT a || confined ctx t a) args
+        | f `elem` ["primBindIO", "primThenIO"], isPrim ctx f -> all (confinedLam ctx t) args
+        | f `elem` ["listFoldr", "listFoldl"], isTop ctx f -> all (confinedLam ctx t) args
+        | S.member f t -> all (confined ctx t) args
+        -- a function that keeps the parameters it is given here in the thread
+        | Just flags <- M.lookup f (cxConfined ctx), length flags == length args ->
+            and [if isT a then ok else confined ctx t a | (a, ok) <- zip args flags]
+      CIf c a b _ -> all (confined ctx t) [c, a, b]
+      -- a case may name the structure: the name is it too
+      CMatch ss rows _ -> all (\sc -> isT sc || confined ctx t sc) ss && all (aliasRow ss) rows
+      CLet bs b _ -> let (t', ok) = letNames ctx t bs in ok && confined ctx t' b
+      CDo _ _ _ ss -> confinedStmts ctx t ss
+      CForce x -> confined ctx t x
+      CDelay _ x -> confined ctx t x
+      _ -> False
+  where
+    mentions x = any (`S.member` t) (coreRefs x)
+    isT = \case
+      CVar v _ _ -> S.member v t
+      _ -> False
+    aliasRow ss r@(CRow pats _ _) =
+      let names = [x | (sc, q) <- zip ss pats, isT sc, Just x <- [patName q]]
+          plain = and [maybe False (const True) (patName q) || isWild q | (sc, q) <- zip ss pats, isT sc]
+       in plain && rowIn (S.union t (S.fromList names)) r
+    patName = \case
+      CPVar x _ -> Just x
+      _ -> Nothing
+    isWild = \case
+      CPWild -> True
+      _ -> False
+    rowIn t0 (CRow _ bs gs) =
+      let (t', ok) = letNames ctx t0 bs
+       in ok && all (\(g, b) -> maybe True (confined ctx t') g && confined ctx t' b) gs
+
+-- | The names a group of local bindings adds to t, and whether the group
+-- keeps them in the thread: a value that is only another name for one of
+-- them is one too (lifting local functions makes such names), a local
+-- function that uses them is tainted by them, and any other value must not
+-- use them.
+letNames :: Ctx -> S.Set Name -> [CBind] -> (S.Set Name, Bool)
+letNames ctx t bs = (t', ok)
+  where
+    t' = grow t
+    grow acc =
+      let more = S.fromList ([n | CBind n _ 0 (CVar v _ _) <- bs, S.member v acc]
+                               ++ [n | CBind n _ ar b <- bs, ar > 0, any (`S.member` acc) (coreRefs b)])
+       in if more `S.isSubsetOf` acc then acc else grow (S.union acc more)
+    ok = and [ if ar > 0 then confinedLam ctx t' b else alias b || not (any (`S.member` t') (coreRefs b))
+             | CBind _ _ ar b <- bs ]
+    alias = \case
+      CVar v _ _ -> S.member v t'
+      _ -> False
+
+-- | The same for a lambda run here: a continuation, a fold's step, a local
+-- function.
+-- | For each top-level function, which of its parameters, mutable vectors or
+-- hash tables, it keeps in the calling thread: the greatest such, since
+-- functions call each other (all are first assumed to, then those that do
+-- not are taken out until nothing changes).
+confinedParams :: Ctx -> Program -> M.Map Name [Bool]
+confinedParams ctx prog = go start
+  where
+    funs = [(tbName b, ps, inner) | b <- progBinds prog, CLam ps _ inner <- [tbBody b], length ps == tbArity b, tbArity b > 0]
+    start = M.fromList [(n, map (structural . snd) ps) | (n, ps, _) <- funs]
+    structural t = case zonk (progSubst prog) t of
+      TCon c _ -> c `elem` ["Data.Vector.Mutable.MVector", "Data.HashTable.HashTable"]
+      _ -> False
+    go tbl =
+      let c = ctx {cxConfined = tbl}
+          tbl' = M.fromList [ (n, [flag && confined c (S.singleton p) inner | ((p, _), flag) <- zip ps (tbl M.! n)])
+                            | (n, ps, inner) <- funs ]
+       in if tbl' == tbl then tbl else go tbl'
+
+confinedLam :: Ctx -> S.Set Name -> CExpr -> Bool
+confinedLam ctx t = \case
+  CLam _ _ b -> confinedLam ctx t b
+  e -> confined ctx t e
+
+confinedStmts :: Ctx -> S.Set Name -> [CStmt] -> Bool
+confinedStmts ctx t = \case
+  [] -> True
+  CSExpr _ e : rest -> confined ctx t e && confinedStmts ctx t rest
+  CSBind _ _ e : rest -> confined ctx t e && confinedStmts ctx t rest
+  CSLet bs : rest -> let (t', ok) = letNames ctx t bs in ok && confinedStmts ctx t' rest
 
 -- | A call to a run form.
 runCall :: Ctx -> String -> Name -> VRef -> [String] -> String

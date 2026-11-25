@@ -111,7 +111,17 @@ func rt_mvecGenerate[A, S any](shared bool, n int, f func(int) A) *rt_MVector[S,
 
 func rt_mvecLength[S, A any](v *rt_MVector[S, A]) int { return len(v.xs) }
 
+// Reading and writing have a path small enough for Go to inline, taken
+// when there is no lock and the index is in range (uint(i) < len is both
+// tests, and Go then checks nothing more), and the rest apart.
 func rt_mvecRead[S, A any](v *rt_MVector[S, A], i int) A {
+	if v.mu == nil && uint(i) < uint(len(v.xs)) {
+		return v.xs[i]
+	}
+	return rt_mvecReadSlow(v, i)
+}
+
+func rt_mvecReadSlow[S, A any](v *rt_MVector[S, A], i int) A {
 	rt_mvecCheck(i, len(v.xs))
 	if v.mu == nil {
 		return v.xs[i]
@@ -131,6 +141,14 @@ func rt_mvecReadMaybe[S, A any](v *rt_MVector[S, A], i int) (A, error) {
 }
 
 func rt_mvecWrite[S, A any](v *rt_MVector[S, A], i int, x A) {
+	if v.mu == nil && uint(i) < uint(len(v.xs)) {
+		v.xs[i] = x
+		return
+	}
+	rt_mvecWriteSlow(v, i, x)
+}
+
+func rt_mvecWriteSlow[S, A any](v *rt_MVector[S, A], i int, x A) {
 	rt_mvecCheck(i, len(v.xs))
 	if v.mu == nil {
 		v.xs[i] = x
@@ -293,3 +311,10 @@ func rt_tableToList[S any, K comparable, V, P any](t *rt_HashTable[S, K, V], pai
 	}
 	return l
 }
+
+// A structure made where the compiler sees that no other thread can reach
+// it needs no lock: it is used only by the action that made it, in the
+// thread that runs it.
+func rt_mvecUnshare[S, A any](v *rt_MVector[S, A]) { v.mu = nil }
+
+func rt_tableUnshare[S any, K comparable, V any](t *rt_HashTable[S, K, V]) { t.mu = nil }

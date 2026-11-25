@@ -1,0 +1,44 @@
+-- A vector or a table that only the action that made it uses, in its own
+-- thread, takes no lock; one that another thread can reach takes one on
+-- each operation. Each structure below is reached from other threads in a
+-- different way, written to by all of them at once: check.sh runs this
+-- under Go's race detector, which fails if any of them has no lock.
+import Control.Concurrent
+import Control.Concurrent.Async
+import qualified Data.Vector.Mutable as MV
+import qualified Data.HashTable as HashTable
+
+-- made here, and given back: whoever gets it may share it
+fresh :: Int -> IO (MV.IOVector Int)
+fresh n = MV.replicate n 0
+
+main :: IO ()
+main = do
+  -- used in actions given to forkIO
+  a <- MV.replicate 1 (0 :: Int)
+  done <- newEmptyMVar
+  mapM_ (\_ -> forkIO (MV.modify a (+ 1) 0 >> putMVar done ())) [1 .. 8 :: Int]
+  mapM_ (\_ -> takeMVar done) [1 .. 8 :: Int]
+  MV.read a 0 >>= print
+  -- used by a local function, given to other threads
+  b <- MV.replicate 1 (0 :: Int)
+  let bump = MV.modify b (+ 1) 0
+  mapConcurrently_ (const bump) [1 .. 8 :: Int]
+  MV.read b 0 >>= print
+  -- put in an MVar, and taken out by other threads
+  c <- MV.replicate 1 (0 :: Int)
+  box <- newMVar c
+  forConcurrently_ [1 .. 8 :: Int] (\_ -> readMVar box >>= \v -> MV.modify v (+ 1) 0)
+  MV.read c 0 >>= print
+  -- given back by a function, then shared
+  d <- fresh 1
+  forConcurrently_ [1 .. 8 :: Int] (\_ -> MV.modify d (+ 1) 0)
+  MV.read d 0 >>= print
+  -- a table used by other threads
+  t <- HashTable.new
+  forConcurrently_ [1 .. 8 :: Int] (\i -> HashTable.insertWith (+) t (i `mod` 2) (1 :: Int))
+  HashTable.size t >>= print
+  -- used only here, by this action: no lock, and the same result
+  e <- MV.replicate 8 (0 :: Int)
+  mapM_ (\i -> MV.write e i (i * i)) [0 .. 7]
+  MV.toList e >>= print . sum

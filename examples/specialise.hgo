@@ -1,0 +1,34 @@
+-- A recursive function that passes a function parameter as it is to every
+-- call to itself is copied for each known function it is given (a lambda
+-- that uses no local variable, or a top-level function), with the function
+-- put in its place: its calls are then copied in, and no closure is made.
+-- These check that each copy computes what the function does.
+
+applyAll :: (Int -> Int) -> [Int] -> [Int]
+applyAll _ [] = []
+applyAll f (x : xs) = f x : applyAll f xs
+
+foldWith :: (Int -> Int -> Int) -> Int -> [Int] -> Int
+foldWith _ acc [] = acc
+foldWith g acc (x : xs) = foldWith g (g acc x) xs
+
+twice :: (a -> a) -> Int -> a -> a
+twice f n x = if n == 0 then x else twice f (n - 1) (f x)
+
+-- the function is not passed as it is: no copy
+steps :: (Int -> Int) -> Int -> Int
+steps f n = if n <= 0 then f 0 else steps (\x -> f (x + 1)) (n - 1)
+
+main :: IO ()
+main = do
+  print (applyAll (\x -> x * 2) [1, 2, 3], applyAll (+ 10) [1, 2, 3])
+  -- a lambda that uses a local variable is not copied in, and is right too
+  let k = 7
+  print (applyAll (\x -> x + k) [1, 2, 3])
+  print (foldWith (+) 0 [1 .. 100], foldWith (\a b -> a * 2 + b) 0 [1, 0, 1, 1], foldWith max 0 [3, 9, 2])
+  print (twice (\s -> s ++ "!") 3 "hi", twice (* 2) 10 1)
+  -- a lambda that calls the same function with another one
+  print (applyAll (\x -> foldWith (+) x (applyAll (* 2) [x, x])) [1, 2, 3])
+  -- the function given only some of its arguments
+  print (map (applyAll (* 3)) [[1], [2, 3]])
+  print (steps (* 5) 4)

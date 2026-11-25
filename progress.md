@@ -496,11 +496,55 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       | sieve to 10M, `Data.Map` | 27 s | 8.7 s | |
       | frequencies of 1M, `Data.Map` | 1.11 s | 0.49 s | 0.60 s |
       | JSON, 3.7 MB | 0.24 s, 71 MB | 0.22 s, 101 MB | 0.31 s, 93 MB |
-- [ ] **What is left of the map programs:** the sieve on a map is still twice GHC's: each step
-      allocates its lists (`[p]`, `++`) and the curried closure of the function given to
-      `insertWith`, which a copy of `insertWith` for that function would not need. `alter`
-      and `adjust` use the map twice, so they are never in place; `Data.Set` is not in place
-      yet.
+- [x] **The three where GHC was ahead** (2026-11-25):
+      - **A vector in IO in a program with threads** (0.36 s, GHC 0.04 s) took a lock on each
+        access. A vector or table that the action that made it only gives to the operations
+        of its module, in its own statements, binds, `if`s, `case`s, folds and the local
+        functions it only calls, reaches no other thread, and is unshared (`rt_mvecUnshare`,
+        `rt_tableUnshare`) as soon as it is made. Across functions: for each top-level
+        function, which of its structure parameters it keeps so, the greatest such (local
+        functions lifted to the top get the vector as a parameter); a value that is only
+        another name for it is it too. `examples/concurrent-escapes.hgo` runs, under the race
+        detector, the ways one escapes (an action given to `forkIO`, a local function given
+        to other threads, an `MVar`, a function that gives it back) and one that does not.
+        0.36 s → 0.04 s.
+      - **Mutable arrays** (0.06 s, GHC and Go 0.03 s): pprof had `rt_mvecWrite` and
+        `rt_mvecRead` at two fifths of the time, not inlined, since Go calls a generic
+        function's shape through a dictionary here. A read or a write run at once is now
+        written out where it is, the lock and the index tested as `v.mu == nil && uint(i) <
+        uint(len(v.xs))`, after which Go checks nothing more, and the runtime's function is
+        kept for the lock and for the error, whose message stays. 0.06 s → 0.03 s.
+      - **The sieve on a map** (0.61 s, GHC 0.31 s). A recursive function that passes a
+        function parameter as it is to every call to itself (`insertWith`'s `f`), given a
+        lambda that uses no local variable or a top-level function, at concrete types, gets
+        a copy without the parameter (`Hago.Inline`, `specialiseOn`): no curried closure
+        per step. That did little here (0.61 s → 0.60 s); pprof then had `rt_overwrite` at a
+        quarter of the time, `*dst = *src` being a `typedmemmove` with a write barrier per
+        pointer, and a node changed in place now has its fields assigned (0.60 s → 0.43 s
+        measured alone; 0.55 s in the interleaved round). What is left is the lists each step
+        keeps (`[p]`, `++`), which GHC allocates too.
+      Found on the way, by `examples/specialise.hgo`: a loop (a function calling itself at
+      the end) assigned its parameters for the next round, and a closure made in a round that
+      used a parameter (the inliner had put the parameter for the name a pattern gave it)
+      saw the next round's value, and called itself forever. Each round now copies the
+      arguments into new variables, which closures keep. And a `case` whose scrutinee was a
+      constructor given fewer arguments than it has fields declared it as a value of the
+      data type, not as the function it is. Measured, before and after:
+
+      | Program | Before | After | GHC |
+      | --- | --- | --- | --- |
+      | sieve to 10M, `STVector` | 0.07 s | 0.03 s | 0.04 s |
+      | the same, `IOVector` | 0.06 s | 0.03 s | 0.03 s |
+      | the same, in a program with threads | 0.36 s | 0.04 s | 0.04 s |
+      | `Data.Map`, 1M inserts, deletes, lookups | 0.48 s | 0.36 s | 1.43 s |
+      | sieve to 1M, `Data.Map` | 0.68 s | 0.55 s | 0.31 s |
+      | sieve to 10M, `Data.Map` | 8.7 s | 5.9 s | |
+      | frequencies of 1M, `Data.Map` | 0.50 s | 0.42 s | 0.58 s |
+- [ ] **What is left of the map programs:** the sieve on a map, a half again GHC's: each step
+      allocates the lists it keeps (`[p]`, `++`). `alter` and `adjust` use the map twice, so
+      they are never in place; `Data.Set` is not in place yet. Specialisation leaves the list
+      functions fusion knows as they are, so `map f xs` that is not folded still calls `f`
+      through a closure.
 - [x] **The same programs in GHC** (`bench/ghc/`, `bench/ghc/run.sh`; the README's "Against
       GHC"). Even on strict code and on folds of lists made where they are folded; Hago ahead
       on JSON (0.23 s against 0.28 s, the combinators and printer ported line by line) and on

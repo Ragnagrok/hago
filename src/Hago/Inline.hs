@@ -42,24 +42,43 @@ import Data.Type.Equality ((:~:) (..))
 import Data.Typeable (eqT)
 import Hago.Core
 import Hago.Syntax (Name)
+import Hago.Typecheck (primSchemes)
 
 -- | A function that can be copied: its type parameters, its parameters and
 -- its body (simplified already).
 data Candidate = Candidate [Name] [(Name, Type)] CExpr
 
-data S = S {sNext :: Int, sCands :: M.Map Name Candidate, sAliases :: M.Map Name CExpr}
+-- | A recursive function with a parameter that is a function, passed as it
+-- is to every call to itself: its binding, and that parameter's position.
+data Static = Static TopBind Int
+
+data S = S
+  { sNext :: Int
+  , sCands :: M.Map Name Candidate
+  , sAliases :: M.Map Name CExpr
+  , sStatics :: M.Map Name Static
+  , sSpecs :: M.Map (Name, String) Name   -- ^ the copies made, by function and argument
+  , sNew :: [TopBind]                     -- ^ the copies, to add to the program
+  , sGlobals :: S.Set Name                -- ^ the names an argument may use and still be closed
+  }
 
 type M = State S
 
 inlineSmall :: Program -> Program
-inlineSmall prog = prog {progBinds = map (done M.!) (map tbName (progBinds prog))}
+inlineSmall prog = prog {progBinds = map (done M.!) (map tbName (progBinds prog)) ++ reverse new}
   where
     -- callees first: specialisation adds its copies after their callers
     order = flattenSCCs (stronglyConnComp [(tb, tbName tb, coreRefs (tbBody tb)) | tb <- progBinds prog])
-    done = M.fromList [(tbName tb, tb) | tb <- evalState (mapM top order) (S 0 M.empty M.empty)]
+    globals = S.unions [S.fromList (map tbName (progBinds prog)), M.keysSet (progForeign prog), M.keysSet primSchemes]
+    (results, final) = runState (mapM top order) (S 0 M.empty M.empty M.empty M.empty [] globals)
+    done = M.fromList [(tbName tb, tb) | tb <- results]
+    new = sNew final
     top tb = do
       body <- simp 0 (tbBody tb)
       let tb' = tb {tbBody = body}
+      case staticParam tb' of
+        Just j -> modify (\s -> s {sStatics = M.insert (tbName tb) (Static tb' j) (sStatics s)})
+        Nothing -> pure ()
       -- a value that only names another (Iter's empty is none) is that one
       when (null (tbParams tb) && tbArity tb == 0 && alias body) $
         modify (\s -> s {sAliases = M.insert (tbName tb) body (sAliases s)})
@@ -180,7 +199,17 @@ app d f as = case f of
       Nothing -> pure (CApp f as)
   CVar x (Inst ts _) _ | d < 8 -> do
     cands <- gets sCands
+    statics <- gets sStatics
+    globals <- gets sGlobals
     case M.lookup x cands of
+      -- a recursive function given a known function where it takes one: a
+      -- copy of it for that function
+      Nothing | Just (Static tb j) <- M.lookup x statics, length as == tbArity tb, length ts == length (tbParams tb)
+              , all concrete ts, known globals (as !! j) -> do
+        g <- specialiseOn tb ts j (as !! j)
+        case g of
+          Just (name, t') -> pure (CApp (CVar name (Inst [] []) t') [a | (i, a) <- zip [0 :: Int ..] as, i /= j])
+          Nothing -> pure (CApp f as)
       Just (Candidate tps ps0 b0) | length ts == length tps, length as >= length ps0 -> do
         let s = M.fromList (zip tps ts)
             -- the lambdas the body returns take the arguments left too
@@ -196,6 +225,157 @@ app d f as = case f of
           Nothing -> pure (CApp f as)
       _ -> pure (CApp f as)
   _ -> pure (CApp f as)
+
+-- Copies of functions for the functions they are given -----------------------------
+
+-- A recursive function that passes a function parameter as it is to every
+-- call to itself, as insertWith passes its f, calls it through a closure on
+-- every step: a curried one, which allocates a closure for each argument
+-- but the last. Where it is called with a known function (a lambda that
+-- uses no local variable, or a top-level function) at concrete types, a
+-- copy of it without that parameter is made, with the function put in its
+-- place, and its calls to itself call the copy: the function's calls are
+-- then copied in like any other. Copies are kept by function and argument,
+-- and made only of functions small enough, a few per function.
+
+-- | The position of a function parameter that every call to itself passes
+-- as it is, in a function that calls itself only so.
+staticParam :: TopBind -> Maybe Int
+staticParam tb = case tbBody tb of
+  CLam ps _ inner
+    | length ps == tbArity tb, tbArity tb > 0, size inner <= 300, not (null calls), saturatedOnly
+    , tbName tb `notElem` fused ->
+        case [j | (j, (_, t)) <- zip [0 ..] ps, isFun t, all (\args -> passed j (args !! j)) calls] of
+          j : _ -> Just j
+          [] -> Nothing
+    where
+      self = tbName tb
+      calls = [args | CApp (CVar g _ _) args <- everything inner, g == self, length args == tbArity tb]
+      saturatedOnly = length [() | CVar g _ _ <- everything inner, g == self] == length calls
+      passed j = \case
+        CVar a _ _ -> S.member a (aliasesOf (fst (ps !! j)) inner)
+        _ -> False
+  _ -> Nothing
+  where
+    isFun = \case
+      TFun _ _ -> True
+      _ -> False
+
+-- | The Prelude's list functions that code generation makes loops of where
+-- their lists are folded (see Hago.CodeGen's Prod), by their names: a copy
+-- would hide them.
+fused :: [Name]
+fused =
+  [ "map", "filter", "take", "takeWhile", "drop", "dropWhile", "repeat", "iterate", "append"
+  , "zip", "zipWith", "zip3", "zipWith3", "listFoldr", "listFoldl", "intsTo", "intsFrom" ]
+
+-- | The names a parameter goes by: itself, and the variables patterns bind
+-- it to.
+aliasesOf :: Name -> CExpr -> S.Set Name
+aliasesOf p body = grow (S.singleton p)
+  where
+    grow as =
+      let more = S.fromList [x | CMatch ss rows _ <- everything body, (CVar a _ _, j) <- zip ss [0 :: Int ..], S.member a as
+                             , CRow pats _ _ <- rows, j < length pats, CPVar x _ <- [pats !! j]]
+       in if more `S.isSubsetOf` as then as else grow (S.union as more)
+
+concrete :: Type -> Bool
+concrete = \case
+  TVar _ -> False
+  TMeta _ -> False
+  TCon _ ts -> all concrete ts
+  TFun a b -> concrete a && concrete b
+  TApp a b -> concrete a && concrete b
+
+-- | A function whose value is known: a lambda that uses no local variable,
+-- or a top-level function.
+known :: S.Set Name -> CExpr -> Bool
+known globals = \case
+  e@CLam {} -> freeVars e `S.isSubsetOf` globals && null [() | CVar _ SelfGroup _ <- everything e] && all concrete (everything @Type e)
+  CVar g (Inst ts _) _ -> S.member g globals && all concrete ts
+  _ -> False
+
+-- | The copy of tb, at types ts, for the function a at position j: its name
+-- and type, made if it is not yet.
+specialiseOn :: TopBind -> [Type] -> Int -> CExpr -> M (Maybe (Name, Type))
+specialiseOn tb ts j a = do
+  specs <- gets sSpecs
+  let key = (tbName tb, show a ++ show ts)
+      sub = M.fromList (zip (tbParams tb) ts)
+      t = substTV sub (tbType tb)
+      (argTys, res) = splitFun (tbArity tb) t
+      t' = foldr TFun res [x | (i, x) <- zip [0 :: Int ..] argTys, i /= j]
+      made = length [() | ((f, _), _) <- M.toList specs, f == tbName tb]
+  case M.lookup key specs of
+    Just name -> pure (Just (name, t'))
+    Nothing
+      | made >= 4 -> pure Nothing
+      | CLam ps r inner <- outermostT (substTV sub) (tbBody tb) -> do
+          n <- gets sNext
+          let name = tbName tb ++ "__f" ++ show n
+              p = fst (ps !! j)
+              as = aliasesOf p inner
+              -- its calls to itself, which pass the parameter as it is, call
+              -- the copy; this before the function is put in, whose own calls
+              -- to the original are not these
+              selfCalls = everywhere (\case
+                CApp (CVar g _ _) args
+                  | g == tbName tb, length args == tbArity tb, CVar x _ _ <- args !! j, S.member x as ->
+                      CApp (CVar name (Inst [] []) t') [y | (i, y) <- zip [0 :: Int ..] args, i /= j]
+                e -> e) inner
+              -- the parameter, and the names patterns gave it, become the function
+              body1 = substVars (M.fromList [(x, a) | x <- S.toList as]) (dropScrutinee p selfCalls)
+          modify (\s -> s {sNext = n + 1, sSpecs = M.insert key name (sSpecs s)})
+          body <- simp 0 (CLam [q | (i, q) <- zip [0 :: Int ..] ps, i /= j] r body1)
+          let tb' = TopBind name [] [] t' (tbArity tb - 1) body False
+          modify (\s -> s {sNew = tb' : sNew s, sGlobals = S.insert name (sGlobals s)})
+          pure (Just (name, t'))
+      | otherwise -> pure Nothing
+
+-- | The body without the parameter among the scrutinees of its cases: where
+-- a case looks at it, each row names it, or ignores it.
+dropScrutinee :: Name -> CExpr -> CExpr
+dropScrutinee p = everywhere $ \case
+  CMatch ss rows t
+    | Just j <- lookup p [(a, i) | (CVar a _ _, i) <- zip ss [0 :: Int ..]]
+    , all (\(CRow pats _ _) -> j < length pats && plain (pats !! j)) rows ->
+        CMatch (dropAt j ss) [CRow (dropAt j pats) bs gs | CRow pats bs gs <- rows] t
+  e -> e
+  where
+    plain = \case
+      CPVar _ _ -> True
+      CPWild -> True
+      _ -> False
+    dropAt j xs = [x | (i, x) <- zip [0 :: Int ..] xs, i /= j]
+
+-- | The variables an expression uses that it does not bind.
+freeVars :: CExpr -> S.Set Name
+freeVars = go S.empty
+  where
+    go bound = \case
+      CVar x _ _ -> if S.member x bound then S.empty else S.singleton x
+      CApp f as -> S.unions (go bound f : map (go bound) as)
+      CLam ps _ b -> go (S.union bound (S.fromList (map fst ps))) b
+      CLet bs b _ ->
+        let bound' = S.union bound (S.fromList [n | CBind n _ _ _ <- bs])
+         in S.unions (go bound' b : [go bound' x | CBind _ _ _ x <- bs])
+      CMatch ss rows _ -> S.unions (map (go bound) ss ++ map (row bound) rows)
+      CIf a b c _ -> S.unions (map (go bound) [a, b, c])
+      CDelay _ x -> go bound x
+      CForce x -> go bound x
+      CDo _ _ _ ss -> stmts bound ss
+      _ -> S.empty
+    row bound (CRow pats bs gs) =
+      let bound' = S.unions [bound, S.fromList (concatMap patBinders pats), S.fromList [n | CBind n _ _ _ <- bs]]
+       in S.unions ([go bound' x | CBind _ _ _ x <- bs] ++ concat [maybe [] (pure . go bound') g ++ [go bound' e] | (g, e) <- gs]
+                     ++ [go bound e | CPEq f v <- concatMap (everything @CPat) pats, e <- [f, v]])
+    stmts _ [] = S.empty
+    stmts bound (st : rest) = case st of
+      CSBind x _ e -> S.union (go bound e) (stmts (S.insert x bound) rest)
+      CSExpr _ e -> S.union (go bound e) (stmts bound rest)
+      CSLet bs ->
+        let bound' = S.union bound (S.fromList [n | CBind n _ _ _ <- bs])
+         in S.unions ([go bound' x | CBind _ _ _ x <- bs] ++ [stmts bound' rest])
 
 lamParts :: CExpr -> ([(Name, Type)], CExpr)
 lamParts = \case
