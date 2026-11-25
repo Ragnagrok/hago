@@ -183,7 +183,13 @@ calls. Hago handles this in three ways, following PureScript and Scala's Cats:
 - **IO is trampolined.** Running an action yields its result or the next action, and the runtime
   loops over them. A `do` block that ends in another action, `>>=` and `*>` therefore use no
   stack: `loop n = do { ...; loop (n + 1) }` runs forever, and `mapM_` over a million elements
-  runs in constant memory, in IO and in transformers over IO such as `StateT s IO`.
+  runs in constant memory, in IO and in transformers over IO such as `StateT s IO`. An action
+  that is run as soon as it is made (a statement of a `do` block, or what a function returns
+  when the action of its call is run) is not made at all: a function that returns an action
+  also has a Go function that does what the action would, and its call to itself at the end is
+  a `for` loop, through `when` or `if` too. A call at the end to a function that may call it
+  back, or to an action passed as an argument, still goes through the trampoline, so loops of
+  functions that call each other stay flat (`examples/io-loops.hgo`).
 - **So is `Identity`,** the library's pure monad, and with it every transformer over it: the
   library's `State s` is `StateT s Identity`, as are `Reader` and `Except`. Ten million steps of
   `loop n = do { modify (+ n); loop (n - 1) }` run in 10 MB, and a million run faster than in a
@@ -610,46 +616,59 @@ main = do
   takes, so no thread sees half of a value another is writing, and a Go map is never written by
   two at once: each operation is atomic (`insertWith` and `alter` too), a sequence of them is
   not. A program without threads, and anything made in ST, has no lock.
-- **Each operation is an IO action:** a closure and a step of the trampoline, some 60 ns. The
-  sieve up to ten million takes 2.3 s, and Go's loop 0.03 s.
+- **Each operation is a call to Go.** `read` and `write` are small functions of the library,
+  copied into the code that calls them, and an action run as soon as it is made is not made
+  (see [Loops and the stack](#loops-and-the-stack)), so a loop over a vector, in ST or in IO,
+  is a Go loop with a check of the index at each access: the sieve up to ten million takes
+  0.06 s, and Go's loop 0.03 s.
 
 ## Performance
 
 These numbers come from one machine (an i7-12700K, Go 1.27, on its eight performance cores),
-as a reference and not as a benchmark: each is the median of nine runs.
+as a reference and not as a benchmark: each is the median of nine runs. The programs are in
+`bench/` (and `examples/`), and `bench/run.sh` measures them, with the compiler of the tree or
+side by side with others (`bench/run.sh OLD_HAGO NEW_HAGO`).
 
 | Program | Time | Peak memory |
 |---|---|---|
-| `nfib 40`, hand-written Go | 0.34 s | — |
-| `nfib 40 :: Int -> Int`, Hago | 0.33 s | — |
-| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, at `Int` | 0.33 s | — |
-| sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.21 s | ~9 MB |
-| the same with `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | 0.01 s | ~2 MB |
-| the same over a `Data.Vector` of 3,000,000 elements | 0.02 s | ~60 MB |
-| Pythagorean triples up to 400, as a list comprehension | 1.21 s | ~10 MB |
-| the same as `do` over `Iter` | 0.60 s | ~10 MB |
-| the same with `Iter.filter` for the last generator and the guard | 0.02 s | ~7 MB |
-| `mapM_` over a million elements in IO | 0.08 s | ~8 MB |
-| a recursive IO loop of five million iterations | 0.09 s | ~8 MB |
-| `mapM_` over a million elements in `StateT Int IO` | 0.17 s | ~8 MB |
+| `nfib 40`, hand-written Go | 0.35 s | — |
+| `nfib 40 :: Int -> Int`, Hago | 0.37 s | — |
+| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, at `Int` | 0.36 s | — |
+| sum of the squares of the multiples of 3 up to 3,000,000, through lazy lists | 0.12 s | ~8 MB |
+| the same with `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | <0.01 s | ~2 MB |
+| the same over a `Data.Vector` of 3,000,000 elements | 0.02 s | ~58 MB |
+| Pythagorean triples up to 400, as a list comprehension | 1.14 s | ~8 MB |
+| the same as `do` over `Iter` | 0.59 s | ~8 MB |
+| the same with `Iter.filter` for the last generator and the guard | 0.03 s | ~7 MB |
+| `mapM_` over a million elements in IO | 0.06 s | ~7 MB |
+| a recursive IO loop of five million iterations | 0.05 s | ~7 MB |
+| `mapM_` over a million elements in `StateT Int IO` | 0.12 s | ~8 MB |
 | fifty million additions of a `newtype Meters = Meters Double` | 0.02 s | ~2 MB |
 | the same with `data Meters = Meters Double` | 0.02 s | ~2 MB |
-| parse and pretty print 3.7 MB of JSON with `examples/json.hgo` (`jq .`: 0.09 s, 28 MB) | 0.32 s | ~85 MB |
-| `fib 32` sixteen times with `map` | 0.11 s | — |
-| the same with `parMap`, on 16 processors | 0.02 s | — |
-| a million `Data.Map` inserts, then half a million deletes with `foldl`, and lookups | 1.57 s | ~96 MB |
-| the primes up to a million, sieve of Eratosthenes on an `STVector` (`examples/sieve.hgo`) | 0.26 s | ~9 MB |
-| the same with a `Data.Map` (the incremental sieve) | 1.65 s | ~20 MB |
-| the primes up to ten million, on an `STVector` | 2.3 s | ~25 MB |
-| the same with a `Data.Map` | 23 s | ~130 MB |
+| parse and pretty print 3.7 MB of JSON with `examples/json.hgo` (`jq .`: 0.09 s, 28 MB) | 0.24 s | ~72 MB |
+| `fib 32` sixteen times with `map` | 0.13 s | — |
+| the same with `parMap`, on 16 processors | 0.03 s | — |
+| a million `Data.Map` inserts, then half a million deletes with `foldl`, and lookups | 2.1 s | ~100 MB |
+| the primes up to a million, sieve of Eratosthenes on an `STVector` (`examples/sieve.hgo`) | <0.01 s | ~3 MB |
+| the same with a `Data.Map` (the incremental sieve) | 1.65 s | ~19 MB |
+| the primes up to ten million, on an `STVector` | 0.06 s | ~11 MB |
+| the same on an `IOVector` | 0.06 s | ~11 MB |
+| the same on an `IOVector`, in a program with threads | 0.37 s | ~12 MB |
+| the same with a `Data.Map` | 27 s | ~133 MB |
 | the same, hand-written Go | 0.03 s | ~12 MB |
-| how often each of a million numbers appears, in a `HashTable` in ST (`examples/frequencies.hgo`) | 0.33 s | ~17 MB |
-| the same with a `Data.Map` | 1.0 s | ~25 MB |
+| how often each of a million numbers appears, in a `HashTable` in ST (`examples/frequencies.hgo`) | 0.17 s | ~15 MB |
+| the same with a `Data.Map` | 1.43 s | ~19 MB |
 
 The JSON is the one `bench/json-input.go` writes, always the same:
 `go run bench/json-input.go > input.json`, then `hago run examples/json.hgo input.json`.
 
 - **Strict code at concrete types** compiles to the Go you would write by hand, and runs like it.
+  `nfib`'s function is the one in the hand-written program; the difference between the two is
+  where Go places it, which moves its time by a tenth from one build to another.
+- **Small functions are copied into their callers** (`src/Hago/Inline.hs`): the library's
+  wrappers (`when`, `unsafePrimIO`, the instances' methods of IO and ST, a vector's `read`)
+  leave no call behind, and with them an action run where it is made is not built, so a loop
+  in IO or ST is a Go loop (see [Loops and the stack](#loops-and-the-stack)).
 - **Constrained and constructor-polymorphic code** (`Num a =>`, `Monad m =>`) costs nothing
   extra, because it is specialised. The price is code size: one copy per type it is used at.
 - **The lazy list pipeline** streams in constant memory, but every cell allocates its thunk with
@@ -663,10 +682,10 @@ The JSON is the one `bench/json-input.go` writes, always the same:
   slice of the input (`match`), so a number is never put together from its pieces. That took
   the JSON benchmark from 1.86 s to 0.32 s; most of what is left is the pretty printer's
   documents and lists, and Go's garbage collector.
-- **Mutable structures** are faster than the trees of `Data.Map` for what they are for, but each
-  operation is an action, a closure and a step of IO's trampoline, so a loop over a mutable
-  vector is still far from Go's. In a program with threads, a vector made in IO also takes a
-  lock on each access (the sieve in IO: 2 s alone, 3.1 s in a program with threads).
+- **Mutable structures** are faster than the trees of `Data.Map` for what they are for, and a
+  loop over a mutable vector is Go's loop with a check of the index at each access, about twice
+  the time of Go's. In a program with threads, a vector made in IO also takes a lock on each
+  access (the sieve in IO: 0.06 s alone, 0.37 s in a program with threads).
 
 ## Using it
 
@@ -834,6 +853,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `src/Hago/Core.hs` | the typed core |
 | `src/Hago/Specialize.hs` | copies of code over type constructors; instance methods become functions |
 | `src/Hago/Newtype.hs` | newtypes replaced by the type they wrap |
+| `src/Hago/Inline.hs` | small functions copied into the code that calls them |
 | `src/Hago/CodeGen.hs` | Go generation |
 | `src/Hago/Cache.hs` | separate compilation: what each module gives, kept on disk |
 | `src/Hago/Driver.hs` | finding modules, compiling each, then the whole program |
@@ -848,6 +868,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `docs/library/` | the library's reference, made by `hago doc` |
 | `editors/vscode/` | the VS Code extension: the TextMate grammar, and `hago check` on save |
 | `bench/json-input.go` | writes the JSON of the benchmark in [Performance](#performance) |
+| `bench/run.sh` | the programs of [Performance](#performance), built and timed, with one compiler or several side by side |
 
 ## License
 

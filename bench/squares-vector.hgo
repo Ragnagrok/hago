@@ -1,0 +1,4 @@
+import qualified Data.Vector as V
+
+main :: IO ()
+main = print (V.sum (V.map (\x -> x * x) (V.filter (\x -> x `mod` 3 == 0) (V.generate 3000000 (+ 1)))))

@@ -35,10 +35,17 @@ data VK
 data Ctx = Ctx
   { cxVars :: M.Map Name VK
   , cxSelf :: Maybe (Name, Int)   -- ^ function whose self tail calls become a loop
+  , cxSelfParams :: [Name]        -- ^ its parameters, assigned before going round again
   , cxTParams :: [Name]
   , cxProg :: Program
   , cxPending :: S.Set Name   -- ^ local variables declared but not assigned yet
   , cxUnboxed :: M.Map Name Repr   -- ^ the data types kept by value (see 'dataReprs')
+  , cxRun :: M.Map Name (String, Int)
+    -- ^ functions that return an action and have a run form (see 'genRun'):
+    -- its Go name and how many arguments it takes
+  , cxGroup :: S.Set Name
+    -- ^ while generating a run form, the functions a tail call to which goes
+    -- through the trampoline: those that may call this one back
   }
 
 data GS = GS {gsNext :: Int, gsLoop :: Bool}
@@ -115,10 +122,13 @@ generate runtime prog =
           , M.map VKForeign (progForeign prog)
           , M.fromList [(n, VKPrim (arrows t)) | (n, Forall _ _ t) <- M.toList primSchemes] ]
       , cxSelf = Nothing
+      , cxSelfParams = []
       , cxTParams = []
       , cxProg = prog
       , cxPending = S.empty
       , cxUnboxed = unboxed
+      , cxRun = M.fromList [(tbName b, (runName (tbName b), tbArity b)) | b <- progBinds prog, hasRunForm prog b]
+      , cxGroup = S.empty
       }
     -- a struct for each size of tuple the program uses
     tupleDecls =
@@ -134,7 +144,10 @@ generate runtime prog =
     dataDecls = concatMap (genData prog unboxed)
       [(n, d) | (n, d) <- M.toList (progData prog), n `notElem` ["[]", "Bool"], null (hkPositions prog n), diForeign d == Nothing]
     hkDecls = concatMap (genHkData prog) (hkInstances prog)
-    (tops, inits) = flip evalState (GS 0 False) (unzip <$> mapM (\b -> genTop ctx0 (S.member (tbName b) deferred) b) initOrder)
+    (tops, inits) = flip evalState (GS 0 False) (unzip <$> mapM (\b -> genTop ctx0 {cxGroup = groupOf (tbName b)} (S.member (tbName b) deferred) b) initOrder)
+    -- the functions of each one's group of mutually recursive ones, itself among them
+    groupOf n = M.findWithDefault (S.singleton n) n groups
+    groups = M.fromList [(tbName b, S.fromList (map tbName bs)) | CyclicSCC bs <- sccs, b <- bs]
     initBlock = ["func init() {", "defer rt_failed()"] ++ concat inits ++ ["}"]
     -- values are initialised in order, so each comes after everything its
     -- computation reaches, functions included; copies made by specialisation
@@ -340,7 +353,7 @@ genHkData prog (c, canon) =
     s = M.fromList (zip hkParams canon)
     name = instName c canon
     marker = "is" ++ name
-    ctx = Ctx M.empty Nothing params prog S.empty M.empty
+    ctx = Ctx M.empty Nothing [] params prog S.empty M.empty M.empty S.empty
     recv k = name ++ "_" ++ suffix k ++ (if null params then "" else "[" ++ commas (map tyVar params) ++ "]")
     suffix = conSuffix
     con k =
@@ -444,7 +457,7 @@ genData prog unboxed (n, DataInfo ps _ ks _ _)
   where
     marker = "is" ++ typeName n
     recv k = conStruct prog k ++ (if null ps then "" else "[" ++ commas (map tyVar ps) ++ "]")
-    ctx = Ctx M.empty Nothing ps prog S.empty M.empty
+    ctx = Ctx M.empty Nothing [] ps prog S.empty M.empty M.empty S.empty
     con k =
       let ci = progCons prog M.! k
           fields = [ "F" ++ show i ++ " " ++ goTy ctx (if lz then tLazy t else t) | (i, (lz, t)) <- zip [0 :: Int ..] (ciFields ci)]
@@ -479,7 +492,10 @@ genTop ctx0 deferred (TopBind n tps dicts t ar body shared) = do
       pure (unlines (["func " ++ mangle n ++ tparamList tps ++ "() " ++ goTy ctx t ++ " {"] ++ ls ++ ["}"]), [])
     (_, CLam ps r inner) -> do
       fn <- genFunction ctx (Just (n, ar)) [] ps r inner
-      pure ("func " ++ mangle n ++ tparamList tps ++ fn, [])
+      runFn <- case (M.lookup n (cxRun ctx), ioResult ctx r) of
+        (Just (rn, _), Just x) -> (\f -> "\nfunc " ++ rn ++ tparamList tps ++ f) <$> genRunFunction ctx (Just (n, ar)) ps x inner
+        _ -> pure ""
+      pure ("func " ++ mangle n ++ tparamList tps ++ fn ++ runFn, [])
     _ -> error ("genTop: " ++ n)
 
 -- | Parameters, result type and body of a function, with self tail calls
@@ -488,7 +504,7 @@ genFunction :: Ctx -> Maybe (Name, Int) -> [(String, String)] -> [(Name, Type)] 
 genFunction ctx self extra ps r inner = do
   saved <- gets gsLoop
   modify (\s -> s {gsLoop = False})
-  let ctx' = (bindLocals ctx [(p, 0) | (p, _) <- ps]) {cxSelf = self}
+  let ctx' = (bindLocals ctx [(p, 0) | (p, _) <- ps]) {cxSelf = self, cxSelfParams = map fst ps}
   ls <- genStmts ctx' inner
   looped <- gets gsLoop
   modify (\s -> s {gsLoop = saved})
@@ -499,7 +515,11 @@ genFunction ctx self extra ps r inner = do
 bindLocals :: Ctx -> [(Name, Int)] -> Ctx
 bindLocals ctx bs =
   ctx { cxVars = foldr (\(n, a) -> M.insert n (VKLocal a)) (cxVars ctx) bs
-      , cxPending = foldr (S.delete . fst) (cxPending ctx) bs }
+      , cxPending = foldr (S.delete . fst) (cxPending ctx) bs
+      , cxRun = foldr (M.delete . fst) (cxRun ctx) bs
+      , cxSelf = case cxSelf ctx of
+          Just (n, _) | n `elem` map fst bs -> Nothing
+          self -> self }
 
 noSelf :: Ctx -> Ctx
 noSelf ctx = ctx {cxSelf = Nothing}
@@ -514,7 +534,7 @@ freshName base = do
 
 genStmts :: Ctx -> CExpr -> Gen [String]
 genStmts ctx e = case e of
-  CMatch scruts rows _ -> genMatch ctx scruts rows
+  CMatch scruts rows _ -> genMatch genStmts ctx scruts rows
   CLet bs body _ -> do
     (ctx', ls) <- genBinds ctx bs
     (ls ++) <$> genStmts ctx' body
@@ -527,7 +547,7 @@ genStmts ctx e = case e of
     | Just (self, n) <- cxSelf ctx, x == self, length args == n, isSelf (M.lookup x (cxVars ctx)) n -> do
         as <- mapM (genExpr ctx) args
         modify (\s -> s {gsLoop = True})
-        pure [commas ["_arg" ++ show i | i <- [0 .. n - 1]] ++ " = " ++ commas as, "continue"]
+        pure [commas (map mangle (cxSelfParams ctx)) ++ " = " ++ commas as, "continue"]
   _ -> do
     e' <- genExpr ctx e
     pure ["return " ++ e']
@@ -536,8 +556,9 @@ genStmts ctx e = case e of
     isSelf (Just (VKLocal a)) n = a == n
     isSelf _ _ = False
 
-genMatch :: Ctx -> [CExpr] -> [CRow] -> Gen [String]
-genMatch ctx scruts rows = do
+-- | A @case@ as statements; tl makes those of each body.
+genMatch :: (Ctx -> CExpr -> Gen [String]) -> Ctx -> [CExpr] -> [CRow] -> Gen [String]
+genMatch tl ctx scruts rows = do
   prepared <- forM scruts $ \case
     CVar x _ _ | Just (VKLocal 0) <- M.lookup x (cxVars ctx) -> pure ([], mangle x)
     s -> do
@@ -551,7 +572,7 @@ genMatch ctx scruts rows = do
             _ -> n ++ " := " ++ s'
       pure ([decl, "_ = " ++ n], n)
   rowLines <- forM rows $ \(CRow pats binds guards) -> do
-    ls <- genPats ctx (zip (map snd prepared) pats) (\ctx' -> genRow ctx' binds guards)
+    ls <- genPats ctx (zip (map snd prepared) pats) (\ctx' -> genRow tl ctx' binds guards)
     pure (["{"] ++ ls ++ ["}"])
   pure (concatMap fst prepared ++ concat rowLines ++ ["panic(\"pattern match failure\")"])
 
@@ -561,19 +582,19 @@ conHead = \case
   CApp f _ -> conHead f
   _ -> Nothing
 
-genRow :: Ctx -> [CBind] -> [(Maybe CExpr, CExpr)] -> Gen [String]
-genRow ctx binds guards = do
+genRow :: (Ctx -> CExpr -> Gen [String]) -> Ctx -> [CBind] -> [(Maybe CExpr, CExpr)] -> Gen [String]
+genRow tl ctx binds guards = do
   (ctx', ls) <- genBinds ctx binds
   (ls ++) <$> go ctx' guards
   where
     go _ [] = pure []
     go c ((g, e) : rest) = case g of
-      Nothing -> genStmts c e
-      Just (CVar "otherwise" _ _) | isTopOtherwise c -> genStmts c e
-      Just (CCon "True" _ _) -> genStmts c e
+      Nothing -> tl c e
+      Just (CVar "otherwise" _ _) | isTopOtherwise c -> tl c e
+      Just (CCon "True" _ _) -> tl c e
       Just cond -> do
         cond' <- genExpr c cond
-        body <- genStmts c e
+        body <- tl c e
         rest' <- go c rest
         pure (["if " ++ cond' ++ " {"] ++ body ++ ["}"] ++ rest')
     isTopOtherwise c = case M.lookup "otherwise" (cxVars c) of
@@ -647,27 +668,39 @@ genPats ctx ((s, p) : rest) k = case p of
     isWild _ = False
 
 -- | Local bindings, declared first so they can refer to each other, then
--- assigned in dependency order.
+-- assigned in dependency order. A function that returns an action gets its
+-- run form too (see 'genRun').
 genBinds :: Ctx -> [CBind] -> Gen (Ctx, [String])
 genBinds ctx binds = do
-  let ctx' = bindLocals ctx [(n, ar) | CBind n _ ar _ <- binds]
+  let ctx1 = bindLocals ctx [(n, ar) | CBind n _ ar _ <- binds]
+      runs = [(n, ps, x) | CBind n _ ar (CLam ps r _) <- binds, ar > 0, length ps == ar, Just x <- [ioResult ctx r]]
+      ctx' = ctx1 {cxRun = M.union (M.fromList [(n, (runName n, length ps)) | (n, ps, _) <- runs]) (cxRun ctx1)}
       names = [n | CBind n _ _ _ <- binds]
-      ordered = flattenSCCs (stronglyConnComp
-        [(b, n, filter (`elem` names) (coreRefs body)) | b@(CBind n _ _ body) <- binds])
+      sccs = stronglyConnComp
+        [(b, n, filter (`elem` names) (coreRefs body)) | b@(CBind n _ _ body) <- binds]
+      ordered = flattenSCCs sccs
+      -- a function's group: those of its own binding group that may call it
+      -- back, and the functions around, which may too
+      groupOf n = S.union (cxGroup ctx) (S.fromList (n : concat [ms | CyclicSCC bs <- sccs, let ms = [m | CBind m _ _ _ <- bs], n `elem` ms]))
       decl (CBind n t ar _) =
         let (ps, r) = splitFun ar (zonk (progSubst (cxProg ctx)) t)
             ty = if ar == 0 then goTy ctx t else "func(" ++ commas (map (goTy ctx) ps) ++ ") " ++ goTy ctx r
          in "var " ++ mangle n ++ " " ++ ty
+      runDecl (n, ps, x) = "var " ++ runName n ++ " func(" ++ commas (map (goTy ctx . snd) ps) ++ ") " ++ goTy ctx x
   assigns <- forM (zip ordered (tails' (map (\(CBind n _ _ _) -> n) ordered))) $ \(CBind n _ ar body, pending) ->
     let c = (noSelf ctx') {cxPending = S.union (S.fromList pending) (cxPending ctx')}
      in case body of
           CLam ps r inner | ar > 0 -> do
-            fn <- genFunction c (Just (n, ar)) [] ps r inner
-            pure (mangle n ++ " = func" ++ fn)
+            let c' = c {cxGroup = groupOf n}
+            fn <- genFunction c' (Just (n, ar)) [] ps r inner
+            runFn <- case (M.lookup n (cxRun ctx'), ioResult ctx r) of
+              (Just (rn, _), Just x) -> (\f -> [rn ++ " = func" ++ f]) <$> genRunFunction c' (Just (n, ar)) ps x inner
+              _ -> pure []
+            pure ((mangle n ++ " = func" ++ fn) : runFn)
           _ -> do
             e <- genExpr c body
-            pure (mangle n ++ " = " ++ e)
-  pure (ctx', map decl binds ++ assigns ++ ["_ = " ++ mangle n | n <- names])
+            pure [mangle n ++ " = " ++ e]
+  pure (ctx', map decl binds ++ map runDecl runs ++ concat assigns ++ ["_ = " ++ mangle n | n <- names] ++ ["_ = " ++ runName n | (n, _, _) <- runs])
   where
     -- each binding, with itself and the ones after it, which are not assigned yet
     tails' xs = [drop i xs | i <- [0 .. length xs - 1]]
@@ -699,12 +732,27 @@ genExpr ctx e = case e of
           pure ("(" ++ a' ++ " " ++ op ++ " " ++ b' ++ ")")
     -- a call to Go: functions given to it are generated as Go functions of
     -- all their arguments at once (see 'foreignArg')
+    -- a bind or a *> of IO is a do block of two statements, whose first is
+    -- run on the spot and whose second goes back to the trampoline
+    CVar "primBindIO" (Inst [a, b] _) _ | isPrim ctx "primBindIO", [m, k] <- args -> case k of
+      CLam [(x, t)] _ body -> genDo ctx b [CSBind x t m, CSExpr b body]
+      _ -> do
+        v <- freshName "b"
+        genDo ctx b [CSBind v a m, CSExpr b (CApp k [CVar v (Inst [] []) a])]
+    CVar "primThenIO" (Inst [_, b] _) _ | isPrim ctx "primThenIO", [m, n] <- args ->
+      genDo ctx b [CSExpr tUnit m, CSExpr b (case n of CDelay _ x -> x; _ -> CForce n)]
+    -- an action run where it is made, as runST makes one
+    CVar "primRunIO" (Inst [a] _) _ | isPrim ctx "primRunIO", [m] <- args -> do
+      ls <- genRun (noSelf ctx) (RReturn False) m
+      pure $ case ls of
+        [l] | Just v <- stripReturn l -> v
+        _ -> "func() " ++ goTy ctx a ++ " {\n" ++ unlines ls ++ "}()"
     CVar x ref _
       | Just (VKForeign fo) <- M.lookup x (cxVars ctx), fArity fo > 0, length args >= fArity fo -> do
           let (now, later) = splitAt (fArity fo) args
               targs = refTypes ctx ref
               (params, _) = splitFun (fArity fo) (foreignInst fo targs)
-          as <- zipWithM (foreignArg ctx (isRuntimeSymbol fo)) params now
+          as <- zipWith3M (foreignArg ctx (isRuntimeSymbol fo)) (fst (splitFun (fArity fo) (fType fo))) params now
           foldM (\acc a -> (\a' -> acc ++ "(" ++ a' ++ ")") <$> genExpr ctx a) (foreignCall ctx fo targs True as) later
     CVar x ref t | Just ar <- knownArity x, ar > 0 ->
       genApp ctx f args (Just ar) (\as -> call ctx x ref t as) t
@@ -949,15 +997,39 @@ foreignCall ctx f targs adapted as0 = case declared of
   TCon "IO" [TCon "Either" [_, _]] ->
     "func() IOStep[" ++ goTy ctx t ++ "] { return rt_done(func() " ++ goTy ctx t ++ " {\n" ++ eitherBody t ++ "}()) }"
   TCon "IO" [_] -> "func() IOStep[" ++ goTy ctx t ++ "] { return rt_done[" ++ goTy ctx t ++ "](" ++ goCall ++ ") }"
-  TCon "Either" [_, _] -> "func() " ++ goTy ctx r ++ " {\n" ++ eitherBody r ++ "}()"
+  TCon "Either" [_, _] -> "func() " ++ goTy ctx t ++ " {\n" ++ eitherBody t ++ "}()"
   _ -> goCall
+  where
+    (declared, t, goCall, eitherBody) = foreignParts ctx f targs adapted as0
+
+-- | A call to Go that makes an action, run at once (see 'genRun'): what to
+-- do, and then the value of its result.
+foreignRun :: Ctx -> Foreign -> [Type] -> [String] -> ([String], String)
+foreignRun ctx f targs as = case declared of
+  TCon "IO" [TCon "()" []] -> ([goCall], "struct{}{}")
+  TCon "IO" [TCon "Either" [_, _]] -> ([], "func() " ++ goTy ctx t ++ " {\n" ++ eitherBody t ++ "}()")
+  _ -> ([], goCall)
+  where
+    (declared, t, goCall, eitherBody) = foreignParts ctx f targs True as
+
+-- | Whether a function from Go makes an action.
+foreignIO :: Foreign -> Bool
+foreignIO f = case snd (splitFun (fArity f) (fType f)) of
+  TCon "IO" _ -> True
+  _ -> False
+
+-- | The type a call to Go was declared with, the type of what it gives (in
+-- an action or not), the call, and the body of a Go function that makes an
+-- Either from a Go function that returns an error.
+foreignParts :: Ctx -> Foreign -> [Type] -> Bool -> [String] -> (Type, Type, String, Type -> String)
+foreignParts ctx f targs adapted as0 = (declared, t, goCall, eitherBody)
   where
     (_, declared) = splitFun (fArity f) (fType f)
     t = case r of TCon "IO" [x] -> x; x -> x
     (params, r) = splitFun (fArity f) (foreignInst f targs)
     isIO = case r of TCon "IO" _ -> True; _ -> False
     -- arguments already made into what Go expects, or values to adapt
-    as = if adapted then as0 else zipWith (callback ctx (isRuntimeSymbol f)) params as0
+    as = if adapted then as0 else zipWith3 (callback ctx (isRuntimeSymbol f)) (fst (splitFun (fArity f) (fType f))) params as0
     sym = snd (splitSymbol (fSymbol f)) ++ (if length targs == length (fVars f) then typeArgs ctx targs else "")
     goCall = case (fSymbol f, as) of
       -- ".Body.Close()": a selector on the first argument, a field or a method
@@ -980,20 +1052,22 @@ foreignCall ctx f targs adapted as0 = case declared of
 
 -- | A Hago function or action already computed, given to a Go function: see
 -- 'foreignArg', which makes better code when it sees the function's source.
-callback :: Ctx -> Bool -> Type -> String -> String
-callback ctx runtime ty a = case ty of
+--
+-- The shape of what Go gets is the declared type's (decl), with the types of
+-- this call (ty): a parameter declared a -> b takes a function of one
+-- argument even where b is a function, and one declared a takes any value
+-- as it is.
+callback :: Ctx -> Bool -> Type -> Type -> String -> String
+callback ctx runtime decl ty a = case decl of
   TFun _ _ | runtime, [_] <- args -> a
   TFun _ _ -> goFunc ctx runtime args res (\ps -> "(" ++ a ++ ")" ++ concat ["(" ++ p ++ ")" | p <- ps])
   TCon "IO" [_] | not runtime -> goFunc ctx runtime [] ty (const a)
   _ -> a
   where
-    (args, res) = uncurried ty
+    (args, res) = splitFun (arrows decl) ty
 
--- | The arguments of a function type and its result.
-uncurried :: Type -> ([Type], Type)
-uncurried = \case
-  TFun x y -> let (xs, z) = uncurried y in (x : xs, z)
-  z -> ([], z)
+zipWith3M :: Applicative m => (a -> b -> c -> m d) -> [a] -> [b] -> [c] -> m [d]
+zipWith3M f as bs cs = sequenceA (zipWith3 f as bs cs)
 
 -- | A Go function of all the arguments at once, whose body applies the Hago
 -- function (given the parameter names). For a Go function from outside the
@@ -1033,8 +1107,8 @@ isRuntimeSymbol f = "rt_" `isPrefixOf` fSymbol f
 -- its arguments at once; when its source is a lambda or a known function,
 -- that function is generated directly, without the curried closures a
 -- function value has, which would allocate one per argument on each call.
-foreignArg :: Ctx -> Bool -> Type -> CExpr -> Gen String
-foreignArg ctx runtime ty e = case ty of
+foreignArg :: Ctx -> Bool -> Type -> Type -> CExpr -> Gen String
+foreignArg ctx runtime decl ty e = case decl of
   TFun _ _
     | [_] <- args, runtime -> genExpr ctx e
     | otherwise -> case e of
@@ -1056,11 +1130,11 @@ foreignArg ctx runtime ty e = case ty of
           body <- call ctx x ref t (vars ++ names)
           pure ("func() " ++ goFuncType ctx runtime args res ++ " {\n" ++ unlines [v ++ " := " ++ a | (v, a) <- zip vars vals]
                   ++ "return " ++ goFunc ctx runtime args res (const body) ++ "\n}()")
-        _ -> callback ctx runtime ty <$> genExpr ctx e
-  TCon "IO" [_] | not runtime -> callback ctx runtime ty <$> genExpr ctx e
+        _ -> callback ctx runtime decl ty <$> genExpr ctx e
+  TCon "IO" [_] | not runtime -> callback ctx runtime decl ty <$> genExpr ctx e
   _ -> genExpr ctx e
   where
-    (args, res) = uncurried ty
+    (args, res) = splitFun (arrows decl) ty
     n = length args
     arityOf x = case M.lookup x (cxVars ctx) of
       Just (VKTop a _ _) -> Just a
@@ -1110,19 +1184,189 @@ genDo ctx0 r stmts = do
       CApp (CVar n _ _) [x] | n `elem` ["primReturnIO", instMethodName "inst_Applicative_IO" "pure"] ->
         (\x' -> ["return rt_done[" ++ rt ++ "](" ++ x' ++ ")"]) <$> genExpr ctx x
       _ -> (\e' -> ["return rt_next[" ++ rt ++ "](" ++ e' ++ ")"]) <$> genExpr ctx e
+    -- the others are run on the spot (see 'genRun')
     go ctx (s : rest) = case s of
-      CSExpr _ e -> do
-        e' <- genExpr ctx e
-        (("rt_run(" ++ e' ++ ")") :) <$> go ctx rest
-      CSBind "_" _ e -> do
-        e' <- genExpr ctx e
-        (("rt_run(" ++ e' ++ ")") :) <$> go ctx rest
-      CSBind x _ e -> do
-        e' <- genExpr ctx e
-        ([mangle x ++ " := rt_run(" ++ e' ++ ")", "_ = " ++ mangle x] ++) <$> go (bindLocals ctx [(x, 0)]) rest
+      CSExpr _ e -> (++) <$> genRun ctx RDiscard e <*> go ctx rest
+      CSBind "_" _ e -> (++) <$> genRun ctx RDiscard e <*> go ctx rest
+      CSBind x t e -> (++) <$> genRun ctx (RBind x t) e <*> go (bindLocals ctx [(x, 0)]) rest
       CSLet bs -> do
         (ctx', ls) <- genBinds ctx bs
         (ls ++) <$> go ctx' rest
+
+-- Running actions directly ------------------------------------------------------
+
+-- An action is a closure that the trampoline (rt_run) calls, and a function
+-- that returns one returns a closure made on every call. Where an action is
+-- run as soon as it is made (a statement in a do block, the action a
+-- function returns when that function's own action is run), it does not
+-- need to exist: 'genRun' makes the statements that run it. A function
+-- that returns an action also gets a run form, hgrun_f, which runs what f
+-- would return and returns its result; a call to f that is run at once
+-- calls hgrun_f instead.
+--
+-- The trampoline is there so that loops written as recursion, and
+-- functions that end calling each other, run in constant stack. In a run
+-- form, a tail call to itself becomes a loop, as in a pure function; one to
+-- a function that cannot call it back (a later one in dependency order) is
+-- a direct call, so a chain of them is as long as the program has
+-- functions. A tail call to one that may call it back goes through the
+-- trampoline, and so does every action whose source is not known (a
+-- parameter, a suspension). Once on the trampoline, a loop stays on it.
+
+-- | What becomes of an action's result: returned (True: from a run form,
+-- where tail calls loop; False: from a Go function called on the spot),
+-- dropped, or bound to a variable of a type.
+data RunK = RReturn Bool | RDiscard | RBind Name Type
+
+runName :: Name -> String
+runName n = "hgrun_" ++ mangle n
+
+-- | What an action of this type gives, if it is one.
+ioResult :: Ctx -> Type -> Maybe Type
+ioResult ctx t = case zonk (progSubst (cxProg ctx)) t of
+  TCon "IO" [x] -> Just x
+  _ -> Nothing
+
+-- | A top-level function that returns an action has a run form.
+hasRunForm :: Program -> TopBind -> Bool
+hasRunForm prog b = case tbBody b of
+  CLam ps r _ -> tbArity b > 0 && not (tbShared b) && length ps == tbArity b && case zonk (progSubst prog) r of
+    TCon "IO" [_] -> True
+    _ -> False
+  _ -> False
+
+isPrim :: Ctx -> Name -> Bool
+isPrim ctx n = case M.lookup n (cxVars ctx) of
+  Just (VKPrim _) -> True
+  _ -> False
+
+stripReturn :: String -> Maybe String
+stripReturn l = if "return " `isPrefixOf` l then Just (drop 7 l) else Nothing
+
+-- | The parameters, result type and body of a run form.
+genRunFunction :: Ctx -> Maybe (Name, Int) -> [(Name, Type)] -> Type -> CExpr -> Gen String
+genRunFunction ctx self ps x inner = do
+  saved <- gets gsLoop
+  modify (\s -> s {gsLoop = False})
+  let ctx' = (bindLocals ctx [(p, 0) | (p, _) <- ps]) {cxSelf = self, cxSelfParams = map fst ps}
+  ls <- genRun ctx' (RReturn True) inner
+  looped <- gets gsLoop
+  modify (\s -> s {gsLoop = saved})
+  let params = commas [mangle p ++ " " ++ goTy ctx pt | (p, pt) <- ps]
+      body = if looped then ["for {"] ++ ls ++ ["}"] else ls
+  pure (unlines (["(" ++ params ++ ") " ++ goTy ctx x ++ " {"] ++ body ++ ["}"]))
+
+-- | Statements that run the action and do with its result what k says.
+genRun :: Ctx -> RunK -> CExpr -> Gen [String]
+genRun ctx k e = case e of
+  CDo m _ _ stmts | Just _ <- ioResult ctx (tApp m tUnit) -> sequenced stmts
+  CApp (CVar "primReturnIO" _ _) [x] | isPrim ctx "primReturnIO" -> finish <$> genExpr ctx x
+  CApp (CVar "primBindIO" _ _) [m, CLam [(x, t)] _ body] | isPrim ctx "primBindIO" ->
+    sequenced [CSBind x t m, CSExpr t body]
+  CApp (CVar "primBindIO" (Inst [a, _] _) _) [m, f] | isPrim ctx "primBindIO" -> do
+    v <- freshName "b"
+    sequenced [CSBind v a m, CSExpr a (CApp f [CVar v (Inst [] []) a])]
+  CApp (CVar "primThenIO" _ _) [a, b] | isPrim ctx "primThenIO" ->
+    sequenced [CSExpr tUnit a, CSExpr tUnit (case b of CDelay _ x -> x; _ -> CForce b)]
+  CIf c a b _ -> case k of
+    RBind x t -> onTheSpot x t
+    RDiscard -> do
+      c' <- genExpr ctx c
+      as <- genRun ctx k a
+      bs <- genRun ctx k b
+      pure (["if " ++ c' ++ " {"] ++ as ++ ["} else {"] ++ bs ++ ["}"])
+    RReturn _ -> do
+      c' <- genExpr ctx c
+      as <- genRun ctx k a
+      bs <- genRun ctx k b
+      pure (["if " ++ c' ++ " {"] ++ as ++ ["}"] ++ bs)
+  CMatch ss rows t -> case k of
+    RBind x xt -> onTheSpot x xt
+    RDiscard -> do
+      ls <- genMatch (\c -> genRun c (RReturn False)) (noSelf ctx) ss rows
+      pure (["func() " ++ goTy ctx (fromMaybe tUnit (ioResult ctx t)) ++ " {"] ++ ls ++ ["}()"])
+    RReturn _ -> genMatch (\c -> genRun c k) ctx ss rows
+  CLet bs body _ -> case k of
+    RBind x t -> onTheSpot x t
+    RDiscard -> do
+      (ctx', ls) <- genBinds ctx bs
+      b <- genRun ctx' k body
+      pure (["{"] ++ ls ++ b ++ ["}"])
+    RReturn _ -> do
+      (ctx', ls) <- genBinds ctx bs
+      (ls ++) <$> genRun ctx' k body
+  CForce x -> (\x' -> finish ("rt_run(" ++ x' ++ ".force())")) <$> genExpr ctx x
+  CApp (CVar f ref _) args
+    -- a tail call to itself: round the loop again
+    | RReturn True <- k, Just (self, n) <- cxSelf ctx, f == self, length args == n, M.member f (cxRun ctx) -> do
+        as <- mapM (genExpr ctx) args
+        modify (\s -> s {gsLoop = True})
+        pure [commas (map mangle (cxSelfParams ctx)) ++ " = " ++ commas as, "continue"]
+    | Just (rn, n) <- M.lookup f (cxRun ctx), length args == n -> case k of
+        RReturn True | S.member f (cxGroup ctx) -> trampolined
+        _ -> do
+          as <- mapM (genExpr ctx) args
+          pure (finish (runCall ctx rn f ref as))
+    | Just (VKForeign fo) <- M.lookup f (cxVars ctx), fArity fo == length args, fArity fo > 0, foreignIO fo -> do
+        let targs = refTypes ctx ref
+            (params, _) = splitFun (fArity fo) (foreignInst fo targs)
+        as <- zipWith3M (foreignArg ctx (isRuntimeSymbol fo)) (fst (splitFun (fArity fo) (fType fo))) params args
+        let (ls, v) = foreignRun ctx fo targs as
+        pure (ls ++ finishValue v)
+    | f `elem` ["putStrLn", "putStr"], isPrim ctx f, [a] <- args -> do
+        a' <- genExpr ctx a
+        pure (("rt_fmt." ++ (if f == "putStrLn" then "Println(" else "Print(") ++ a' ++ ")") : finishValue "struct{}{}")
+  CVar f ref _
+    | Just (VKForeign fo) <- M.lookup f (cxVars ctx), fArity fo == 0, foreignIO fo -> do
+        let (ls, v) = foreignRun ctx fo (refTypes ctx ref) []
+        pure (ls ++ finishValue v)
+  _ -> trampolined
+  where
+    trampolined = (\e' -> finish ("rt_run(" ++ e' ++ ")")) <$> genExpr ctx e
+    finish v = case k of
+      RReturn _ -> ["return " ++ v]
+      RDiscard -> ["_ = " ++ v]
+      RBind x _ -> [mangle x ++ " := " ++ v, "_ = " ++ mangle x]
+    finishValue v = case k of
+      RDiscard | v == "struct{}{}" -> []
+      _ -> finish v
+    -- statements run one after the other: in a block of their own, since
+    -- they bind names, or in a Go function called on the spot when the
+    -- result is bound to a name outside it
+    sequenced stmts = case k of
+      RBind x t -> onTheSpot x t
+      _ -> (\ls -> ["{"] ++ ls ++ ["}"]) <$> runStmts ctx k stmts
+    onTheSpot x t
+      -- nothing to bind: () is ()
+      | TCon "()" [] <- zonk (progSubst (cxProg ctx)) t = do
+          ls <- genRun ctx RDiscard e
+          pure (ls ++ [mangle x ++ " := struct{}{}", "_ = " ++ mangle x])
+      | otherwise = do
+          ls <- genRun (noSelf ctx) (RReturn False) e
+          pure ([mangle x ++ " := func() " ++ goTy ctx t ++ " {"] ++ ls ++ ["}()", "_ = " ++ mangle x])
+
+-- | The statements of a do block, run in order; the last one's result is
+-- the block's.
+runStmts :: Ctx -> RunK -> [CStmt] -> Gen [String]
+runStmts ctx k = \case
+  [] -> pure []
+  [CSExpr _ e] -> genRun ctx k e
+  CSExpr _ e : rest -> (++) <$> genRun ctx RDiscard e <*> runStmts ctx k rest
+  CSBind "_" _ e : rest -> (++) <$> genRun ctx RDiscard e <*> runStmts ctx k rest
+  CSBind x t e : rest -> (++) <$> genRun ctx (RBind x t) e <*> runStmts (bindLocals ctx [(x, 0)]) k rest
+  CSLet bs : rest -> do
+    (ctx', ls) <- genBinds ctx bs
+    (ls ++) <$> runStmts ctx' k rest
+
+-- | A call to a run form.
+runCall :: Ctx -> String -> Name -> VRef -> [String] -> String
+runCall ctx rn x ref as = case M.lookup x (cxVars ctx) of
+  Just (VKTop _ tps _) -> rn ++ insts tps ++ "(" ++ commas (dictArgs ctx ref ++ as) ++ ")"
+  _ -> rn ++ "(" ++ commas as ++ ")"
+  where
+    insts tps = case ref of
+      Inst ts _ -> typeArgs ctx ts
+      SelfGroup -> if null tps then "" else "[" ++ commas (map tyVar (cxTParams ctx)) ++ "]"
 
 -- Literals ---------------------------------------------------------------------------
 

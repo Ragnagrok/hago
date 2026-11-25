@@ -1,0 +1,12 @@
+import qualified Data.Iter as Iter
+
+triples :: Int -> Iter.Iter (Int, Int, Int)
+triples n = do
+  c <- Iter.range 1 n
+  b <- Iter.range 1 c
+  a <- Iter.range 1 b
+  guard (a * a + b * b == c * c)
+  pure (a, b, c)
+
+main :: IO ()
+main = print (Iter.length (triples 400))

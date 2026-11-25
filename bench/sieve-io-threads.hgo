@@ -1,0 +1,26 @@
+import Control.Concurrent
+import qualified Data.Vector.Mutable as MV
+
+primesIO :: Int -> IO Int
+primesIO n = do
+  composite <- MV.replicate (n + 1) False
+  let cross p i = if i > n then pure () else do
+        MV.write composite i True
+        cross p (i + p)
+      count p found
+        | p > n = pure found
+        | otherwise = do
+            crossed <- MV.read composite p
+            if crossed
+              then count (p + 1) found
+              else do
+                when (p * p <= n) (cross p (p * p))
+                count (p + 1) (found + 1)
+  count 2 0
+
+main :: IO ()
+main = do
+  done <- newEmptyMVar
+  forkIO (putMVar done ())
+  takeMVar done
+  primesIO 10000000 >>= print

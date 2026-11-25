@@ -580,6 +580,11 @@ func rt_iterDrop[T any](n int, s rt_iter.Seq[T]) rt_iter.Seq[T] {
 	}
 }
 
+// Not inlined: Go's inliner copies the two loops over functions into the
+// caller, and the nested iterators that do over Iter makes ran slower so
+// (Pythagorean triples with Iter.filter: 0.03 s called, 0.05 s inlined).
+//
+//go:noinline
 func rt_iterConcatMap[A, B any](f func(A) rt_iter.Seq[B], s rt_iter.Seq[A]) rt_iter.Seq[B] {
 	return func(yield func(B) bool) {
 		for x := range s {

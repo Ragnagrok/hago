@@ -193,7 +193,13 @@ Cats de Scala:
   runtime itera sobre ellas. Un bloque `do` que termina en otra acción, `>>=` y `*>` no consumen
   pila: `loop n = do { ...; loop (n + 1) }` corre para siempre, y `mapM_` sobre un millón de
   elementos corre en memoria constante, en IO y en transformadores sobre IO como
-  `StateT s IO`.
+  `StateT s IO`. Una acción que se ejecuta apenas se crea (una sentencia de un bloque `do`, o lo
+  que devuelve una función cuando se ejecuta la acción de su llamada) no llega a crearse: una
+  función que devuelve una acción tiene además una función de Go que hace lo que haría la
+  acción, y su llamada a sí misma al final es un loop `for`, también a través de `when` o de un
+  `if`. Una llamada al final a una función que puede volver a llamarla, o a una acción recibida
+  como argumento, sigue pasando por el trampolín, así que los loops de funciones que se llaman
+  entre sí no hacen crecer la pila (`examples/io-loops.hgo`).
 - **`Identity` también,** la mónada pura de la biblioteca, y con ella todo transformador encima:
   el `State s` de la biblioteca es `StateT s Identity`, igual que `Reader` y `Except`. Diez
   millones de pasos de `loop n = do { modify (+ n); loop (n - 1) }` corren en 10 MB, y un millón
@@ -633,47 +639,60 @@ main = do
   escribiendo, y un map de Go nunca lo escriben dos a la vez: cada operación es atómica
   (`insertWith` y `alter` también), una secuencia de ellas no. Un programa sin hilos, y todo lo
   creado en ST, no tiene lock.
-- **Cada operación es una acción de IO:** una clausura y un paso del trampolín, unos 60 ns. La
-  criba hasta diez millones tarda 2,3 s, y el loop de Go 0,03 s.
+- **Cada operación es una llamada a Go.** `read` y `write` son funciones chicas de la
+  biblioteca, que se copian en el código que las llama, y una acción que se ejecuta apenas se
+  crea no se crea (ver [Loops y la pila](#loops-y-la-pila)), así que un loop sobre un vector, en
+  ST o en IO, es un loop de Go que revisa el índice en cada acceso: la criba hasta diez millones
+  tarda 0,06 s, y el loop de Go 0,03 s.
 
 ## Performance
 
 Son números de una sola máquina (un i7-12700K, Go 1.27, en sus ocho núcleos de rendimiento),
-como referencia y no como benchmark: cada uno es la mediana de nueve corridas.
+como referencia y no como benchmark: cada uno es la mediana de nueve corridas. Los programas
+están en `bench/` (y en `examples/`), y `bench/run.sh` los mide, con el compilador del árbol o
+lado a lado con otros (`bench/run.sh HAGO_VIEJO HAGO_NUEVO`).
 
 | Programa | Tiempo | Memoria máxima |
 |---|---|---|
-| `nfib 40`, Go escrito a mano | 0,34 s | — |
-| `nfib 40 :: Int -> Int`, Hago | 0,33 s | — |
-| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, en `Int` | 0,33 s | — |
-| suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | 0,21 s | ~9 MB |
-| lo mismo con `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | 0,01 s | ~2 MB |
-| lo mismo sobre un `Data.Vector` de 3.000.000 de elementos | 0,02 s | ~60 MB |
-| ternas pitagóricas hasta 400, como comprensión de listas | 1,21 s | ~10 MB |
-| lo mismo como `do` sobre `Iter` | 0,60 s | ~10 MB |
-| lo mismo con `Iter.filter` para el último generador y la guarda | 0,02 s | ~7 MB |
-| `mapM_` sobre un millón de elementos en IO | 0,08 s | ~8 MB |
-| un loop recursivo en IO de cinco millones de iteraciones | 0,09 s | ~8 MB |
-| `mapM_` sobre un millón de elementos en `StateT Int IO` | 0,17 s | ~8 MB |
+| `nfib 40`, Go escrito a mano | 0,35 s | — |
+| `nfib 40 :: Int -> Int`, Hago | 0,37 s | — |
+| `nfib 40 :: (Ord a, Num a) => a -> a`, Hago, en `Int` | 0,36 s | — |
+| suma de los cuadrados de los múltiplos de 3 hasta 3.000.000, con listas perezosas | 0,12 s | ~8 MB |
+| lo mismo con `Data.Iter` (`Iter.sum (Iter.map ... (Iter.from 1))`) | <0,01 s | ~2 MB |
+| lo mismo sobre un `Data.Vector` de 3.000.000 de elementos | 0,02 s | ~58 MB |
+| ternas pitagóricas hasta 400, como comprensión de listas | 1,14 s | ~8 MB |
+| lo mismo como `do` sobre `Iter` | 0,59 s | ~8 MB |
+| lo mismo con `Iter.filter` para el último generador y la guarda | 0,03 s | ~7 MB |
+| `mapM_` sobre un millón de elementos en IO | 0,06 s | ~7 MB |
+| un loop recursivo en IO de cinco millones de iteraciones | 0,05 s | ~7 MB |
+| `mapM_` sobre un millón de elementos en `StateT Int IO` | 0,12 s | ~8 MB |
 | cincuenta millones de sumas de un `newtype Meters = Meters Double` | 0,02 s | ~2 MB |
 | lo mismo con `data Meters = Meters Double` | 0,02 s | ~2 MB |
-| parsear e imprimir con formato 3,7 MB de JSON con `examples/json.hgo` (`jq .`: 0,09 s, 28 MB) | 0,32 s | ~85 MB |
-| `fib 32` dieciséis veces con `map` | 0,11 s | — |
-| lo mismo con `parMap`, en 16 procesadores | 0,02 s | — |
-| un millón de inserciones en un `Data.Map`, después medio millón de borrados con `foldl`, y búsquedas | 1,57 s | ~96 MB |
-| los primos hasta un millón, criba de Eratóstenes sobre un `STVector` (`examples/sieve.hgo`) | 0,26 s | ~9 MB |
-| lo mismo con un `Data.Map` (la criba incremental) | 1,65 s | ~20 MB |
-| los primos hasta diez millones, sobre un `STVector` | 2,3 s | ~25 MB |
-| lo mismo con un `Data.Map` | 23 s | ~130 MB |
+| parsear e imprimir con formato 3,7 MB de JSON con `examples/json.hgo` (`jq .`: 0,09 s, 28 MB) | 0,24 s | ~72 MB |
+| `fib 32` dieciséis veces con `map` | 0,13 s | — |
+| lo mismo con `parMap`, en 16 procesadores | 0,03 s | — |
+| un millón de inserciones en un `Data.Map`, después medio millón de borrados con `foldl`, y búsquedas | 2,1 s | ~100 MB |
+| los primos hasta un millón, criba de Eratóstenes sobre un `STVector` (`examples/sieve.hgo`) | <0,01 s | ~3 MB |
+| lo mismo con un `Data.Map` (la criba incremental) | 1,65 s | ~19 MB |
+| los primos hasta diez millones, sobre un `STVector` | 0,06 s | ~11 MB |
+| lo mismo sobre un `IOVector` | 0,06 s | ~11 MB |
+| lo mismo sobre un `IOVector`, en un programa con hilos | 0,37 s | ~12 MB |
+| lo mismo con un `Data.Map` | 27 s | ~133 MB |
 | lo mismo, Go escrito a mano | 0,03 s | ~12 MB |
-| cuántas veces aparece cada uno de un millón de números, en una `HashTable` en ST (`examples/frequencies.hgo`) | 0,33 s | ~17 MB |
-| lo mismo con un `Data.Map` | 1,0 s | ~25 MB |
+| cuántas veces aparece cada uno de un millón de números, en una `HashTable` en ST (`examples/frequencies.hgo`) | 0,17 s | ~15 MB |
+| lo mismo con un `Data.Map` | 1,43 s | ~19 MB |
 
 El JSON es el que escribe `bench/json-input.go`, siempre el mismo:
 `go run bench/json-input.go > input.json`, y después `hago run examples/json.hgo input.json`.
 
 - **El código estricto en tipos concretos** se compila al Go que escribirías a mano, y rinde
-  igual.
+  igual. La función de `nfib` es la del programa escrito a mano; la diferencia entre los dos es
+  dónde la ubica Go, que mueve su tiempo una décima de un build a otro.
+- **Las funciones chicas se copian en quien las llama** (`src/Hago/Inline.hs`): los envoltorios
+  de la biblioteca (`when`, `unsafePrimIO`, los métodos de las instancias de IO y de ST, el
+  `read` de un vector) no dejan ninguna llamada, y con ellos una acción que se ejecuta donde se
+  crea no se construye, así que un loop en IO o en ST es un loop de Go (ver
+  [Loops y la pila](#loops-y-la-pila)).
 - **El código con restricciones o polimórfico sobre constructores** (`Num a =>`, `Monad m =>`)
   no cuesta nada extra, porque se especializa. El precio es el tamaño del código: una copia por
   cada tipo con que se usa.
@@ -690,9 +709,9 @@ El JSON es el que escribe `bench/json-input.go`, siempre el mismo:
   0,32 s; casi todo lo que queda son los documentos y las listas del pretty-printer, y el
   recolector de basura de Go.
 - **Las estructuras mutables** son más rápidas que los árboles de `Data.Map` para lo que sirven,
-  pero cada operación es una acción, una clausura y un paso del trampolín de IO, así que un loop
-  sobre un vector mutable sigue lejos del de Go. En un programa con hilos, un vector creado en
-  IO además toma un lock en cada acceso (la criba en IO: 2 s sola, 3,1 s en un programa con
+  y un loop sobre un vector mutable es el loop de Go con una revisión del índice en cada acceso,
+  más o menos el doble del tiempo del de Go. En un programa con hilos, un vector creado en IO
+  además toma un lock en cada acceso (la criba en IO: 0,06 s sola, 0,37 s en un programa con
   hilos).
 
 ## Uso
@@ -872,6 +891,7 @@ Haskell 98.
 | `src/Hago/Core.hs` | el core tipado |
 | `src/Hago/Specialize.hs` | copias del código sobre constructores de tipos; los métodos de instancia pasan a ser funciones |
 | `src/Hago/Newtype.hs` | los newtypes, reemplazados por el tipo que envuelven |
+| `src/Hago/Inline.hs` | las funciones chicas, copiadas en el código que las llama |
 | `src/Hago/CodeGen.hs` | generación de Go |
 | `src/Hago/Cache.hs` | compilación separada: lo que da cada módulo, guardado en disco |
 | `src/Hago/Driver.hs` | encontrar los módulos, compilar cada uno, y después el programa entero |
@@ -886,6 +906,7 @@ Haskell 98.
 | `docs/library/` | la referencia de la biblioteca, hecha por `hago doc` |
 | `editors/vscode/` | la extensión de VS Code: la gramática TextMate, y `hago check` al guardar |
 | `bench/json-input.go` | escribe el JSON del benchmark de [Performance](#performance) |
+| `bench/run.sh` | los programas de [Performance](#performance), compilados y medidos, con un compilador o con varios lado a lado |
 
 ## Licencia
 

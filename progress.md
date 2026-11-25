@@ -306,14 +306,89 @@ Next, more of Go's library (decided 2026-11-18), the easy ones first:
 - [ ] **Keys that are newtypes over keys,** and maybe `Integer` (by its digits): `Key` is closed
       for now.
 - [ ] **`PrimMonad` through the transformers** (`StateT s IO`), which now have to `lift`.
-- [ ] **Cheaper mutable loops.** Each read or write is an IO action allocated and run by the
-      trampoline; a loop over indices done by the runtime would avoid it.
+- [x] **Cheaper mutable loops.** Each read or write was an IO action allocated and run by the
+      trampoline. Done by the compiler instead of the runtime: see "Actions run where they are
+      made" below.
 
 - [x] **Go 1.27.** A type kept by value whose struct refers to itself through its alias (a
       list of itself) made Go 1.27's type checker panic ("incomplete alias", go.dev/issue/78296):
       the struct now takes the type's name, and the constructor's is the alias. CI runs on Go
       1.25 and on the newest. The README asked for Go 1.21; iterators and generic aliases need
       1.24, and 1.25 is what is tested.
+
+Next, performance (decided 2026-11-25): first the distance to Go, which was ten to seventy
+times on the programs that use IO, ST or small library functions in loops, and only then
+whether a second backend (C, with reference counting that reuses cells in place, as Koka and
+Lean do) is worth its cost (Go's libraries, goroutines). Go is within one to three times of
+Rust on most programs; GHC's generational collector does better than Go's on code that
+allocates much and briefly (`Data.Map`, parsers), so those are where Hago has most to gain.
+
+- [x] **Actions run where they are made, and small functions copied in.** Measured on the
+      sieve to ten million on an `STVector`: 2.0 s, against 0.06 s for the same loop written in
+      Go by hand inside the program, and 0.03 s for Go's own. Two parts:
+      - **`Hago.Inline`**, after specialisation and newtypes: a function that is not recursive
+        and whose body is small (16 nodes) is copied where it is called, and what that leaves
+        is simplified (a suspension forced at once, a lambda applied at once, a `case` that
+        only names its scrutinees). An argument goes into the body only if that computes the
+        same thing at the same time: a variable or a literal anywhere; a value that cannot
+        fail (a lambda, a suspension) where it is used once, not inside a lambda (a lambda
+        anywhere it is used once); anything else, one per call, where it is used once,
+        outside lambdas and `do` blocks. Otherwise the call stays (`failing/argument-before-action.hgo`).
+        Names bound in a copied body are renamed (`x#n`), and the bindings are taken callees
+        first, since specialisation adds its copies after their callers. Only an action or a
+        body without `case`, `if` or `let` is copied, which in an expression would be a Go
+        function called on the spot. `&&` and `||` stay Go's. The library's wrappers vanish:
+        `when`, `unsafePrimIO`, ST's and IO's `>>=`, `pure` and `*>`, `read` and `write`.
+      - **Run forms** (`genRun` in `Hago.CodeGen`): a function that returns an action also
+        gets `hgrun_f`, a Go function that does what the action would and returns its result,
+        and an action run as soon as it is made (a statement of a `do` block, the action a run
+        form returns, `primBindIO` and `primThenIO`, `runST`) is generated as the statements
+        that run it: a call to Go, a call to a run form, an `if`, a `case`, a `let`. Stack:
+        a tail call to itself is a `for`; to a function outside its group of mutually
+        recursive ones (and the functions around a local one), a direct call, so a chain of
+        them is as long as the program has functions; to one inside it, or to an action whose
+        source is not known, the trampoline, which keeps the loop flat from there on.
+        `examples/io-loops.hgo` runs ten million steps of each kind in constant memory.
+      On the way: a Go function's parameter declared `a -> b` was given a Go function of all
+      the arguments when `b` was a function (`Iter.map (,)`), now of one, as declared; a self
+      tail call in a local function whose parameters were not `_arg0...` assigned the wrong
+      variables (renamed locals made it reachable); `rt_iterConcatMap` is not inlined by Go,
+      whose copy of its loops over functions ran `do` over `Iter` with `Iter.filter` in 0.05 s
+      instead of 0.03 s. The README's programs are now in `bench/`, and `bench/run.sh` times
+      them with one compiler or several side by side. Before and after, on one machine, the
+      median of nine runs, interleaved:
+
+      | Program | Before | After |
+      | --- | --- | --- |
+      | sieve to 10M, `STVector` | 2.04 s, 24 MB | 0.06 s, 11 MB |
+      | sieve to 10M, `IOVector` | 0.87 s, 24 MB | 0.06 s, 11 MB |
+      | the same, in a program with threads (a lock per access) | 1.34 s | 0.37 s |
+      | frequencies of 1M, `HashTable` in ST | 0.22 s | 0.17 s |
+      | JSON, 3.7 MB | 0.32 s, 91 MB | 0.24 s, 72 MB |
+      | recursive IO loop, 5M | 0.08 s | 0.05 s |
+      | `mapM_` over 1M in IO | 0.09 s | 0.06 s |
+      | `mapM_` over 1M in `StateT Int IO` | 0.18 s | 0.12 s |
+      | Pythagorean triples, comprehension | 1.23 s | 1.14 s |
+      | `nfib 40` | 0.34 s | 0.37 s |
+
+      The rest did not change. `nfib`'s Go function is now the one written by hand (which
+      takes 0.35 s): its time moves by a tenth with where Go places the code, as two builds of
+      the same body in different programs show. The generated Go is a little smaller (JSON:
+      116 KB → 111 KB). The README's rows whose programs were not in the repository are
+      measured with the ones now in `bench/`, close to the earlier ones but not the same: the
+      keys of the `Data.Map` program are scattered, so it takes 2.1 s where the earlier one
+      took 1.57 s, with either compiler.
+- [ ] **A tail call between functions that call each other** goes through the trampoline
+      (`ping`/`pong` in `examples/io-loops.hgo`), and so does one to an action passed as an
+      argument. A run form for the whole group, one Go function with a loop over which of
+      them is running, would make it a loop.
+- [ ] **`mapM_` and `forM_` over a list** go through `foldr` with a suspended rest, so each
+      element still makes an action and a closure.
+- [ ] **What the garbage collector costs:** the last profiles of `Data.Map` and JSON (above)
+      had it at about half the CPU. Profile them again, then fewer allocations (closures for
+      known functions, cells), then measure `GOGC` again.
+- [ ] **The same programs in GHC,** to know where Hago stands against Haskell and not only
+      against Go.
 
 Next, tools around the language, in this order:
 

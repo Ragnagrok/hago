@@ -15,6 +15,7 @@ import Hago.CodeGen (Runtime (..), RuntimePart (..), generate)
 import Hago.Derive (expandDeriving)
 import Hago.Embed (embedFile)
 import Hago.Expand (expandSynonyms, synonymsOf)
+import Hago.Inline (inlineSmall)
 import Hago.Newtype (eraseNewtypes)
 import Hago.Parser (fixitiesOf, parseModule, resolveFixity)
 import Hago.Cache
@@ -259,7 +260,7 @@ generateProgram file modules = do
   let checked = map snd modules
   duplicateInstances file checked
   prog <- either (Left . ((file ++ ": ") ++)) Right (specialize (sinkLocals (programOf (mconcat checked))))
-  pure (generate runtime (eraseNewtypes prog))
+  pure (generate runtime (inlineSmall (eraseNewtypes prog)))
 
 -- | Compiles each module, dependencies first, reusing what the cache keeps
 -- for a module whose source and imports have not changed. Each module is

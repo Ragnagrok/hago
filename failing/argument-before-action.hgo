@@ -1,0 +1,11 @@
+-- expects: error: the argument
+-- An argument is computed before the function is called, even when the
+-- function is small enough to be copied into its caller: nothing is printed
+-- before the failure.
+report :: Int -> IO ()
+report x = do
+  putStrLn "before"
+  print x
+
+main :: IO ()
+main = report (error "the argument")

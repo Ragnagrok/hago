@@ -1,0 +1,59 @@
+-- Loops in IO and ST, written as recursion, run in constant stack: a call
+-- to itself at the end is a loop, and so is one through `when`; functions
+-- that end calling each other, or an action passed as an argument, go
+-- through the trampoline. Each of these would need gigabytes of Go stack
+-- otherwise.
+import Control.Monad.ST
+import Data.IORef
+import Data.STRef
+
+-- two top-level functions calling each other at the end
+ping :: IORef Int -> Int -> IO ()
+ping r n = if n == 0 then pure () else do
+  modifyIORef' r (+ 1)
+  pong r (n - 1)
+
+pong :: IORef Int -> Int -> IO ()
+pong r n = ping r n
+
+-- a loop through `when`, whose action is a suspended argument
+countdown :: IORef Int -> Int -> IO ()
+countdown r n = when (n > 0) (do
+  modifyIORef' r (+ 1)
+  countdown r (n - 1))
+
+-- an action passed as an argument, called at the end
+hop :: (Int -> IO ()) -> Int -> IO ()
+hop f n = if n == 0 then pure () else f (n - 1)
+
+bounce :: Int -> IO ()
+bounce n = hop bounce n
+
+-- local functions calling each other, in ST
+parity :: Int -> Bool
+parity n = runST $ do
+  r <- newSTRef True
+  let evenStep k = if k == 0 then pure () else do
+        modifySTRef' r not
+        oddStep (k - 1)
+      oddStep k = if k == 0 then pure () else do
+        modifySTRef' r not
+        evenStep (k - 1)
+  evenStep n
+  readSTRef r
+
+main :: IO ()
+main = do
+  let n = 10000000
+  r <- newIORef 0
+  ping r n
+  readIORef r >>= print
+  writeIORef r 0
+  countdown r n
+  readIORef r >>= print
+  bounce n
+  putStrLn "bounced"
+  print (parity n, parity (n + 1))
+  s <- newIORef 0
+  mapM_ (\x -> modifyIORef' s (+ x)) [1 .. 1000000]
+  readIORef s >>= print

@@ -1,0 +1,4 @@
+import qualified Data.Iter as Iter
+
+main :: IO ()
+main = print (Iter.sum (Iter.map (\x -> x * x) (Iter.filter (\x -> x `mod` 3 == 0) (Iter.takeWhile (<= 3000000) (Iter.from 1)))))
