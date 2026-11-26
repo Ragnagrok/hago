@@ -398,7 +398,8 @@ instance Ord Double where
 
 instance Show Double where
   show x = primShow x
-  showsPrec d x = if d > 6 && x < 0 then "(" ++ primShow x ++ ")" else primShow x
+  -- -0.0 too, which is not below 0
+  showsPrec d x = if d > 6 && (x < 0 || x == 0 && 1 / x < 0) then "(" ++ primShow x ++ ")" else primShow x
 
 instance Num Double where
   x + y = primAdd x y

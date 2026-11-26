@@ -855,8 +855,13 @@ decided or ordered yet:
       dictionaries where the function given is not known.
 - [ ] **`FlexibleInstances` and `StandaloneDeriving`.** Hugen had `instance Fractional (Expr Fx)`
       (generalised to every `Expr a` in the port) and standalone deriving clauses.
-- [ ] **`show` of a `Double` is Go's, not Haskell's:** `1e+07` and `0.001` where Haskell prints
-      `1.0e7` and `1.0e-3` (`0.1` is the same). Programs compared against GHC print integers.
+- [x] **`show` of a `Double` is Haskell's:** Go's shortest digits, laid out as `showFloat` does
+      (fixed from 0.1 up to 10^7, `1.0e7` and `1.0e-3` outside it), `Infinity` and `NaN`, and
+      `-0.0` in parentheses where a negative number has them. Found on the way: arithmetic on
+      literals alone was a Go constant expression, computed exactly (`0.1 + 0.2` was `0.3`, `-0.0`
+      was `0.0`, `1.0 / 0.0` and an `Int` that overflows did not compile); the first operand now
+      goes through `rt_val`, which Go inlines and still folds, at the type's own arithmetic.
+      `examples/doubles.hgo` is checked against GHC's output.
 - [ ] **`abs` and `signum` are not methods of `Num`** (a ring here, on purpose), so a type such
       as an expression tree cannot overload them; Hugen's became functions of their own.
 - [ ] **What of Haskell 2010 is missing:** an audit against the Report's language and its library

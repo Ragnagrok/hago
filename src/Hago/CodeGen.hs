@@ -1085,6 +1085,14 @@ genExpr ctx e = case e of
               (params, _) = splitFun (fArity fo) (foreignInst fo targs)
           as <- zipWith3M (foreignArg ctx (isRuntimeSymbol fo)) (fst (splitFun (fArity fo) (fType fo))) params now
           foldM (\acc a -> (\a' -> acc ++ "(" ++ a' ++ ")") <$> genExpr ctx a) (foreignCall ctx fo targs True as) later
+    -- arithmetic on literals alone would be a constant expression, which Go
+    -- computes exactly (0.1 + 0.2 is 0.3, -0.0 is 0, 1.0 / 0.0 and an Int
+    -- that overflows do not compile); through rt_val it is computed at its
+    -- type, and Go still folds it, with the type's own arithmetic
+    CVar x (Inst ts _) _
+      | x `elem` constPrims, knownArity x == Just (length args), all isNumLit args -> do
+          as <- mapM (genExpr ctx) args
+          genPrim ctx x (map (zonk (progSubst (cxProg ctx))) ts) (case as of (a : rest) -> ("rt_val(" ++ a ++ ")") : rest; [] -> [])
     CVar x ref t | Just ar <- knownArity x, ar > 0 ->
       genApp ctx f args (Just ar) (\as -> call ctx x ref t as) t
     -- a cell kept behind a pointer, given suspensions for its lazy fields
@@ -1143,6 +1151,15 @@ genExpr ctx e = case e of
       Just (VKForeign f) -> Just (fArity f)
       Just (VKPrim a) -> Just a
       Nothing -> Nothing
+    constPrims =
+      [ "primAdd", "primSub", "primMul", "primNeg", "primFDiv", "primQuot", "primRem", "primEq", "primNeq"
+      , "primLt", "primLe", "primGt", "primGe", "primIntToDouble", "primTruncate" ]
+    isNumLit = \case
+      CLit (LInt _) -> True
+      CLit (LDouble _) -> True
+      CNum {} -> True
+      CFrac {} -> True
+      _ -> False
     conArity k = length (ciFields (progCons (cxProg ctx) M.! k))
     isDelay = \case
       CDelay {} -> True

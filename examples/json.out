@@ -11,7 +11,7 @@
   "limits": {
     "tuple": 15,
     "ratio": 0.75,
-    "big": 6.02e+23,
+    "big": 6.02e23,
     "empty": [],
     "none": {}
   },
@@ -36,13 +36,13 @@
   "limits": {
     "tuple": 15,
     "ratio": 0.75,
-    "big": 6.02e+23,
+    "big": 6.02e23,
     "empty": [],
     "none": {}
   },
   "escapes": "tab\there é 😀"
 }
-{"name":"hago","version":[0,1,0],"strict":true,"targets":[{"os":"linux","arch":"amd64"},{"os":"darwin","arch":"arm64"}],"description":"Haskell's syntax,\nGo's runtime","license":null,"limits":{"tuple":15,"ratio":0.75,"big":6.02e+23,"empty":[],"none":{}},"escapes":"tab\there é 😀"}
+{"name":"hago","version":[0,1,0],"strict":true,"targets":[{"os":"linux","arch":"amd64"},{"os":"darwin","arch":"arm64"}],"description":"Haskell's syntax,\nGo's runtime","license":null,"limits":{"tuple":15,"ratio":0.75,"big":6.02e23,"empty":[],"none":{}},"escapes":"tab\there é 😀"}
 (True,True)
 "[1, 2,]" -> line 1, column 7: unexpected ']', expected a value
 "{\"a\": 1 \"b\": 2}" -> line 1, column 9: unexpected '"', expected ',' or '}'

@@ -336,13 +336,49 @@ func rt_unpack(s string) List[rune] {
 	return from(0)
 }
 
-// Doubles print with a decimal point, as in Haskell.
+// A value that is not a constant expression, so that arithmetic on literals is
+// computed at its type, as on any other value (see CodeGen's constPrims).
+func rt_val[T any](x T) T { return x }
+
+// Doubles print as Haskell's show does: the shortest digits that read back as
+// the same number, in fixed notation from 0.1 up to 10^7 and as d.ddde<n>
+// outside it, with at least one digit after the point.
 func rt_showDouble(x float64) string {
-	s := rt_strconv.FormatFloat(x, 'g', -1, 64)
-	if !rt_strings.ContainsAny(s, ".eIN") {
-		s += ".0"
+	// "d.ddde±n", the shortest digits; x = 0.ddd × 10^(n+1)
+	g := rt_strconv.FormatFloat(x, 'e', -1, 64)
+	switch g {
+	case "NaN":
+		return "NaN"
+	case "+Inf":
+		return "Infinity"
+	case "-Inf":
+		return "-Infinity"
 	}
-	return s
+	sign := ""
+	if g[0] == '-' {
+		sign, g = "-", g[1:]
+	}
+	if x == 0 {
+		return sign + "0.0"
+	}
+	mant, exp, _ := rt_strings.Cut(g, "e")
+	ds := rt_strings.Replace(mant, ".", "", 1)
+	e, _ := rt_strconv.Atoi(exp)
+	e++
+	if e < 0 || e > 7 {
+		rest := ds[1:]
+		if rest == "" {
+			rest = "0"
+		}
+		return sign + ds[:1] + "." + rest + "e" + rt_strconv.Itoa(e-1)
+	}
+	if e == 0 {
+		return sign + "0." + ds
+	}
+	if len(ds) <= e {
+		return sign + ds + rt_strings.Repeat("0", e-len(ds)) + ".0"
+	}
+	return sign + ds[:e] + "." + ds[e:]
 }
 
 // Integer: a *big.Int that is never changed once made, so values can be shared.
