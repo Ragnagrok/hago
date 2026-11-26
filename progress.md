@@ -708,7 +708,8 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       list alive, as GHC's full laziness can. Hugen: 5.5 s → 5.0 s, 206 → 192 allocations a
       tick; in `bench/` only the sieve and frequencies have one (a `[Char]` of the Prelude's),
       and did not move.
-- [ ] **What is left of Hugen** (three times GHC): it allocates 192 times a tick, each a
+- [-] **What was left of Hugen** (three times GHC; the port was removed on 2026-11-26, games
+      go to Hög): it allocates 192 times a tick, each a
       call to Go's allocator. `Command.matches` (lazy lists searched with `any` and `take 1`),
       the `zip` of `Input.relative`, the record updates of `Match.step`, and the driver's own
       hash.

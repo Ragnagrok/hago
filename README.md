@@ -811,7 +811,6 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
 | the same, in a program with threads | 0.04 s | 0.04 s |
 | frequencies of a million numbers, in a hash table in ST | 0.10 s, 35 MB | 0.20 s, 44 MB |
 | the same with a `Data.Map` | 0.41 s | 0.57 s |
-| Hugen's core, a million ticks of a match (`hago-examples`) | 5.0 s, 36 MB | 1.5 s, 9 MB |
 
 - **Even:** strict code at concrete types, newtypes, folds of lists made where they are
   folded (both make loops of them, in IO and in `StateT` too), recursive IO loops, functions
@@ -825,8 +824,7 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
 - **GHC ahead:** the sieve on a map, by a fifth: what is left is the map's own work, the nodes
   of the keys it inserts and the rebalancing, where GHC's generational collector does better
   than Go's. A program with little alive that allocates much takes up to 35 MB, the heap's
-  floor. And a real program, Hugen's fighting game engine ported line by line, by three times:
-  it makes 190 allocations a tick, each a call to Go's allocator, where GHC's moves a pointer.
+  floor.
 
 ## Using it
 

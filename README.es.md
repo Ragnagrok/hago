@@ -842,7 +842,6 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
 | lo mismo, en un programa con hilos | 0,04 s | 0,04 s |
 | frecuencias de un millón de números, en una tabla hash en ST | 0,10 s, 35 MB | 0,20 s, 44 MB |
 | lo mismo con un `Data.Map` | 0,41 s | 0,57 s |
-| el núcleo de Hugen, un millón de ticks de una pelea (`hago-examples`) | 5,0 s, 36 MB | 1,5 s, 9 MB |
 
 - **Parejos:** el código estricto en tipos concretos, los newtypes, los pliegues de listas que
   se arman donde se pliegan (los dos los vuelven loops, también en IO y en `StateT`), los loops
@@ -856,9 +855,7 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
 - **Adelante GHC:** la criba con un map, por un quinto: lo que queda es el trabajo del propio
   map, los nodos de las claves que inserta y el rebalanceo, donde el recolector generacional de
   GHC anda mejor que el de Go. Un programa con poco vivo que reserva mucho llega a 35 MB, el
-  piso del heap. Y un programa real, el motor de juegos de pelea Hugen portado línea por línea,
-  por tres veces: hace 190 reservas de memoria por tick, cada una una llamada al
-  asignador de Go, donde el de GHC mueve un puntero.
+  piso del heap.
 
 ## Uso
 
