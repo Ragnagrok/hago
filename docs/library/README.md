@@ -25,6 +25,7 @@ above each declaration. Do not edit these files; edit the sources and run `hago 
 | [Data.Bits](Data.Bits.md) | Operations on the bits of integers, as Haskell's Data.Bits: Int here, and the integers of Data.Word and Data.Int. |
 | [Data.Char](Data.Char.md) | Characters: what kind each is, and changing case. |
 | [Data.Encoding](Data.Encoding.md) | Writing any bytes with a few safe characters, and back: base64 (RFC 4648, with padding) and hexadecimal. |
+| [Data.Foldable](Data.Foldable.md) | Foldable and its functions, as Haskell's Data.Foldable: all of them are the Prelude's, so this module only gives them under that name, with foldl' (which is foldl: Hago computes as it goes). |
 | [Data.Functor.Identity](Data.Functor.Identity.md) | The identity monad, trampolined: it runs on the same machinery as IO, so a long chain of binds runs in constant stack, and so does every transformer over it (State s is StateT s Identity). |
 | [Data.HashTable](Data.HashTable.md) | Mutable hash tables, on Go's maps: insert, lookup and delete in constant time on average. |
 | [Data.IORef](Data.IORef.md) | Mutable references in IO. |
@@ -40,6 +41,7 @@ above each declaration. Do not edit these files; edit the sources and run `hago 
 | [Data.Ord](Data.Ord.md) | Orderings: comparing by a part of a value, and an order turned around. |
 | [Data.Ratio](Data.Ratio.md) | Fractions, exact: 1 % 3 + 1 % 6 is 1 % 2, never 0.49999. |
 | [Data.STRef](Data.STRef.md) | Mutable references in ST: see Control.Monad.ST. |
+| [Data.Sequence](Data.Sequence.md) | Finite sequences, as containers' Data.Sequence: adding at either end, reaching, changing, inserting or deleting at a position, splitting and joining all take time logarithmic in the length. |
 | [Data.Set](Data.Set.md) | Finite sets, kept as a balanced binary search tree: a Data.Map whose values are (), which costs nothing in Go. |
 | [Data.String](Data.String.md) | Functions on String, which is Go's string: taking the first character off slices it without copying, so a String can be read from the front as a list would, without making one. |
 | [Data.String.Builder](Data.String.Builder.md) | Building a long String from many pieces. |

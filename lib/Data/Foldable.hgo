@@ -1,0 +1,11 @@
+-- Foldable and its functions, as Haskell's Data.Foldable: all of them are
+-- the Prelude's, so this module only gives them under that name, with
+-- foldl' (which is foldl: Hago computes as it goes). maximum and minimum
+-- give a Maybe.
+module Data.Foldable
+  ( Foldable (..), length, sum, product, elem, notElem, and, or, any, all, maximum, minimum
+  , find, concat, concatMap, traverse_, for_, sequenceA_, mapM_, forM_, sequence_, foldl'
+  ) where
+
+foldl' :: Foldable t => (b -> a -> b) -> b -> t a -> b
+foldl' f z xs = foldl f z xs

@@ -258,6 +258,8 @@ tipo y lo que hace:
 | `Data.Map` | árboles de búsqueda balanceados de claves a valores, como en containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (sin `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` y `Foldable`; conviene importarlo calificado |
 | `Data.Set` | lo mismo para conjuntos: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; conviene importarlo calificado |
 | `Data.IntMap` | `Data.Map` con claves `Int`, con el nombre de containers (`IntMap v` es `Map Int v`); `Data.Map.Strict` y `Data.IntMap.Strict` son los mismos maps, porque Hago calcula los valores al ponerlos |
+| `Data.Sequence` | secuencias con `<\|`, `\|>`, `><`, `lookup` y `!?` (con `Maybe`), `update`, `insertAt`, `deleteAt`, `splitAt`, `take`, `drop`, `viewl`, `viewr`, todo en tiempo logarítmico: un árbol balanceado por posición, no el finger tree de containers, que la especialización de Hago no puede copiar; conviene importarlo calificado |
+| `Data.Foldable` | `Foldable` y sus funciones, las del Prelude, con ese nombre, y `foldl'` |
 | `Data.Maybe` | `isJust`, `isNothing`, `catMaybes`, `mapMaybe`, `listToMaybe`, `maybeToList`, `fromMaybe` (sin `fromJust`) |
 | `Data.Bits` | `.&.`, `.\|.`, `xor`, `complement`, `shiftL`, `shiftR`, `testBit`, `setBit`, `clearBit`, `popCount`, `bit`, `countLeadingZeros`, para `Int` y los enteros de abajo |
 | `Data.Word`, `Data.Int` | `Word8` a `Word64` y `Word`, `Int8` a `Int64`: los enteros de Go de esos tamaños, que dan la vuelta; `Num`, `Integral`, `Enum`, `Bounded`, `Bits` |

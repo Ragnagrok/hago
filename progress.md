@@ -737,8 +737,16 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       over Go's integers, for division as Haskell's, bits and conversions); `Data.Maybe`;
       `foldl'` in `Data.List`; `Data.IntMap` (`Map Int`), and `Data.Map.Strict` and
       `Data.IntMap.Strict` under containers' names. `examples/bits.hgo`; GHC prints the same
-      but for `succ` and `toEnum`, which give a `Maybe` in Hago. Not done: `Data.Sequence`. A
-      field used as a function (`name p`) now says what to write instead.
+      but for `succ` and `toEnum`, which give a `Maybe` in Hago. A field used as a function
+      (`name p`) now says what to write instead. Then `Data.Sequence`: containers' is a finger
+      tree, a type nested in itself (`FingerTree (Node a)`), which specialisation cannot make
+      copies of; Hago's is a balanced tree by position, Data.Map's balancing with sizes and no
+      keys, everything logarithmic (adding at an end too, where containers' is constant).
+      `examples/sequence.hgo` runs three thousand random operations against a list and checks
+      the tree after each (twenty thousand passed). And `Data.Foldable`, the Prelude's under
+      that name.
+- [ ] **Operators of one precedence and different associativities** side by side (`0 <| s |>
+      11`, infixr 5 and infixl 5) are accepted and grouped somehow; Haskell refuses them.
 - [x] **Pattern guards** (2026-11-26), which the Hugen port missed (`Match.throws` became nested
       `case`s; the error was "unexpected `<-`"). A guard is qualifiers separated by commas, as
       Haskell 2010's: conditions, patterns with `<-`, and `let`s. The parser makes one with

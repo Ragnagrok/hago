@@ -1,0 +1,50 @@
+-- Data.Sequence: the operations of containers', on a balanced tree; then
+-- three thousand of them at random against a list that should hold the
+-- same, the tree checked balanced after each. GHC prints the same but for a
+-- [Char], shown as a list here, and maximum, which gives a Maybe.
+import qualified Data.Sequence as Seq
+import Data.Sequence (Seq, ViewL (..), ViewR (..), (<|), (|>), (><))
+import Data.Foldable (toList)
+import System.Random
+
+-- One operation at random, on a sequence and on a list that should hold the
+-- same, and whether they still do and the tree is balanced.
+step :: (Seq Int, [Int], Bool) -> (Int, Int, Int) -> (Seq Int, [Int], Bool)
+step (s, xs, ok) (op, a, b) =
+  let n = length xs
+      i = if n == 0 then 0 else a `mod` (n + 1)
+      (s', xs') = case op `mod` 8 of
+        0 -> (b <| s, b : xs)
+        1 -> (s |> b, xs ++ [b])
+        2 -> (Seq.insertAt i b s, take i xs ++ [b] ++ drop i xs)
+        3 -> (Seq.deleteAt i s, take i xs ++ drop (i + 1) xs)
+        4 -> (Seq.update i b s, take i xs ++ (if i < n then b : drop (i + 1) xs else drop (i + 1) xs))
+        5 -> let (l, r) = Seq.splitAt i s in (r >< l, drop i xs ++ take i xs)
+        6 -> (Seq.reverse s, reverse xs)
+        _ -> (s >< Seq.fromList [b, b + 1], xs ++ [b, b + 1])
+   in (s', xs', ok && toList s' == xs' && Seq.valid s' && Seq.length s' == length xs')
+
+model :: IO ()
+model = do
+  let g = mkStdGen 42
+      ops = take 3000 (zip3 (randomRs (0, 7) g) (randomRs (0, 1000) (snd (split g))) (randomRs (0, 99) (fst (split g))))
+      (s, xs, ok) = foldl step (Seq.empty, [], True) ops
+  print (ok, Seq.length s, length xs)
+
+main :: IO ()
+main = do
+  let s = Seq.fromList [1 .. 10 :: Int]
+  print (s, Seq.length s, Seq.null s, Seq.null (Seq.empty :: Seq Int))
+  print ((0 <| s) |> 11, Seq.fromList (unpack "ab") >< Seq.fromList (unpack "cd"))
+  print (Seq.lookup 3 s, s Seq.!? 20, Seq.update 0 100 s, Seq.adjust (* 2) 9 s)
+  print (Seq.insertAt 2 99 s, Seq.deleteAt 0 s, Seq.splitAt 4 s, Seq.take 3 s, Seq.drop 8 s)
+  print (Seq.reverse s, Seq.filter even s, Seq.zip s (Seq.fromList (unpack "abc")), Seq.sort (Seq.fromList [3, 1, 2 :: Int]))
+  print (Seq.mapWithIndex (\i x -> i * x) s, Seq.foldrWithIndex (\i x acc -> i + x + acc) 0 s, sum s, maximum s)
+  case Seq.viewl s of
+    x :< rest -> print (x, Seq.length rest)
+    EmptyL -> print "empty"
+  case Seq.viewr s of
+    rest :> x -> print (Seq.length rest, x)
+    EmptyR -> print "empty"
+  print (fmap show (Seq.fromList [1, 2 :: Int]), Seq.replicate 3 (7 :: Int), Seq.fromList [1, 2] == Seq.fromList [1, 2 :: Int])
+  model

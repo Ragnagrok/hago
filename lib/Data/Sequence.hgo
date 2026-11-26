@@ -1,0 +1,317 @@
+-- Finite sequences, as containers' Data.Sequence: adding at either end,
+-- reaching, changing, inserting or deleting at a position, splitting and
+-- joining all take time logarithmic in the length. containers keeps a
+-- finger tree, a type nested in itself, which Hago's specialisation cannot
+-- make copies of; this one is a balanced tree, as Data.Map's, ordered by
+-- position, each node keeping its size, so adding at an end takes log n
+-- instead of constant time. There is no index, which would fail past the
+-- end: lookup and !? give a Maybe. Many names are the Prelude's, so this
+-- module is meant to be imported qualified: import qualified Data.Sequence
+-- as Seq.
+module Data.Sequence
+  ( Seq, ViewL (..), ViewR (..)
+  , empty, singleton, (<|), (|>), (><), fromList, replicate
+  , length, null, lookup, (!?), update, adjust, insertAt, deleteAt
+  , take, drop, splitAt, reverse, viewl, viewr
+  , mapWithIndex, foldlWithIndex, foldrWithIndex, filter, zip, zipWith, sort, sortBy
+  , valid
+  ) where
+
+import Prelude hiding (length, null, lookup, take, drop, splitAt, reverse, filter, zip, zipWith, replicate)
+import qualified Prelude
+import qualified Data.List as List
+
+infixr 5 <|
+infixl 5 |>
+infixr 5 ><
+infixr 5 :<
+infixl 5 :>
+infixl 9 !?
+
+-- A tree of the elements in order: a node holds its size, an element, and
+-- the elements before it and after it.
+data Seq a = Tip | Bin Int a (Seq a) (Seq a)
+
+-- The first element and the rest, or nothing.
+data ViewL a = EmptyL | a :< Seq a
+
+-- The rest and the last element, or nothing.
+data ViewR a = EmptyR | Seq a :> a
+
+-- Building -----------------------------------------------------------------------------
+
+empty :: Seq a
+empty = Tip
+
+singleton :: a -> Seq a
+singleton x = Bin 1 x Tip Tip
+
+-- At the front.
+(<|) :: a -> Seq a -> Seq a
+x <| s = insertMin x s
+
+-- At the back.
+(|>) :: Seq a -> a -> Seq a
+s |> x = insertMax x s
+
+-- One sequence followed by another.
+(><) :: Seq a -> Seq a -> Seq a
+a >< b = merge a b
+
+-- A balanced tree of the list's elements, in time linear in its length.
+fromList :: [a] -> Seq a
+fromList xs = fst (build (Prelude.length xs) xs)
+  where
+    build :: Int -> [a] -> (Seq a, [a])
+    build 0 rest = (Tip, rest)
+    build n rest =
+      let half = (n - 1) `div` 2
+          (l, rest1) = build half rest
+       in case rest1 of
+            x : rest2 ->
+              let (r, rest3) = build (n - 1 - half) rest2
+               in (Bin n x l r, rest3)
+            [] -> (l, [])
+
+-- n copies of x.
+replicate :: Int -> a -> Seq a
+replicate n x = fromList (Prelude.replicate n x)
+
+-- Looking ---------------------------------------------------------------------------------
+
+length :: Seq a -> Int
+length s = size s
+
+null :: Seq a -> Bool
+null Tip = True
+null _ = False
+
+-- The element at a position, from 0, if there is one.
+lookup :: Int -> Seq a -> Maybe a
+lookup _ Tip = Nothing
+lookup i (Bin _ x l r)
+  | i < size l = lookup i l
+  | i == size l = Just x
+  | otherwise = lookup (i - size l - 1) r
+
+(!?) :: Seq a -> Int -> Maybe a
+s !? i = lookup i s
+
+-- The first element and the rest.
+viewl :: Seq a -> ViewL a
+viewl Tip = EmptyL
+viewl s = case lookup 0 s of
+  Just x -> x :< deleteAt 0 s
+  Nothing -> EmptyL
+
+-- The rest and the last element.
+viewr :: Seq a -> ViewR a
+viewr Tip = EmptyR
+viewr s = case lookup (size s - 1) s of
+  Just x -> deleteAt (size s - 1) s :> x
+  Nothing -> EmptyR
+
+-- Changing ----------------------------------------------------------------------------------
+
+-- The element at a position replaced; the sequence as it was if there is none.
+update :: Int -> a -> Seq a -> Seq a
+update i y s = adjust (const y) i s
+
+adjust :: (a -> a) -> Int -> Seq a -> Seq a
+adjust _ _ Tip = Tip
+adjust f i (Bin n x l r)
+  | i < size l = Bin n x (adjust f i l) r
+  | i == size l = Bin n (f x) l r
+  | otherwise = Bin n x l (adjust f (i - size l - 1) r)
+
+-- x put before the element at a position: at the front for 0 or less, at
+-- the back for the length or more.
+insertAt :: Int -> a -> Seq a -> Seq a
+insertAt _ x Tip = singleton x
+insertAt i x (Bin _ y l r)
+  | i <= size l = balance y (insertAt i x l) r
+  | otherwise = balance y l (insertAt (i - size l - 1) x r)
+
+-- The sequence without the element at a position, if there is one.
+deleteAt :: Int -> Seq a -> Seq a
+deleteAt _ Tip = Tip
+deleteAt i (Bin _ x l r)
+  | i < size l = balance x (deleteAt i l) r
+  | i == size l = glue l r
+  | otherwise = balance x l (deleteAt (i - size l - 1) r)
+
+-- The first n elements, and the rest.
+splitAt :: Int -> Seq a -> (Seq a, Seq a)
+splitAt _ Tip = (Tip, Tip)
+splitAt i (Bin _ x l r)
+  | i <= size l = let (ll, lr) = splitAt i l in (ll, link x lr r)
+  | otherwise = let (rl, rr) = splitAt (i - size l - 1) r in (link x l rl, rr)
+
+take :: Int -> Seq a -> Seq a
+take n s = fst (splitAt n s)
+
+drop :: Int -> Seq a -> Seq a
+drop n s = snd (splitAt n s)
+
+reverse :: Seq a -> Seq a
+reverse Tip = Tip
+reverse (Bin n x l r) = Bin n x (reverse r) (reverse l)
+
+filter :: (a -> Bool) -> Seq a -> Seq a
+filter p s = fromList (Prelude.filter p (toListS s))
+
+zip :: Seq a -> Seq b -> Seq (a, b)
+zip a b = fromList (Prelude.zip (toListS a) (toListS b))
+
+zipWith :: (a -> b -> c) -> Seq a -> Seq b -> Seq c
+zipWith f a b = fromList (Prelude.zipWith f (toListS a) (toListS b))
+
+-- In order, stable: equal elements keep their order.
+sort :: Ord a => Seq a -> Seq a
+sort s = fromList (List.sort (toListS s))
+
+sortBy :: (a -> a -> Ordering) -> Seq a -> Seq a
+sortBy f s = fromList (List.sortBy f (toListS s))
+
+-- With positions ------------------------------------------------------------------------------
+
+mapWithIndex :: (Int -> a -> b) -> Seq a -> Seq b
+mapWithIndex f s = go 0 s
+  where
+    go _ Tip = Tip
+    go from (Bin n x l r) = Bin n (f (from + size l) x) (go from l) (go (from + size l + 1) r)
+
+foldrWithIndex :: (Int -> a -> b -> b) -> b -> Seq a -> b
+foldrWithIndex f z s = Prelude.foldr (\(i, x) acc -> f i x acc) z (Prelude.zip [0 ..] (toListS s))
+
+foldlWithIndex :: (b -> Int -> a -> b) -> b -> Seq a -> b
+foldlWithIndex f z s = Prelude.foldl (\acc (i, x) -> f acc i x) z (Prelude.zip [0 ..] (toListS s))
+
+-- Instances -----------------------------------------------------------------------------------
+
+toListS :: Seq a -> [a]
+toListS s = go s []
+  where
+    go Tip rest = rest
+    go (Bin _ x l r) rest = go l (x : go r rest)
+
+instance Functor Seq where
+  fmap _ Tip = Tip
+  fmap f (Bin n x l r) = Bin n (f x) (fmap f l) (fmap f r)
+
+instance Foldable Seq where
+  foldr f z s = Prelude.foldr f z (toListS s)
+  toList s = toListS s
+
+instance Eq a => Eq (Seq a) where
+  a == b = toListS a == toListS b
+
+instance Ord a => Ord (Seq a) where
+  compare a b = compare (toListS a) (toListS b)
+
+instance Show a => Show (Seq a) where
+  show s = "fromList " ++ show (toListS s)
+  showsPrec d s = showParenString (d > 10) ("fromList " ++ show (toListS s))
+
+instance Semigroup (Seq a) where
+  a <> b = merge a (b)
+
+instance Monoid (Seq a) where
+  mempty = Tip
+
+-- Whether the tree is as it should be: the size kept in each node right,
+-- and every node balanced, as Data.Map.valid checks.
+valid :: Seq a -> Bool
+valid Tip = True
+valid (Bin n _ l r) =
+  n == size l + size r + 1 && (size l + size r <= 1 || size l <= 3 * size r && size r <= 3 * size l) && valid l && valid r
+
+-- Balancing, as in Data.Map ----------------------------------------------------------------
+
+size :: Seq a -> Int
+size Tip = 0
+size (Bin n _ _ _) = n
+
+bin :: a -> Seq a -> Seq a -> Seq a
+bin x l r = Bin (size l + size r + 1) x l r
+
+-- A node whose subtrees were balanced, and one of which grew or shrank by
+-- one element.
+balance :: a -> Seq a -> Seq a -> Seq a
+balance x l r
+  | sl + sr <= 1 = bin x l r
+  | sr > 3 * sl = rotateL x l r
+  | sl > 3 * sr = rotateR x l r
+  | otherwise = bin x l r
+  where
+    sl = size l
+    sr = size r
+
+rotateL :: a -> Seq a -> Seq a -> Seq a
+rotateL x l r@(Bin _ _ rl rr)
+  | size rl < 2 * size rr = singleL x l r
+  | otherwise = doubleL x l r
+rotateL x l Tip = bin x l Tip
+
+rotateR :: a -> Seq a -> Seq a -> Seq a
+rotateR x l@(Bin _ _ ll lr) r
+  | size lr < 2 * size ll = singleR x l r
+  | otherwise = doubleR x l r
+rotateR x Tip r = bin x Tip r
+
+singleL :: a -> Seq a -> Seq a -> Seq a
+singleL x1 t1 (Bin _ x2 t2 t3) = bin x2 (bin x1 t1 t2) t3
+singleL x l Tip = bin x l Tip
+
+singleR :: a -> Seq a -> Seq a -> Seq a
+singleR x1 (Bin _ x2 t1 t2) t3 = bin x2 t1 (bin x1 t2 t3)
+singleR x Tip r = bin x Tip r
+
+doubleL :: a -> Seq a -> Seq a -> Seq a
+doubleL x1 t1 (Bin _ x2 (Bin _ x3 t2 t3) t4) = bin x3 (bin x1 t1 t2) (bin x2 t3 t4)
+doubleL x l r = singleL x l r
+
+doubleR :: a -> Seq a -> Seq a -> Seq a
+doubleR x1 (Bin _ x2 t1 (Bin _ x3 t2 t3)) t4 = bin x3 (bin x2 t1 t2) (bin x1 t3 t4)
+doubleR x l r = singleR x l r
+
+insertMin :: a -> Seq a -> Seq a
+insertMin x Tip = singleton x
+insertMin x (Bin _ y l r) = balance y (insertMin x l) r
+
+insertMax :: a -> Seq a -> Seq a
+insertMax x Tip = singleton x
+insertMax x (Bin _ y l r) = balance y l (insertMax x r)
+
+-- x between two trees of any sizes.
+link :: a -> Seq a -> Seq a -> Seq a
+link x Tip r = insertMin x r
+link x l Tip = insertMax x l
+link x l@(Bin sl xl ll lr) r@(Bin sr xr rl rr)
+  | 3 * sl < sr = balance xr (link x l rl) rr
+  | 3 * sr < sl = balance xl ll (link x lr r)
+  | otherwise = bin x l r
+
+-- Two trees of any sizes, one after the other.
+merge :: Seq a -> Seq a -> Seq a
+merge Tip b = b
+merge a Tip = a
+merge a@(Bin sa xa la ra) b@(Bin sb xb lb rb)
+  | 3 * sa < sb = balance xb (merge a lb) rb
+  | 3 * sb < sa = balance xa la (merge ra b)
+  | otherwise = glue a b
+
+-- Two balanced trees of sizes within a factor of three, one after the other.
+glue :: Seq a -> Seq a -> Seq a
+glue Tip r = r
+glue l Tip = l
+glue l r
+  | size l > size r = case lastOf l of
+      Just x -> balance x (deleteAt (size l - 1) l) r
+      Nothing -> r
+  | otherwise = case lookup 0 r of
+      Just x -> balance x l (deleteAt 0 r)
+      Nothing -> l
+
+lastOf :: Seq a -> Maybe a
+lastOf s = lookup (size s - 1) s

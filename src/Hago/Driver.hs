@@ -80,7 +80,9 @@ libraryModules = M.fromList
   , ("Data.Maybe", $(embedFile "lib/Data/Maybe.hgo"))
   , ("Data.IntMap", $(embedFile "lib/Data/IntMap.hgo"))
   , ("Data.IntMap.Strict", $(embedFile "lib/Data/IntMap/Strict.hgo"))
-  , ("Data.Map.Strict", $(embedFile "lib/Data/Map/Strict.hgo")) ]
+  , ("Data.Map.Strict", $(embedFile "lib/Data/Map/Strict.hgo"))
+  , ("Data.Sequence", $(embedFile "lib/Data/Sequence.hgo"))
+  , ("Data.Foldable", $(embedFile "lib/Data/Foldable.hgo")) ]
 
 -- | The runtime copied into every program: runtime.go, and the thunks of
 -- thunk_sequential.go, or concurrent.go for a program that starts goroutines.

@@ -246,6 +246,8 @@ every name each one exports, with its type and what it does:
 | `Data.Map` | balanced search trees from keys to values, as in containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (no `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` and `Foldable`; import it qualified |
 | `Data.Set` | the same for sets: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; import it qualified |
 | `Data.IntMap` | `Data.Map` with `Int` keys, under containers' name (`IntMap v` is `Map Int v`); `Data.Map.Strict` and `Data.IntMap.Strict` are the same maps, since Hago's values are computed when they are put in |
+| `Data.Sequence` | sequences with `<\|`, `\|>`, `><`, `lookup` and `!?` (with `Maybe`), `update`, `insertAt`, `deleteAt`, `splitAt`, `take`, `drop`, `viewl`, `viewr`, all in logarithmic time: a balanced tree by position, not containers' finger tree, which Hago's specialisation cannot copy; import it qualified |
+| `Data.Foldable` | `Foldable` and its functions, the Prelude's, under that name, with `foldl'` |
 | `Data.Maybe` | `isJust`, `isNothing`, `catMaybes`, `mapMaybe`, `listToMaybe`, `maybeToList`, `fromMaybe` (no `fromJust`) |
 | `Data.Bits` | `.&.`, `.\|.`, `xor`, `complement`, `shiftL`, `shiftR`, `testBit`, `setBit`, `clearBit`, `popCount`, `bit`, `countLeadingZeros`, for `Int` and the integers below |
 | `Data.Word`, `Data.Int` | `Word8` to `Word64` and `Word`, `Int8` to `Int64`: Go's integers of those sizes, which wrap around; `Num`, `Integral`, `Enum`, `Bounded`, `Bits` |
