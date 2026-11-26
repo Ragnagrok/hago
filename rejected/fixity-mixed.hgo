@@ -1,0 +1,6 @@
+-- expects: cannot mix `<|' [infixr 5] and `|>' [infixl 5] in the same infix expression: add parentheses
+import qualified Data.Sequence as Seq
+import Data.Sequence ((<|), (|>))
+
+main :: IO ()
+main = print (0 <| Seq.fromList [1, 2 :: Int] |> 3)

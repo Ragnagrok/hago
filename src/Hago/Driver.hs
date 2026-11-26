@@ -18,7 +18,7 @@ import Hago.Expand (expandSynonyms, synonymsOf)
 import Hago.Inline (inlineSmall)
 import Hago.Lift (floatStatics, liftLocals)
 import Hago.Newtype (eraseNewtypes)
-import Hago.Parser (fixitiesOf, parseModule, resolveFixity)
+import Hago.Parser (fixityConflict, fixitiesOf, parseModule, resolveFixity)
 import Hago.Cache
 import Hago.Rename (Renamed (..), renameModule)
 import Hago.Sink (sinkLocals)
@@ -164,6 +164,7 @@ compileModule before (path, m) = do
   (renamed, rn) <- renameModule (ifRenamed before) m
   expanded <- expandSynonyms (ifSynonyms before) renamed
   decls <- expandDeriving expanded
+  maybe (pure ()) Left (fixityConflict (ifFixities before) decls)
   checked <- typecheckModule path (modName m) (ifChecked before) (resolveFixity (ifFixities before) decls)
   pure (Iface rn (synonymsOf renamed) (fixitiesOf renamed) checked)
 

@@ -2,9 +2,11 @@
 
 -- | Parser from tokens (after layout) to the surface syntax, plus fixity
 -- resolution of operator sequences.
-module Hago.Parser (parseModule, resolveFixity, fixitiesOf) where
+module Hago.Parser (parseModule, resolveFixity, fixityConflict, fixitiesOf) where
 
 import Control.Monad
+import Data.Data (Data, gmapQ)
+import Data.Typeable (cast)
 import Data.List (groupBy, nub)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)
@@ -737,9 +739,43 @@ type Fixities = M.Map Name (Assoc, Int)
 -- | Resolves operators with the fixities a module declares and those of the
 -- modules before it.
 resolveFixity :: [(Name, (Assoc, Int))] -> [Decl] -> [Decl]
-resolveFixity before ds = map (rDecl fixities) ds
+resolveFixity before ds = map (rDecl (fixitiesWith before ds)) ds
+
+fixitiesWith :: [(Name, (Assoc, Int))] -> [Decl] -> Fixities
+fixitiesWith before ds = M.fromList ((":", (AssocR, 5)) : before ++ fixitiesOf ds)
+
+-- | Two operators of one precedence side by side (every operator between
+-- them binding tighter) that cannot be grouped, as Haskell says: of
+-- different associativities, or neither associative. a <| b |> c could be
+-- (a <| b) |> c or a <| (b |> c), and a == b == c means nothing; Haskell
+-- refuses both, and so does Hago, instead of guessing.
+fixityConflict :: [(Name, (Assoc, Int))] -> [Decl] -> Maybe String
+fixityConflict before ds = case concatMap seqConflicts (opSeqs ds) of
+  msg : _ -> Just msg
+  [] -> Nothing
   where
-    fixities = M.fromList ((":", (AssocR, 5)) : before ++ fixitiesOf ds)
+    fx = fixitiesWith before ds
+    fixOf op = fromMaybe (AssocL, 9) (M.lookup op fx)
+    seqConflicts ops =
+      [ showLoc l1 ++ ": cannot mix " ++ shown o1 ++ " and " ++ shown o2 ++ " in the same infix expression: add parentheses"
+      | (i, (o1, l1)) <- zip [0 :: Int ..] ops
+      , (o2, _) <- take 1 [x | (j, x) <- zip [0 ..] ops, j > i, snd (fixOf (fst x)) <= snd (fixOf o1)]
+      , let (a1, p1) = fixOf o1
+            (a2, p2) = fixOf o2
+      , p1 == p2, a1 /= a2 || a1 == AssocN ]
+    shown op = "`" ++ unqualOp op ++ "' [" ++ assocName (fst (fixOf op)) ++ " " ++ show (snd (fixOf op)) ++ "]"
+    assocName = \case
+      AssocL -> "infixl"
+      AssocR -> "infixr"
+      AssocN -> "infix"
+    unqualOp op = reverse (takeWhile (/= '.') (reverse op)) `orIfEmpty` op
+    orIfEmpty a b = if null a then b else a
+
+-- | The operators of every unresolved operator expression, in order.
+opSeqs :: Data a => a -> [[(Name, Loc)]]
+opSeqs x = case cast x of
+  Just (EOpSeq e0 rest) -> map fst rest : (opSeqs e0 ++ concatMap (opSeqs . snd) rest)
+  _ -> concat (gmapQ opSeqs x)
 
 -- | The fixities declared anywhere in a module.
 fixitiesOf :: [Decl] -> [(Name, (Assoc, Int))]

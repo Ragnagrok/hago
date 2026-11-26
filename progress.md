@@ -745,8 +745,14 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       `examples/sequence.hgo` runs three thousand random operations against a list and checks
       the tree after each (twenty thousand passed). And `Data.Foldable`, the Prelude's under
       that name.
-- [ ] **Operators of one precedence and different associativities** side by side (`0 <| s |>
-      11`, infixr 5 and infixl 5) are accepted and grouped somehow; Haskell refuses them.
+- [x] **Operators of one precedence and different associativities** side by side (`0 <| s |>
+      11`, infixr 5 and infixl 5) were accepted and grouped somehow, and `a == b == c` too
+      (`infix 4`, neither associative); Haskell refuses them. Two operators of one
+      precedence, every operator between them binding tighter, that are of different
+      associativities or neither associative, are now an error, with GHC's words ("cannot mix
+      ... in the same infix expression"), checked before fixities are resolved
+      (`fixityConflict`). `rejected/fixity-*.hgo`. A minus after such an operator is still
+      negation (see below).
 - [x] **Pattern guards** (2026-11-26), which the Hugen port missed (`Match.throws` became nested
       `case`s; the error was "unexpected `<-`"). A guard is qualifiers separated by commas, as
       Haskell 2010's: conditions, patterns with `<-`, and `let`s. The parser makes one with
