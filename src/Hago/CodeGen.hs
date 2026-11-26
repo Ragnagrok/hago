@@ -787,11 +787,60 @@ genRow tl ctx binds guards = do
       Nothing -> tl c e
       Just (CVar "otherwise" _ _) | isTopOtherwise c -> tl c e
       Just (CCon "True" _ _) -> tl c e
+      Just cond | Just fused <- patternGuard cond e -> do
+        here <- fused c
+        rest' <- go c rest
+        pure (here ++ rest')
       Just cond -> do
         cond' <- genExpr c cond
         body <- tl c e
         rest' <- go c rest
         pure (["if " ++ cond' ++ " {"] ++ body ++ ["}"] ++ rest')
+    -- A pattern guard, as the parser makes it (see Hago.Parser.guardOf): the
+    -- condition (case s of p -> holds; _ -> False) and the body (case s of p
+    -- -> body), the same s and p in both. s is computed once and matched once,
+    -- and what holds and the body need is bound there; a failure leaves the
+    -- block, to the guards after it, as an if's would.
+    patternGuard cond body = case (cond, body) of
+      (CMatch [s] [CRow [p] [] [(Nothing, c')], CRow [CPWild] [] [(Nothing, CCon "False" _ _)]] _, CMatch [s2] (CRow [p2] [] [(Nothing, b0)] : _) _)
+        | show s == show s2, Just ren <- samePat p p2 -> Just $ \c -> do
+            -- the body's copy of the pattern names its variables apart
+            let b' = everywhere (\case
+                       CVar x ref t | Just y <- M.lookup x ren -> CVar y ref t
+                       e' -> e') b0
+            inner <- fusedOr c' b'
+            genMatch (\c2 _ -> inner c2) c [s] [CRow [p] [] [(Nothing, b')]] >>= \ls -> pure (dropPanic ls)
+      _ -> Nothing
+    -- two patterns alike but for the names of their variables: the second's
+    -- names to the first's
+    samePat a b = case (a, b) of
+      (CPVar x _, CPVar y _) -> Just (M.singleton y x)
+      (CPWild, CPWild) -> Just M.empty
+      (CPAs x _ q, CPAs y _ q2) -> M.insert y x <$> samePat q q2
+      (CPCon k _ qs, CPCon k2 _ qs2) | k == k2, length qs == length qs2 -> M.unions <$> zipWithM samePat qs qs2
+      (CPForce q, CPForce q2) -> samePat q q2
+      _ | show a == show b -> Just M.empty
+      _ -> Nothing
+    -- what is left of the qualifiers: more patterns, conditions, lets, or none
+    fusedOr cond body = pure $ \c -> case (cond, body) of
+      (CCon "True" _ _, _) -> tl c body
+      (CIf b c' (CCon "False" _ _) _, _) -> do
+        b' <- genExpr c b
+        inner <- fusedOr c' body >>= \k -> k c
+        pure (["if " ++ b' ++ " {"] ++ inner ++ ["}"])
+      (CLet bs c' _, CLet bs2 b' _) | length bs == length bs2, show [x | CBind _ _ _ x <- bs] == show [x | CBind _ _ _ x <- bs2] -> do
+        (c2, ls) <- genBinds c bs
+        inner <- fusedOr c' b' >>= \k -> k c2
+        pure (["{"] ++ ls ++ inner ++ ["}"])
+      _ | Just fused <- patternGuard cond body -> fused c
+      _ -> do
+        cond' <- genExpr c cond
+        b <- tl c body
+        pure (["if " ++ cond' ++ " {"] ++ b ++ ["}"])
+    -- a match that fails here falls through to what follows, not to a panic
+    dropPanic ls = case reverse ls of
+      l : more | "panic(" `isPrefixOf` l -> reverse more
+      _ -> ls
     isTopOtherwise c = case M.lookup "otherwise" (cxVars c) of
       Just (VKTop 0 _ _) -> True
       _ -> False

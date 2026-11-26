@@ -362,10 +362,9 @@ rhs sep = do
 --   | Just x <- lookup k m, x > 3 = x
 --
 -- is the condition (case lookup k m of Just x -> x > 3; _ -> False) and the
--- body (case lookup k m of Just x -> x). An expression a pattern is matched
--- against is computed again for the body, which costs its time and nothing
--- else, since it is pure; if the guard fails, the next one is tried, and
--- then the next clause, as for any guard.
+-- body (case lookup k m of Just x -> x). Code generation sees the two and
+-- computes lookup k m once (see genRow in Hago.CodeGen); if the guard
+-- fails, the next one is tried, and then the next clause, as for any guard.
 guardOf :: [Qualifier] -> Expr -> (Maybe Expr, Expr)
 guardOf qs body = case qs of
   [QGuard b] -> (Just b, body)

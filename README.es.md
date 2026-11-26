@@ -395,7 +395,7 @@ data Tree a = Leaf | Node (Tree a) a (Tree a)
 - **Las guardas** tienen varios calificadores, como en Haskell 2010: condiciones, patrones
   (`| Just v <- Map.lookup k m, v > 10 = ...`) y `let`s; cuando una falla se prueba la guarda
   siguiente, y después la cláusula siguiente (`examples/pattern-guards.hgo`). La expresión que se
-  compara con un patrón se vuelve a calcular para el cuerpo, lo que cuesta su tiempo y nada más.
+  compara con un patrón se calcula una sola vez.
 - **Las listas por comprensión** tienen generadores, guardas y `let`, y son perezosas, como las
   listas que construyen. Un generador es un `foldr` que pone cada elemento antes del resto o lo
   saltea, como las traduce GHC, así que una comprensión guardada como lista es un loop que

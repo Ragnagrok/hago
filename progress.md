@@ -758,9 +758,11 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       Haskell 2010's: conditions, patterns with `<-`, and `let`s. The parser makes one with
       more than a condition into a condition that the qualifiers hold in turn (`case e of p ->
       ...; _ -> False`) and puts the body where they bind their variables, so the guards,
-      their order and the fall through to the next clause are the ones there were. The
-      expression a pattern is matched against is computed again for the body: time, nothing
-      else, since it is pure; a guard that bound its variables in Core would not. The layout
+      their order and the fall through to the next clause are the ones there were. Code
+      generation (`genRow`) sees a condition and a body of that shape, the same expression and
+      pattern but for the names of its variables, and makes one block: the expression
+      computed once, matched once, the rest of the condition and the body inside, a failure
+      falling through to the next guard. The layout
       closes a `let` opened in a guard at the comma after it, as the Report's parse-error(t)
       does. `examples/pattern-guards.hgo`; GHC prints the same.
 - [x] **A minus after an operator** (2026-11-26): `x < -0.4` was a syntax error ("unexpected
