@@ -1,7 +1,5 @@
 # Hago
 
-*[Leer en español](README.es.md)*
-
 A prototype compiler for a language that looks like Haskell 98 but evaluates like Go: strict by
 default, compiled to plain Go source, and able to call Go functions directly. The compiler is
 written in Haskell.
