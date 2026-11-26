@@ -1,0 +1,66 @@
+-- Operations on the bits of integers, as Haskell's Data.Bits: Int here,
+-- and the integers of Data.Word and Data.Int. Bit 0 is the lowest.
+module Data.Bits (Bits (..), FiniteBits (..), (.^.), (.<<.), (.>>.)) where
+
+infixl 8 `shiftL`, `shiftR`, `shift`, .<<., .>>.
+infixl 7 .&.
+infixl 6 `xor`, .^.
+infixl 5 .|.
+
+class (Eq a, Num a) => Bits a where
+  (.&.), (.|.), xor :: a -> a -> a
+  complement :: a -> a
+  -- by a number of places: a negative one shifts the other way
+  shiftL, shiftR, shift :: a -> Int -> a
+  testBit :: a -> Int -> Bool
+  setBit, clearBit, complementBit :: a -> Int -> a
+  -- how many bits are set
+  popCount :: a -> Int
+  zeroBits :: a
+  -- the number with only bit i set
+  bit :: Int -> a
+  shift x n = if n >= 0 then shiftL x n else shiftR x (negate n)
+  setBit x i = x .|. bit i
+  clearBit x i = x .&. complement (bit i)
+  complementBit x i = x `xor` bit i
+  zeroBits = fromInteger 0
+  bit i = shiftL (fromInteger 1) i
+
+class Bits a => FiniteBits a where
+  finiteBitSize :: a -> Int
+  countLeadingZeros, countTrailingZeros :: a -> Int
+
+-- xor, shiftL and shiftR as operators, as in base 4.17.
+(.^.) :: Bits a => a -> a -> a
+a .^. b = xor a b
+
+(.<<.), (.>>.) :: Bits a => a -> Int -> a
+a .<<. n = shiftL a n
+a .>>. n = shiftR a n
+
+foreign import go "rt_bitAnd" bitAnd :: a -> a -> a
+foreign import go "rt_bitOr" bitOr :: a -> a -> a
+foreign import go "rt_bitXor" bitXor :: a -> a -> a
+foreign import go "rt_bitNot" bitNot :: a -> a
+foreign import go "rt_shiftL" bitShiftL :: a -> Int -> a
+foreign import go "rt_shiftR" bitShiftR :: a -> Int -> a
+foreign import go "rt_bitTest" bitTest :: a -> Int -> Bool
+foreign import go "rt_popCount" bitCount :: a -> Int
+foreign import go "rt_bitSize" bitSize :: a -> Int
+foreign import go "rt_leadingZeros" bitLeading :: a -> Int
+foreign import go "rt_trailingZeros" bitTrailing :: a -> Int
+
+instance Bits Int where
+  a .&. b = bitAnd a b
+  a .|. b = bitOr a b
+  xor a b = bitXor a b
+  complement a = bitNot a
+  shiftL a n = bitShiftL a n
+  shiftR a n = bitShiftR a n
+  testBit a i = bitTest a i
+  popCount a = bitCount a
+
+instance FiniteBits Int where
+  finiteBitSize a = bitSize a
+  countLeadingZeros a = bitLeading a
+  countTrailingZeros a = bitTrailing a

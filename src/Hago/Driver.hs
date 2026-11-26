@@ -73,7 +73,14 @@ libraryModules = M.fromList
   , ("Data.IORef", $(embedFile "lib/Data/IORef.hgo"))
   , ("Data.STRef", $(embedFile "lib/Data/STRef.hgo"))
   , ("Data.Vector.Mutable", $(embedFile "lib/Data/Vector/Mutable.hgo"))
-  , ("Data.HashTable", $(embedFile "lib/Data/HashTable.hgo")) ]
+  , ("Data.HashTable", $(embedFile "lib/Data/HashTable.hgo"))
+  , ("Data.Bits", $(embedFile "lib/Data/Bits.hgo"))
+  , ("Data.Word", $(embedFile "lib/Data/Word.hgo"))
+  , ("Data.Int", $(embedFile "lib/Data/Int.hgo"))
+  , ("Data.Maybe", $(embedFile "lib/Data/Maybe.hgo"))
+  , ("Data.IntMap", $(embedFile "lib/Data/IntMap.hgo"))
+  , ("Data.IntMap.Strict", $(embedFile "lib/Data/IntMap/Strict.hgo"))
+  , ("Data.Map.Strict", $(embedFile "lib/Data/Map/Strict.hgo")) ]
 
 -- | The runtime copied into every program: runtime.go, and the thunks of
 -- thunk_sequential.go, or concurrent.go for a program that starts goroutines.
@@ -97,7 +104,8 @@ runtime = Runtime
       [ $(embedFile "runtime/lib_codec.go")
       , $(embedFile "runtime/lib_process.go")
       , $(embedFile "runtime/lib_http.go")
-      , $(embedFile "runtime/lib_mutable.go") ]
+      , $(embedFile "runtime/lib_mutable.go")
+      , $(embedFile "runtime/lib_bits.go") ]
   }
   where
     part src = RuntimePart (afterMarker src) (definedIn src) (importsOf src)

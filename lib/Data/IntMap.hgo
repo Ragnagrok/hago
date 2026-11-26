@@ -1,0 +1,10 @@
+-- Maps from Int keys, as containers' Data.IntMap: a Data.Map whose keys
+-- are Ints, with all its functions. Import it qualified: import qualified
+-- Data.IntMap as IntMap.
+module Data.IntMap (IntMap, Key, module Data.Map) where
+
+import Data.Map
+
+type IntMap v = Map Int v
+
+type Key = Int

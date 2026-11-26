@@ -1,0 +1,315 @@
+-- Unsigned integers of fixed sizes, as Haskell's Data.Word: Go's uint8,
+-- uint16, uint32, uint64 and uint. Arithmetic wraps around, and
+-- fromIntegral keeps the low bits: fromIntegral (300 :: Int) :: Word8 is 44.
+-- They are Num, Integral, Enum, Bounded, Bits and FiniteBits.
+module Data.Word (Word8, Word16, Word32, Word64, Word) where
+
+import Data.Bits
+
+foreign import go type "uint8" Word8
+foreign import go type "uint16" Word16
+foreign import go type "uint32" Word32
+foreign import go type "uint64" Word64
+foreign import go type "uint" Word
+
+foreign import go "rt_fromInt" fromIntOf :: Int -> a
+foreign import go "rt_toInt" toIntOf :: a -> Int
+foreign import go "rt_quotOf" quotOf :: a -> a -> a
+foreign import go "rt_remOf" remOf :: a -> a -> a
+foreign import go "rt_divOf" divOf :: a -> a -> a
+foreign import go "rt_modOf" modOf :: a -> a -> a
+foreign import go "rt_bitAnd" bitAnd :: a -> a -> a
+foreign import go "rt_bitOr" bitOr :: a -> a -> a
+foreign import go "rt_bitXor" bitXor :: a -> a -> a
+foreign import go "rt_bitNot" bitNot :: a -> a
+foreign import go "rt_shiftL" bitShiftL :: a -> Int -> a
+foreign import go "rt_shiftR" bitShiftR :: a -> Int -> a
+foreign import go "rt_bitTest" bitTest :: a -> Int -> Bool
+foreign import go "rt_popCount" bitCount :: a -> Int
+foreign import go "rt_bitSize" bitSize :: a -> Int
+foreign import go "rt_leadingZeros" bitLeading :: a -> Int
+foreign import go "rt_trailingZeros" bitTrailing :: a -> Int
+foreign import go "rt_wordToUint64" toUint64 :: a -> Word64
+foreign import go "rt_wordToInteger" uint64ToInteger :: Word64 -> Integer
+
+-- Word8 ------------------------------------------------------------------------
+
+instance Eq Word8 where
+  x == y = primEq x y
+  x /= y = primNeq x y
+
+instance Ord Word8 where
+  x < y = primLt x y
+  x <= y = primLe x y
+  x > y = primGt x y
+  x >= y = primGe x y
+  compare x y = if primLt x y then LT else if primEq x y then EQ else GT
+
+instance Show Word8 where
+  show x = primShow x
+  showsPrec _ x = primShow x
+
+instance Num Word8 where
+  x + y = primAdd x y
+  x - y = primSub x y
+  x * y = primMul x y
+  negate x = primNeg x
+  fromInteger n = fromIntOf n
+
+instance Integral Word8 where
+  div x y = divOf x y
+  mod x y = modOf x y
+  quot x y = quotOf x y
+  rem x y = remOf x y
+  toInt x = toIntOf x
+
+instance Bounded Word8 where
+  minBound = 0
+  maxBound = 255
+
+instance Enum Word8 where
+  fromEnum x = toIntOf x
+  toEnum n = if toIntOf (fromIntOf n :: Word8) == n then Just (fromIntOf n) else Nothing
+  succ x = if x == maxBound then Nothing else Just (x + 1)
+  pred x = if x == minBound then Nothing else Just (x - 1)
+
+instance Bits Word8 where
+  a .&. b = bitAnd a b
+  a .|. b = bitOr a b
+  xor a b = bitXor a b
+  complement a = bitNot a
+  shiftL a n = bitShiftL a n
+  shiftR a n = bitShiftR a n
+  testBit a i = bitTest a i
+  popCount a = bitCount a
+
+instance FiniteBits Word8 where
+  finiteBitSize a = bitSize a
+  countLeadingZeros a = bitLeading a
+  countTrailingZeros a = bitTrailing a
+
+-- Word16 ------------------------------------------------------------------------
+
+instance Eq Word16 where
+  x == y = primEq x y
+  x /= y = primNeq x y
+
+instance Ord Word16 where
+  x < y = primLt x y
+  x <= y = primLe x y
+  x > y = primGt x y
+  x >= y = primGe x y
+  compare x y = if primLt x y then LT else if primEq x y then EQ else GT
+
+instance Show Word16 where
+  show x = primShow x
+  showsPrec _ x = primShow x
+
+instance Num Word16 where
+  x + y = primAdd x y
+  x - y = primSub x y
+  x * y = primMul x y
+  negate x = primNeg x
+  fromInteger n = fromIntOf n
+
+instance Integral Word16 where
+  div x y = divOf x y
+  mod x y = modOf x y
+  quot x y = quotOf x y
+  rem x y = remOf x y
+  toInt x = toIntOf x
+
+instance Bounded Word16 where
+  minBound = 0
+  maxBound = 65535
+
+instance Enum Word16 where
+  fromEnum x = toIntOf x
+  toEnum n = if toIntOf (fromIntOf n :: Word16) == n then Just (fromIntOf n) else Nothing
+  succ x = if x == maxBound then Nothing else Just (x + 1)
+  pred x = if x == minBound then Nothing else Just (x - 1)
+
+instance Bits Word16 where
+  a .&. b = bitAnd a b
+  a .|. b = bitOr a b
+  xor a b = bitXor a b
+  complement a = bitNot a
+  shiftL a n = bitShiftL a n
+  shiftR a n = bitShiftR a n
+  testBit a i = bitTest a i
+  popCount a = bitCount a
+
+instance FiniteBits Word16 where
+  finiteBitSize a = bitSize a
+  countLeadingZeros a = bitLeading a
+  countTrailingZeros a = bitTrailing a
+
+-- Word32 ------------------------------------------------------------------------
+
+instance Eq Word32 where
+  x == y = primEq x y
+  x /= y = primNeq x y
+
+instance Ord Word32 where
+  x < y = primLt x y
+  x <= y = primLe x y
+  x > y = primGt x y
+  x >= y = primGe x y
+  compare x y = if primLt x y then LT else if primEq x y then EQ else GT
+
+instance Show Word32 where
+  show x = primShow x
+  showsPrec _ x = primShow x
+
+instance Num Word32 where
+  x + y = primAdd x y
+  x - y = primSub x y
+  x * y = primMul x y
+  negate x = primNeg x
+  fromInteger n = fromIntOf n
+
+instance Integral Word32 where
+  div x y = divOf x y
+  mod x y = modOf x y
+  quot x y = quotOf x y
+  rem x y = remOf x y
+  toInt x = toIntOf x
+
+instance Bounded Word32 where
+  minBound = 0
+  maxBound = 4294967295
+
+instance Enum Word32 where
+  fromEnum x = toIntOf x
+  toEnum n = if toIntOf (fromIntOf n :: Word32) == n then Just (fromIntOf n) else Nothing
+  succ x = if x == maxBound then Nothing else Just (x + 1)
+  pred x = if x == minBound then Nothing else Just (x - 1)
+
+instance Bits Word32 where
+  a .&. b = bitAnd a b
+  a .|. b = bitOr a b
+  xor a b = bitXor a b
+  complement a = bitNot a
+  shiftL a n = bitShiftL a n
+  shiftR a n = bitShiftR a n
+  testBit a i = bitTest a i
+  popCount a = bitCount a
+
+instance FiniteBits Word32 where
+  finiteBitSize a = bitSize a
+  countLeadingZeros a = bitLeading a
+  countTrailingZeros a = bitTrailing a
+
+-- Word64 ------------------------------------------------------------------------
+
+instance Eq Word64 where
+  x == y = primEq x y
+  x /= y = primNeq x y
+
+instance Ord Word64 where
+  x < y = primLt x y
+  x <= y = primLe x y
+  x > y = primGt x y
+  x >= y = primGe x y
+  compare x y = if primLt x y then LT else if primEq x y then EQ else GT
+
+instance Show Word64 where
+  show x = primShow x
+  showsPrec _ x = primShow x
+
+instance Num Word64 where
+  x + y = primAdd x y
+  x - y = primSub x y
+  x * y = primMul x y
+  negate x = primNeg x
+  fromInteger n = fromIntOf n
+
+instance Integral Word64 where
+  div x y = divOf x y
+  mod x y = modOf x y
+  quot x y = quotOf x y
+  rem x y = remOf x y
+  toInt x = toIntOf x
+  toInteger x = uint64ToInteger (toUint64 x)
+
+instance Bounded Word64 where
+  minBound = 0
+  maxBound = complement 0
+
+instance Enum Word64 where
+  fromEnum x = toIntOf x
+  toEnum n = if toIntOf (fromIntOf n :: Word64) == n then Just (fromIntOf n) else Nothing
+  succ x = if x == maxBound then Nothing else Just (x + 1)
+  pred x = if x == minBound then Nothing else Just (x - 1)
+
+instance Bits Word64 where
+  a .&. b = bitAnd a b
+  a .|. b = bitOr a b
+  xor a b = bitXor a b
+  complement a = bitNot a
+  shiftL a n = bitShiftL a n
+  shiftR a n = bitShiftR a n
+  testBit a i = bitTest a i
+  popCount a = bitCount a
+
+instance FiniteBits Word64 where
+  finiteBitSize a = bitSize a
+  countLeadingZeros a = bitLeading a
+  countTrailingZeros a = bitTrailing a
+
+-- Word ------------------------------------------------------------------------
+
+instance Eq Word where
+  x == y = primEq x y
+  x /= y = primNeq x y
+
+instance Ord Word where
+  x < y = primLt x y
+  x <= y = primLe x y
+  x > y = primGt x y
+  x >= y = primGe x y
+  compare x y = if primLt x y then LT else if primEq x y then EQ else GT
+
+instance Show Word where
+  show x = primShow x
+  showsPrec _ x = primShow x
+
+instance Num Word where
+  x + y = primAdd x y
+  x - y = primSub x y
+  x * y = primMul x y
+  negate x = primNeg x
+  fromInteger n = fromIntOf n
+
+instance Integral Word where
+  div x y = divOf x y
+  mod x y = modOf x y
+  quot x y = quotOf x y
+  rem x y = remOf x y
+  toInt x = toIntOf x
+  toInteger x = uint64ToInteger (toUint64 x)
+
+instance Bounded Word where
+  minBound = 0
+  maxBound = complement 0
+
+instance Enum Word where
+  fromEnum x = toIntOf x
+  toEnum n = if toIntOf (fromIntOf n :: Word) == n then Just (fromIntOf n) else Nothing
+  succ x = if x == maxBound then Nothing else Just (x + 1)
+  pred x = if x == minBound then Nothing else Just (x - 1)
+
+instance Bits Word where
+  a .&. b = bitAnd a b
+  a .|. b = bitOr a b
+  xor a b = bitXor a b
+  complement a = bitNot a
+  shiftL a n = bitShiftL a n
+  shiftR a n = bitShiftR a n
+  testBit a i = bitTest a i
+  popCount a = bitCount a
+
+instance FiniteBits Word where
+  finiteBitSize a = bitSize a
+  countLeadingZeros a = bitLeading a
+  countTrailingZeros a = bitTrailing a

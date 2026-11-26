@@ -730,6 +730,15 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
         parameters: Haskell's monomorphism restriction, which does not apply when the
         signature asks for the polymorphism. A value with a signature is lifted too, given
         the variables it uses as parameters. `examples/locals.hgo`; GHC prints the same.
+- [x] **The libraries the Hugen port missed** (2026-11-26): `Data.Bits` (a class, for `Int`);
+      `Data.Word` and `Data.Int` (`Word8` to `Word64`, `Word`, `Int8` to `Int64`: Go's
+      integers, declared with `foreign import go type` and given the instances with the
+      Prelude's primitives, which are Go's operators, and `runtime/lib_bits.go`, generic
+      over Go's integers, for division as Haskell's, bits and conversions); `Data.Maybe`;
+      `foldl'` in `Data.List`; `Data.IntMap` (`Map Int`), and `Data.Map.Strict` and
+      `Data.IntMap.Strict` under containers' names. `examples/bits.hgo`; GHC prints the same
+      but for `succ` and `toEnum`, which give a `Maybe` in Hago. Not done: `Data.Sequence`. A
+      field used as a function (`name p`) now says what to write instead.
 - [x] **Pattern guards** (2026-11-26), which the Hugen port missed (`Match.throws` became nested
       `case`s; the error was "unexpected `<-`"). A guard is qualifiers separated by commas, as
       Haskell 2010's: conditions, patterns with `<-`, and `let`s. The parser makes one with

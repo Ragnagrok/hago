@@ -7,6 +7,13 @@ missing) return a Maybe.
 
 Its source is [`lib/Data/List.hgo`](../../lib/Data/List.hgo).
 
+```haskell
+foldl' :: Foldable t => (b -> a -> b) -> b -> t a -> b
+```
+
+foldl, under the name Haskell gives the one that computes as it goes:
+Hago computes everything as it goes.
+
 ## Sorting
 
 ```haskell

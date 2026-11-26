@@ -1,0 +1,27 @@
+-- Functions on Maybe, as Haskell's Data.Maybe. There is no fromJust: a
+-- Nothing would fail at run time; maybe or fromMaybe say what to do then.
+module Data.Maybe (maybe, fromMaybe, isJust, isNothing, catMaybes, mapMaybe, listToMaybe, maybeToList) where
+
+isJust :: Maybe a -> Bool
+isJust (Just _) = True
+isJust Nothing = False
+
+isNothing :: Maybe a -> Bool
+isNothing m = not (isJust m)
+
+-- The values of the Justs.
+catMaybes :: [Maybe a] -> [a]
+catMaybes ms = [x | Just x <- ms]
+
+-- The values f gives a Just of.
+mapMaybe :: (a -> Maybe b) -> [a] -> [b]
+mapMaybe f xs = [y | x <- xs, Just y <- [f x]]
+
+-- The first element, if there is one.
+listToMaybe :: [a] -> Maybe a
+listToMaybe (x : _) = Just x
+listToMaybe [] = Nothing
+
+maybeToList :: Maybe a -> [a]
+maybeToList (Just x) = [x]
+maybeToList Nothing = []

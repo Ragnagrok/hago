@@ -250,13 +250,17 @@ tipo y lo que hace:
 | `Control.Monad.Trans` | `MonadTrans` (`lift`), `MonadIO` (`liftIO`) |
 | `Data.Functor.Identity` | `Identity`, con trampolín |
 | `Data.String` | `uncons` en tiempo constante (un string de Go se recorta, no se copia), `length`, `elem`, `isPrefixOf`, `stripPrefix`, `stripSuffix`, `span`, `break`, `takeWhile` y `dropWhile` (recortes, en una pasada), `concat` en una pasada, `intercalate`, `replicate`; se importa calificado |
-| `Data.List` | `sort` (un merge sort estable), `sortBy`, `sortOn`, `nub`, `group`, `partition`, `intercalate` (de cualquier `Monoid`, así que también de `String`s), `intersperse`, `transpose`, `isPrefixOf` y parecidas, `tails`, `inits`, `subsequences`, `permutations`, `delete`, `\\`, `union`, `intersect`, `elemIndex`, `findIndex`, `unfoldr`, `maximumBy` y `minimumBy` (con `Maybe`) |
+| `Data.List` | `sort` (un merge sort estable), `sortBy`, `sortOn`, `nub`, `group`, `partition`, `intercalate` (de cualquier `Monoid`, así que también de `String`s), `intersperse`, `transpose`, `isPrefixOf` y parecidas, `tails`, `inits`, `subsequences`, `permutations`, `delete`, `\\`, `union`, `intersect`, `elemIndex`, `findIndex`, `unfoldr`, `maximumBy` y `minimumBy` (con `Maybe`), `foldl'` (que es `foldl`: Hago calcula a medida que avanza) |
 | `Data.Char` | `toUpper`, `toLower`, las pruebas de Unicode (`isPunctuation`, `isSymbol`...), `digitToInt` e `intToDigit` (con `Maybe`) |
 | `Control.Applicative` | `ZipList`, `liftA3`, `optional` (`Applicative` y `Alternative` están en el Prelude) |
 | `Data.Monoid` | `First`, `Last`, `Min`, `Max`, y `Sum`, `Product`, `Any`, `All` del Prelude |
 | `Data.Ord` | `comparing`, `Down`, `clamp` |
 | `Data.Map` | árboles de búsqueda balanceados de claves a valores, como en containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (sin `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` y `Foldable`; conviene importarlo calificado |
 | `Data.Set` | lo mismo para conjuntos: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; conviene importarlo calificado |
+| `Data.IntMap` | `Data.Map` con claves `Int`, con el nombre de containers (`IntMap v` es `Map Int v`); `Data.Map.Strict` y `Data.IntMap.Strict` son los mismos maps, porque Hago calcula los valores al ponerlos |
+| `Data.Maybe` | `isJust`, `isNothing`, `catMaybes`, `mapMaybe`, `listToMaybe`, `maybeToList`, `fromMaybe` (sin `fromJust`) |
+| `Data.Bits` | `.&.`, `.\|.`, `xor`, `complement`, `shiftL`, `shiftR`, `testBit`, `setBit`, `clearBit`, `popCount`, `bit`, `countLeadingZeros`, para `Int` y los enteros de abajo |
+| `Data.Word`, `Data.Int` | `Word8` a `Word64` y `Word`, `Int8` a `Int64`: los enteros de Go de esos tamaños, que dan la vuelta; `Num`, `Integral`, `Enum`, `Bounded`, `Bits` |
 | `Data.Vector` | `Vector a`, un slice de Go que Hago nunca modifica: `fromList`, `!?`, `generate`, `map`, `imap`, `filter`, `foldl`, `slice` (sin copiar), `sort`, `sortOn`, `zipWith`, `Foldable`; se importa calificado |
 | `Data.Iter` | `Iter a`, el `iter.Seq` de Go: `from`, `range`, `iterate`, `lines`, `words`, `map`, `filter`, `takeWhile`, `take`, `zipWith`, `foldl`, `sum`, `find`, `mapM_`, `singleton`; es `Monad` y `Monoid`; se importa calificado |
 | `Data.Ratio` | `Rational` (el `*big.Rat` de Go), exacto: `%`, `numerator`, `denominator`, `Num`, `Fractional`, `fromRational`, `toRational` |

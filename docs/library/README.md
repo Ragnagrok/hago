@@ -22,14 +22,20 @@ above each declaration. Do not edit these files; edit the sources and run `hago 
 | [Control.Monad.Writer](Control.Monad.Writer.md) | A computation that also writes something on the side, such as a log: tell adds to it with <>, so what is written can be any Monoid. |
 | [Control.Parallel](Control.Parallel.md) | Pure parallelism: computing the elements of a list on all the processors at once. |
 | [Crypto.Hash](Crypto.Hash.md) | Hashes of a String's bytes, in hexadecimal: SHA-1 (only for checking data against what other programs give; it is broken for security), SHA-256 and SHA-512. |
+| [Data.Bits](Data.Bits.md) | Operations on the bits of integers, as Haskell's Data.Bits: Int here, and the integers of Data.Word and Data.Int. |
 | [Data.Char](Data.Char.md) | Characters: what kind each is, and changing case. |
 | [Data.Encoding](Data.Encoding.md) | Writing any bytes with a few safe characters, and back: base64 (RFC 4648, with padding) and hexadecimal. |
 | [Data.Functor.Identity](Data.Functor.Identity.md) | The identity monad, trampolined: it runs on the same machinery as IO, so a long chain of binds runs in constant stack, and so does every transformer over it (State s is StateT s Identity). |
 | [Data.HashTable](Data.HashTable.md) | Mutable hash tables, on Go's maps: insert, lookup and delete in constant time on average. |
 | [Data.IORef](Data.IORef.md) | Mutable references in IO. |
+| [Data.Int](Data.Int.md) | Signed integers of fixed sizes, as Haskell's Data.Int: Go's int8, int16, int32 and int64 (Int itself is Go's int, of 64 bits). |
+| [Data.IntMap](Data.IntMap.md) | Maps from Int keys, as containers' Data.IntMap: a Data.Map whose keys are Ints, with all its functions. |
+| [Data.IntMap.Strict](Data.IntMap.Strict.md) | Data.IntMap, under the name of containers' strict maps: Hago's values are computed when they are put in a map anyway. |
 | [Data.Iter](Data.Iter.md) | Iterators: Go's iter.Seq. |
 | [Data.List](Data.List.md) | More functions on lists than the Prelude has: sorting, grouping, sets kept as lists, searching, and the ways of cutting a list up. |
 | [Data.Map](Data.Map.md) | Finite maps from keys to values, kept as a balanced binary search tree, as in Haskell's containers: a tree whose subtrees' sizes never differ by more than a factor of three (Adams, "Efficient sets: a balancing act", 1993). |
+| [Data.Map.Strict](Data.Map.Strict.md) | Data.Map, under the name of containers' strict maps: Hago's values are computed when they are put in a map anyway. |
+| [Data.Maybe](Data.Maybe.md) | Functions on Maybe, as Haskell's Data.Maybe. |
 | [Data.Monoid](Data.Monoid.md) | Monoids beyond the Prelude's Sum, Product, Any and All, which this module also exports: the first and the last value that is there, the smallest and the largest. |
 | [Data.Ord](Data.Ord.md) | Orderings: comparing by a part of a value, and an order turned around. |
 | [Data.Ratio](Data.Ratio.md) | Fractions, exact: 1 % 3 + 1 % 6 is 1 % 2, never 0.49999. |
@@ -40,6 +46,7 @@ above each declaration. Do not edit these files; edit the sources and run `hago 
 | [Data.Time](Data.Time.md) | Points in time, Go's time.Time: the current time, the seconds between two, and dates written and read. |
 | [Data.Vector](Data.Vector.md) | Vectors: sequences of a fixed length, each element reached in constant time. |
 | [Data.Vector.Mutable](Data.Vector.Mutable.md) | Mutable vectors: a fixed number of elements, each read and written in constant time. |
+| [Data.Word](Data.Word.md) | Unsigned integers of fixed sizes, as Haskell's Data.Word: Go's uint8, uint16, uint32, uint64 and uint. |
 | [Network.HTTP](Network.HTTP.md) | Asking web servers for pages, with Go's net/http: get and post, with the whole answer read. |
 | [System.Environment](System.Environment.md) | The command line. |
 | [System.Exit](System.Exit.md) | Ending the program with a status: 0 for success, anything else for a failure, which the shell sees in $?. |

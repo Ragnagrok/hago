@@ -1,0 +1,5 @@
+-- Data.Map, under the name of containers' strict maps: Hago's values are
+-- computed when they are put in a map anyway.
+module Data.Map.Strict (module Data.Map) where
+
+import Data.Map

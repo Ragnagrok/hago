@@ -219,6 +219,9 @@ resolveVal sc x
         Nothing -> failAt sc ("not in scope: " ++ x)
   where
     pick n = \case
+      -- a field used as a function, as Haskell's are
+      [] | Just (_ : _) <- M.lookup n (scFields sc) ->
+        failAt sc (n ++ " is a field, not a function: write r." ++ n ++ " to read it, or (." ++ n ++ ") for the function")
       [] -> pure n   -- unknown: the type checker reports it
       is -> case nub is of
         [i] -> pure i

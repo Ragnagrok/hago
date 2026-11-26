@@ -1,0 +1,254 @@
+-- Signed integers of fixed sizes, as Haskell's Data.Int: Go's int8, int16,
+-- int32 and int64 (Int itself is Go's int, of 64 bits). Arithmetic wraps
+-- around, and fromIntegral keeps the low bits. They are Num, Integral,
+-- Enum, Bounded, Bits and FiniteBits.
+module Data.Int (Int8, Int16, Int32, Int64) where
+
+import Data.Bits
+
+foreign import go type "int8" Int8
+foreign import go type "int16" Int16
+foreign import go type "int32" Int32
+foreign import go type "int64" Int64
+
+foreign import go "rt_fromInt" fromIntOf :: Int -> a
+foreign import go "rt_toInt" toIntOf :: a -> Int
+foreign import go "rt_quotOf" quotOf :: a -> a -> a
+foreign import go "rt_remOf" remOf :: a -> a -> a
+foreign import go "rt_divOf" divOf :: a -> a -> a
+foreign import go "rt_modOf" modOf :: a -> a -> a
+foreign import go "rt_bitAnd" bitAnd :: a -> a -> a
+foreign import go "rt_bitOr" bitOr :: a -> a -> a
+foreign import go "rt_bitXor" bitXor :: a -> a -> a
+foreign import go "rt_bitNot" bitNot :: a -> a
+foreign import go "rt_shiftL" bitShiftL :: a -> Int -> a
+foreign import go "rt_shiftR" bitShiftR :: a -> Int -> a
+foreign import go "rt_bitTest" bitTest :: a -> Int -> Bool
+foreign import go "rt_popCount" bitCount :: a -> Int
+foreign import go "rt_bitSize" bitSize :: a -> Int
+foreign import go "rt_leadingZeros" bitLeading :: a -> Int
+foreign import go "rt_trailingZeros" bitTrailing :: a -> Int
+
+-- Int8 ------------------------------------------------------------------------
+
+instance Eq Int8 where
+  x == y = primEq x y
+  x /= y = primNeq x y
+
+instance Ord Int8 where
+  x < y = primLt x y
+  x <= y = primLe x y
+  x > y = primGt x y
+  x >= y = primGe x y
+  compare x y = if primLt x y then LT else if primEq x y then EQ else GT
+
+instance Show Int8 where
+  show x = primShow x
+  showsPrec d x = if d > 6 && primLt x (fromIntOf 0) then "(" ++ primShow x ++ ")" else primShow x
+
+instance Num Int8 where
+  x + y = primAdd x y
+  x - y = primSub x y
+  x * y = primMul x y
+  negate x = primNeg x
+  fromInteger n = fromIntOf n
+
+instance Integral Int8 where
+  div x y = divOf x y
+  mod x y = modOf x y
+  quot x y = quotOf x y
+  rem x y = remOf x y
+  toInt x = toIntOf x
+
+instance Bounded Int8 where
+  minBound = negate 128
+  maxBound = 127
+
+instance Enum Int8 where
+  fromEnum x = toIntOf x
+  toEnum n = if toIntOf (fromIntOf n :: Int8) == n then Just (fromIntOf n) else Nothing
+  succ x = if x == maxBound then Nothing else Just (x + 1)
+  pred x = if x == minBound then Nothing else Just (x - 1)
+
+instance Bits Int8 where
+  a .&. b = bitAnd a b
+  a .|. b = bitOr a b
+  xor a b = bitXor a b
+  complement a = bitNot a
+  shiftL a n = bitShiftL a n
+  shiftR a n = bitShiftR a n
+  testBit a i = bitTest a i
+  popCount a = bitCount a
+
+instance FiniteBits Int8 where
+  finiteBitSize a = bitSize a
+  countLeadingZeros a = bitLeading a
+  countTrailingZeros a = bitTrailing a
+
+-- Int16 ------------------------------------------------------------------------
+
+instance Eq Int16 where
+  x == y = primEq x y
+  x /= y = primNeq x y
+
+instance Ord Int16 where
+  x < y = primLt x y
+  x <= y = primLe x y
+  x > y = primGt x y
+  x >= y = primGe x y
+  compare x y = if primLt x y then LT else if primEq x y then EQ else GT
+
+instance Show Int16 where
+  show x = primShow x
+  showsPrec d x = if d > 6 && primLt x (fromIntOf 0) then "(" ++ primShow x ++ ")" else primShow x
+
+instance Num Int16 where
+  x + y = primAdd x y
+  x - y = primSub x y
+  x * y = primMul x y
+  negate x = primNeg x
+  fromInteger n = fromIntOf n
+
+instance Integral Int16 where
+  div x y = divOf x y
+  mod x y = modOf x y
+  quot x y = quotOf x y
+  rem x y = remOf x y
+  toInt x = toIntOf x
+
+instance Bounded Int16 where
+  minBound = negate 32768
+  maxBound = 32767
+
+instance Enum Int16 where
+  fromEnum x = toIntOf x
+  toEnum n = if toIntOf (fromIntOf n :: Int16) == n then Just (fromIntOf n) else Nothing
+  succ x = if x == maxBound then Nothing else Just (x + 1)
+  pred x = if x == minBound then Nothing else Just (x - 1)
+
+instance Bits Int16 where
+  a .&. b = bitAnd a b
+  a .|. b = bitOr a b
+  xor a b = bitXor a b
+  complement a = bitNot a
+  shiftL a n = bitShiftL a n
+  shiftR a n = bitShiftR a n
+  testBit a i = bitTest a i
+  popCount a = bitCount a
+
+instance FiniteBits Int16 where
+  finiteBitSize a = bitSize a
+  countLeadingZeros a = bitLeading a
+  countTrailingZeros a = bitTrailing a
+
+-- Int32 ------------------------------------------------------------------------
+
+instance Eq Int32 where
+  x == y = primEq x y
+  x /= y = primNeq x y
+
+instance Ord Int32 where
+  x < y = primLt x y
+  x <= y = primLe x y
+  x > y = primGt x y
+  x >= y = primGe x y
+  compare x y = if primLt x y then LT else if primEq x y then EQ else GT
+
+instance Show Int32 where
+  show x = primShow x
+  showsPrec d x = if d > 6 && primLt x (fromIntOf 0) then "(" ++ primShow x ++ ")" else primShow x
+
+instance Num Int32 where
+  x + y = primAdd x y
+  x - y = primSub x y
+  x * y = primMul x y
+  negate x = primNeg x
+  fromInteger n = fromIntOf n
+
+instance Integral Int32 where
+  div x y = divOf x y
+  mod x y = modOf x y
+  quot x y = quotOf x y
+  rem x y = remOf x y
+  toInt x = toIntOf x
+
+instance Bounded Int32 where
+  minBound = negate 2147483648
+  maxBound = 2147483647
+
+instance Enum Int32 where
+  fromEnum x = toIntOf x
+  toEnum n = if toIntOf (fromIntOf n :: Int32) == n then Just (fromIntOf n) else Nothing
+  succ x = if x == maxBound then Nothing else Just (x + 1)
+  pred x = if x == minBound then Nothing else Just (x - 1)
+
+instance Bits Int32 where
+  a .&. b = bitAnd a b
+  a .|. b = bitOr a b
+  xor a b = bitXor a b
+  complement a = bitNot a
+  shiftL a n = bitShiftL a n
+  shiftR a n = bitShiftR a n
+  testBit a i = bitTest a i
+  popCount a = bitCount a
+
+instance FiniteBits Int32 where
+  finiteBitSize a = bitSize a
+  countLeadingZeros a = bitLeading a
+  countTrailingZeros a = bitTrailing a
+
+-- Int64 ------------------------------------------------------------------------
+
+instance Eq Int64 where
+  x == y = primEq x y
+  x /= y = primNeq x y
+
+instance Ord Int64 where
+  x < y = primLt x y
+  x <= y = primLe x y
+  x > y = primGt x y
+  x >= y = primGe x y
+  compare x y = if primLt x y then LT else if primEq x y then EQ else GT
+
+instance Show Int64 where
+  show x = primShow x
+  showsPrec d x = if d > 6 && primLt x (fromIntOf 0) then "(" ++ primShow x ++ ")" else primShow x
+
+instance Num Int64 where
+  x + y = primAdd x y
+  x - y = primSub x y
+  x * y = primMul x y
+  negate x = primNeg x
+  fromInteger n = fromIntOf n
+
+instance Integral Int64 where
+  div x y = divOf x y
+  mod x y = modOf x y
+  quot x y = quotOf x y
+  rem x y = remOf x y
+  toInt x = toIntOf x
+
+instance Bounded Int64 where
+  minBound = fromIntOf (minBound :: Int)
+  maxBound = fromIntOf (maxBound :: Int)
+
+instance Enum Int64 where
+  fromEnum x = toIntOf x
+  toEnum n = if toIntOf (fromIntOf n :: Int64) == n then Just (fromIntOf n) else Nothing
+  succ x = if x == maxBound then Nothing else Just (x + 1)
+  pred x = if x == minBound then Nothing else Just (x - 1)
+
+instance Bits Int64 where
+  a .&. b = bitAnd a b
+  a .|. b = bitOr a b
+  xor a b = bitXor a b
+  complement a = bitNot a
+  shiftL a n = bitShiftL a n
+  shiftR a n = bitShiftR a n
+  testBit a i = bitTest a i
+  popCount a = bitCount a
+
+instance FiniteBits Int64 where
+  finiteBitSize a = bitSize a
+  countLeadingZeros a = bitLeading a
+  countTrailingZeros a = bitTrailing a

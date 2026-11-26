@@ -8,10 +8,15 @@ module Data.List
   , isSubsequenceOf, stripPrefix, tails, inits, subsequences, permutations
   , delete, deleteBy, (\\), union, intersect, elemIndex, elemIndices, findIndex, findIndices
   , find, lookup, unfoldr, maximumBy, minimumBy, uncons, singleton, dropWhileEnd
-  , zip4, zipWith4, genericLength
+  , zip4, zipWith4, genericLength, foldl'
   ) where
 
 infix 5 \\
+
+-- foldl, under the name Haskell gives the one that computes as it goes:
+-- Hago computes everything as it goes.
+foldl' :: Foldable t => (b -> a -> b) -> b -> t a -> b
+foldl' f z xs = foldl f z xs
 
 -- Sorting ------------------------------------------------------------------------
 

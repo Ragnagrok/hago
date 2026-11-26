@@ -1,0 +1,5 @@
+-- expects: name is a field, not a function: write r.name to read it, or (.name) for the function
+data P = P {name :: String, age :: Int}
+
+main :: IO ()
+main = putStrLn (name (P {name = "a", age = 1}))

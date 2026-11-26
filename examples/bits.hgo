@@ -1,0 +1,28 @@
+-- Bits, integers of fixed sizes (Data.Word, Data.Int), Data.Maybe, foldl' and
+-- Data.IntMap, under the names Haskell's programs import them by. GHC prints
+-- the same, but for succ and toEnum, which give a Maybe here.
+import Data.Bits
+import Data.Word
+import Data.Int
+import Data.Maybe
+import Data.List (foldl')
+import qualified Data.IntMap.Strict as IntMap
+import qualified Data.Map.Strict as Map
+
+main :: IO ()
+main = do
+  print (5 .&. 3 :: Int, 5 .|. 3 :: Int, xor 5 3 :: Int, complement 0 :: Int)
+  print (shiftL 1 10 :: Int, shiftR 1024 3 :: Int, testBit (5 :: Int) 2, popCount (255 :: Int))
+  print (setBit (0 :: Int) 4, clearBit (31 :: Int) 0, shift (1 :: Int) (-1), bit 3 :: Int)
+  let w = 250 :: Word8
+  print (w + 10, w * 2, fromIntegral (300 :: Int) :: Word8, maxBound :: Word8, minBound :: Word16)
+  print (complement (0 :: Word16), popCount (complement 0 :: Word64), countLeadingZeros (1 :: Word32))
+  print (maxBound :: Word64, toInteger (maxBound :: Word64), fromIntegral (maxBound :: Word32) :: Int)
+  let i = 100 :: Int8
+  print (i + 100, negate (minBound :: Int8), (-7) `div` (2 :: Int16), (-7) `mod` (2 :: Int16), (-7) `quot` (2 :: Int16), (-7) `rem` (2 :: Int16))
+  print (popCount (-1 :: Int8), shiftR (-16 :: Int32) 2, minBound :: Int64, maxBound :: Int32)
+  print ([1 .. 5] :: [Word8], [250 ..] :: [Word8], succ (255 :: Word8), toEnum 300 :: Maybe Word8)
+  print (catMaybes [Just 1, Nothing, Just 3], mapMaybe (\x -> if x > 1 then Just (x * 2) else Nothing) [1, 2, 3], isJust (Just 'a'), listToMaybe ([] :: [Int]))
+  print (foldl' (+) 0 [1 .. 100 :: Int])
+  let m = IntMap.fromList [(3, "c"), (1, "a")]
+  print (IntMap.toList (IntMap.insert 2 "b" m), IntMap.lookup 3 m, Map.size (Map.fromList [(1 :: Int, 'x')]))

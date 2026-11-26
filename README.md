@@ -238,13 +238,17 @@ every name each one exports, with its type and what it does:
 | `Control.Monad.Trans` | `MonadTrans` (`lift`), `MonadIO` (`liftIO`) |
 | `Data.Functor.Identity` | `Identity`, trampolined |
 | `Data.String` | `uncons` in constant time (a Go string is sliced, not copied), `length`, `elem`, `isPrefixOf`, `stripPrefix`, `stripSuffix`, `span`, `break`, `takeWhile` and `dropWhile` (slices, in one pass), `concat` in one pass, `intercalate`, `replicate`; import it qualified |
-| `Data.List` | `sort` (a stable merge sort), `sortBy`, `sortOn`, `nub`, `group`, `partition`, `intercalate` (of any `Monoid`, so of `String`s too), `intersperse`, `transpose`, `isPrefixOf` and friends, `tails`, `inits`, `subsequences`, `permutations`, `delete`, `\\`, `union`, `intersect`, `elemIndex`, `findIndex`, `unfoldr`, `maximumBy` and `minimumBy` (with `Maybe`) |
+| `Data.List` | `sort` (a stable merge sort), `sortBy`, `sortOn`, `nub`, `group`, `partition`, `intercalate` (of any `Monoid`, so of `String`s too), `intersperse`, `transpose`, `isPrefixOf` and friends, `tails`, `inits`, `subsequences`, `permutations`, `delete`, `\\`, `union`, `intersect`, `elemIndex`, `findIndex`, `unfoldr`, `maximumBy` and `minimumBy` (with `Maybe`), `foldl'` (which is `foldl`: Hago computes as it goes) |
 | `Data.Char` | `toUpper`, `toLower`, Unicode's tests (`isPunctuation`, `isSymbol`...), `digitToInt` and `intToDigit` (with `Maybe`) |
 | `Control.Applicative` | `ZipList`, `liftA3`, `optional` (`Applicative` and `Alternative` are in the Prelude) |
 | `Data.Monoid` | `First`, `Last`, `Min`, `Max`, and the Prelude's `Sum`, `Product`, `Any`, `All` |
 | `Data.Ord` | `comparing`, `Down`, `clamp` |
 | `Data.Map` | balanced search trees from keys to values, as in containers: `fromList`, `fromListWith`, `insert`, `insertWith`, `lookup`, `!?` (no `!`), `adjust`, `alter`, `delete`, `unionWith`, folds, `Functor` and `Foldable`; import it qualified |
 | `Data.Set` | the same for sets: `member`, `union`, `intersection`, `difference`, `isSubsetOf`; import it qualified |
+| `Data.IntMap` | `Data.Map` with `Int` keys, under containers' name (`IntMap v` is `Map Int v`); `Data.Map.Strict` and `Data.IntMap.Strict` are the same maps, since Hago's values are computed when they are put in |
+| `Data.Maybe` | `isJust`, `isNothing`, `catMaybes`, `mapMaybe`, `listToMaybe`, `maybeToList`, `fromMaybe` (no `fromJust`) |
+| `Data.Bits` | `.&.`, `.\|.`, `xor`, `complement`, `shiftL`, `shiftR`, `testBit`, `setBit`, `clearBit`, `popCount`, `bit`, `countLeadingZeros`, for `Int` and the integers below |
+| `Data.Word`, `Data.Int` | `Word8` to `Word64` and `Word`, `Int8` to `Int64`: Go's integers of those sizes, which wrap around; `Num`, `Integral`, `Enum`, `Bounded`, `Bits` |
 | `Data.Vector` | `Vector a`, a Go slice Hago never changes: `fromList`, `!?`, `generate`, `map`, `imap`, `filter`, `foldl`, `slice` (without copying), `sort`, `sortOn`, `zipWith`, `Foldable`; import it qualified |
 | `Data.Iter` | `Iter a`, Go's `iter.Seq`: `from`, `range`, `iterate`, `lines`, `words`, `map`, `filter`, `takeWhile`, `take`, `zipWith`, `foldl`, `sum`, `find`, `mapM_`, `singleton`; a `Monad` and a `Monoid`; import it qualified |
 | `Data.Ratio` | `Rational` (Go's `*big.Rat`), exact: `%`, `numerator`, `denominator`, `Num`, `Fractional`, `fromRational`, `toRational` |
