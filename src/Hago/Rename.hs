@@ -161,7 +161,19 @@ importsOf exportTables m = do
       implicit = [Import "Prelude" False Nothing Nothing [] ("", 0, 0) | modName m /= "Prelude", not explicitPrelude]
   forM (modImports m ++ implicit) $ \imp -> case M.lookup (impModule imp) exportTables of
     Nothing -> Left (showLoc (impLoc imp) ++ ": unknown module " ++ impModule imp)
-    Just t -> pure (imp, imported imp t)
+    Just t -> case missing t (fromMaybe [] (impOnly imp)) of
+      -- as GHC: a name the module does not export is an error in an import
+      -- list, and not in a hiding clause
+      x : _ -> Left (showLoc (impLoc imp) ++ ": module " ++ impModule imp ++ " does not export " ++ x)
+      [] -> pure (imp, imported imp t)
+  where
+    missing t = concatMap $ \case
+      IVar x -> [x | not (M.member x (tVals t))]
+      IType x sub
+        | not (M.member x (tTypes t)) -> [x]
+        | SubSome ns <- sub -> [n ++ " (of " ++ x ++ ")" | n <- ns, n `notElem` M.findWithDefault [] x (tChildren t)]
+        | otherwise -> []
+      IModule x -> ["module " ++ x]
 
 -- | The fields of a record type can be used wherever one of its constructors
 -- is in scope, qualified or not: a type exported abstractly keeps them hidden.

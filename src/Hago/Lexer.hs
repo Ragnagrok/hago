@@ -196,8 +196,13 @@ markers (t : ts) = case tokVal t of
 -- | An open block: its column (0 for explicit braces), the bracket depth
 -- it was opened at, the keyword that opened it, and how many @then@s and
 -- @else@s, and how many @in@s, of the @if@s and @let@s inside it are
--- still to come.
-data Ctx = Ctx {cCol :: Int, cDepth :: Int, cKey :: String, cIfs :: Int, cLets :: Int}
+-- still to come; whether a guard is open in it (a @|@ whose @=@ or @->@
+-- has not come), and whether it is a @let@ opened in a guard, which a
+-- comma ends: @| let n = length k, n > 3 = ...@.
+data Ctx = Ctx {cCol :: Int, cDepth :: Int, cKey :: String, cIfs :: Int, cLets :: Int, cInGuard :: Bool, cGuardLet :: Bool}
+
+newCtx :: Int -> Int -> String -> Ctx
+newCtx col depth k = Ctx col depth k 0 0 False False
 
 -- | The algorithm L. The report's parse-error(t) rule closes an implicit
 -- block when the next token cannot continue it; that is approximated by
@@ -215,15 +220,15 @@ resolve (t : ts) ctx depth = case (tokVal t, ctx) of
     | n < cCol c -> sym "}" : resolve (t : ts) ms depth
   (TLineN _, _) -> resolve ts ctx depth
   (TOpenN k n, c : _)
-    | n > cCol c -> sym "{" : resolve ts (Ctx n depth k 0 0 : ctx) depth
+    | n > cCol c -> sym "{" : resolve ts ((newCtx n depth k) {cGuardLet = k == "let" && cInGuard c} : ctx) depth
   (TOpenN k n, [])
-    | n > 0 -> sym "{" : resolve ts [Ctx n depth k 0 0] depth
+    | n > 0 -> sym "{" : resolve ts [newCtx n depth k] depth
   (TOpenN _ n, _) -> sym "{" : sym "}" : resolve (t {tokVal = TLineN n} : ts) ctx depth
   -- explicit braces (blocks and records) count as brackets, so a comma
   -- inside a record closes an implicit block opened in a field's value
   (TSpecial "}", c : ms) | cCol c == 0 -> t : resolve ts ms (depth - 1)
   (TSpecial "}", _ : ms) -> sym "}" : resolve (t : ts) ms depth
-  (TSpecial "{", _) -> t : resolve ts (Ctx 0 (depth + 1) "" 0 0 : ctx) (depth + 1)
+  (TSpecial "{", _) -> t : resolve ts (newCtx 0 (depth + 1) "" : ctx) (depth + 1)
   (TKey "let", c : ms) -> t : resolve ts (c {cLets = cLets c + 1} : ms) depth
   (TKey "in", c : ms)
     | cLets c > 0 -> t : resolve ts (c {cLets = cLets c - 1} : ms) depth
@@ -233,9 +238,12 @@ resolve (t : ts) ctx depth = case (tokVal t, ctx) of
     | k `elem` ["then", "else"], cIfs c > 0 -> t : resolve ts (c {cIfs = cIfs c - 1} : ms) depth
     | k `elem` ["then", "else"], cCol c /= 0, depth <= cDepth c -> sym "}" : resolve (t : ts) ms depth
   (TKey "where", c : ms) | cKey c == "do", cCol c /= 0 -> sym "}" : resolve (t : ts) ms depth
+  -- a guard opens at its bar and closes at its = or ->, outside brackets
+  (TKey "|", c : ms) | depth == cDepth c -> t : resolve ts (c {cInGuard = True} : ms) depth
+  (TKey k, c : ms) | k `elem` ["=", "->"], cInGuard c, depth == cDepth c -> t : resolve ts (c {cInGuard = False} : ms) depth
   (TSpecial s, c : ms)
     | cCol c /= 0, s `elem` [")", "]"], depth <= cDepth c -> sym "}" : resolve (t : ts) ms depth
-    | cCol c /= 0, s == ",", cDepth c > 0, depth <= cDepth c -> sym "}" : resolve (t : ts) ms depth
+    | cCol c /= 0, s == ",", cDepth c > 0 || cGuardLet c, depth <= cDepth c -> sym "}" : resolve (t : ts) ms depth
   (TSpecial s, _)
     | s `elem` ["(", "["] -> t : resolve ts ctx (depth + 1)
     | s `elem` [")", "]"] -> t : resolve ts ctx (depth - 1)

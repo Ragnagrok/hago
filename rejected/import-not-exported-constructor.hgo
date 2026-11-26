@@ -1,0 +1,5 @@
+-- expects: module Data.Ord does not export Up (of Down)
+import Data.Ord (Down (Up))
+
+main :: IO ()
+main = print 1

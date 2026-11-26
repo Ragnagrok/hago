@@ -1,0 +1,5 @@
+-- expects: module Data.List does not export noSuchThing
+import Data.List (noSuchThing, sort)
+
+main :: IO ()
+main = print (sort [3, 1, 2 :: Int])

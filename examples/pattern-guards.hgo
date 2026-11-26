@@ -1,0 +1,34 @@
+-- Guards of several qualifiers, as in Haskell 2010: conditions, patterns the
+-- value of an expression must match, binding its variables for what
+-- follows, and lets. When one fails, the next guard is tried, then the next
+-- clause.
+import qualified Data.Map as Map
+
+classify :: Map.Map String Int -> String -> String
+classify m k
+  | Just v <- Map.lookup k m, v > 10 = k ++ " is big: " ++ show v
+  | Just v <- Map.lookup k m = k ++ " is " ++ show v
+  | let n = length (unpack k), n > 3 = k ++ " is missing, and long"
+  | otherwise = k ++ " is missing"
+
+-- a later clause when every guard fails
+firstPair :: [(Int, Int)] -> Int
+firstPair ((a, b) : _)
+  | a > 0, b > 0 = a + b
+firstPair (_ : rest) = firstPair rest
+firstPair [] = 0
+
+-- in a case, two patterns in a row, the second using the first
+lookup2 :: Map.Map String String -> Map.Map String Int -> String -> Int
+lookup2 names ages k = case k of
+  _ | Just name <- Map.lookup k names, Just age <- Map.lookup name ages -> age
+    | otherwise -> -1
+
+main :: IO ()
+main = do
+  let m = Map.fromList [("a", 5), ("bb", 20)]
+  mapM_ (putStrLn . classify m) ["a", "bb", "cccc", "d"]
+  print (firstPair [(0, 1), (2, -1), (3, 4)], firstPair [])
+  let names = Map.fromList [("x", "ana")]
+      ages = Map.fromList [("ana", 30)]
+  print (lookup2 names ages "x", lookup2 names ages "y")

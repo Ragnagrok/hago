@@ -719,6 +719,27 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       says so (`fSequential`, Haskell's FFI has `safe` and `unsafe` in the same place), and
       the program keeps the runtime for one goroutine, whose thunks take no lock.
       `Text.Regex.replaceAllWith` is declared so; `examples/foreign.hgo` uses `strings.Map`.
+- [x] **Two bugs the Hugen port found** (2026-11-26):
+      - **An import list could name what the module does not export** (`import Data.List
+        (noSuchThing, sort)` compiled). It is an error now, as in GHC, for values, types and
+        a type's constructors; in a hiding clause it is not (GHC only warns).
+        `rejected/import-not-exported*.hgo`.
+      - **A local value with a polymorphic signature stayed monomorphic** (`where ev :: b -> b;
+        ev = id`, used at two types, was a type mismatch at a use). Local functions are
+        generalised by lifting them to the top, which only happened to those with
+        parameters: Haskell's monomorphism restriction, which does not apply when the
+        signature asks for the polymorphism. A value with a signature is lifted too, given
+        the variables it uses as parameters. `examples/locals.hgo`; GHC prints the same.
+- [x] **Pattern guards** (2026-11-26), which the Hugen port missed (`Match.throws` became nested
+      `case`s; the error was "unexpected `<-`"). A guard is qualifiers separated by commas, as
+      Haskell 2010's: conditions, patterns with `<-`, and `let`s. The parser makes one with
+      more than a condition into a condition that the qualifiers hold in turn (`case e of p ->
+      ...; _ -> False`) and puts the body where they bind their variables, so the guards,
+      their order and the fall through to the next clause are the ones there were. The
+      expression a pattern is matched against is computed again for the body: time, nothing
+      else, since it is pure; a guard that bound its variables in Core would not. The layout
+      closes a `let` opened in a guard at the comma after it, as the Report's parse-error(t)
+      does. `examples/pattern-guards.hgo`; GHC prints the same.
 - [x] **A minus after an operator** (2026-11-26): `x < -0.4` was a syntax error ("unexpected
       operator -"), where Haskell reads the minus as negation; and a minus at the start was
       `negate` of the first operand alone, so `-2 ^ 2` was 4 where Haskell gives -4. Found

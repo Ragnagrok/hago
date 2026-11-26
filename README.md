@@ -370,6 +370,10 @@ data Tree a = Leaf | Node (Tree a) a (Tree a)
 
 - **`type` synonyms** take parameters and can be exported. They must be given all their
   arguments, and a synonym that refers to itself is an error.
+- **Guards** have several qualifiers, as in Haskell 2010: conditions, patterns
+  (`| Just v <- Map.lookup k m, v > 10 = ...`) and `let`s; when one fails, the next guard is tried,
+  then the next clause (`examples/pattern-guards.hgo`). The expression a pattern is matched
+  against is computed again for the body, which costs its time and nothing else.
 - **List comprehensions** have generators, guards and `let`, and they are lazy, like the lists
   they build. A generator is a `foldr` that puts each element before the rest or skips it, as
   GHC translates them, so a comprehension kept as a list is a loop that skips what the guards

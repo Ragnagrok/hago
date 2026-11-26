@@ -346,10 +346,40 @@ rhs sep = do
   where
     guarded = many1 $ do
       key "|"
-      g <- expr
+      qs <- qualifier `sepBy1` special ","
       sep
       e <- expr
-      pure (Just g, e)
+      pure (guardOf qs e)
+
+-- | A guard of qualifiers, as Haskell 2010's: conditions, patterns that the
+-- value of an expression must match (binding its variables for what
+-- follows), and lets. A guard of one condition is that condition; one with
+-- more becomes a condition that the qualifiers hold in turn, and the body
+-- is put where they bind their variables:
+--
+--   | Just x <- lookup k m, x > 3 = x
+--
+-- is the condition (case lookup k m of Just x -> x > 3; _ -> False) and the
+-- body (case lookup k m of Just x -> x). An expression a pattern is matched
+-- against is computed again for the body, which costs its time and nothing
+-- else, since it is pure; if the guard fails, the next one is tried, and
+-- then the next clause, as for any guard.
+guardOf :: [Qualifier] -> Expr -> (Maybe Expr, Expr)
+guardOf qs body = case qs of
+  [QGuard b] -> (Just b, body)
+  _ -> (Just (holds qs), within qs)
+  where
+    holds = \case
+      [] -> ECon "True"
+      QGuard b : rest -> EIf b (holds rest) (ECon "False")
+      QGen p e : rest -> ECase e [Alt p (Rhs [(Nothing, holds rest)] []), Alt PWild (Rhs [(Nothing, ECon "False")] [])]
+      QLet ds : rest -> ELet ds (holds rest)
+    within = \case
+      [] -> body
+      QGuard _ : rest -> within rest
+      QGen p e : rest -> ECase e [Alt p (Rhs [(Nothing, within rest)] []), Alt PWild (Rhs [(Nothing, unreachable)] [])]
+      QLet ds : rest -> ELet ds (within rest)
+    unreachable = EApp (EVar "Prelude.error") (ELit (LStr "a pattern guard that held no longer holds"))
 
 -- | Consecutive clauses of the same function become one binding.
 groupClauses :: [Decl] -> [Decl]

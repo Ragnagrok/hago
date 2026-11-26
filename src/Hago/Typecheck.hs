@@ -757,7 +757,9 @@ localBinds env0 ds = do
           envMetas = S.fromList (concatMap metas envTs)
           gen = nub [m | t <- zts, m <- metas t, not (S.member m envMetas)]
           ownOnly (IsIn _ ts) = all (\t -> all (`elem` gen) (metas t) && null (tyVarsOf t)) ts
-          liftable = not (null gen) && all ((> 0) . fst) results && all ownOnly newPreds
+          -- a value without parameters is generalised only if its signature
+          -- asks for it, as Haskell's monomorphism restriction says
+          liftable = not (null gen) && and [ar > 0 || M.member n sigs | ((n, _), (ar, _)) <- zip members results] && all ownOnly newPreds
             && not (any (`elem` ns) (coreBinders bodies))
           local = (envG, acc ++ [CBind n t ar body | ((n, t), (ar, body)) <- zip (zip ns tys) results])
       if not liftable then pure local else do
@@ -793,6 +795,8 @@ localBinds env0 ds = do
           let ft = foldr (TFun . snd) t passed
               body' = case rewrite body of
                 CLam ps r inner -> CLam (passed ++ ps) r inner
+                -- a value with a signature, given the variables it uses
+                other | not (null passed) -> CLam passed t other
                 other -> other
           modify (\st -> st {stLifted = (TopBind ln vs [(dictName p, p) | p <- preds] ft (length passed + ar) body' False, vs) : stLifted st})
         -- outside, the variables are passed through names nothing can shadow

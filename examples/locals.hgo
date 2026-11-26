@@ -17,6 +17,27 @@ describe v = wrap (show v) ++ wrap (length [v])
     wrap :: Show b => b -> String
     wrap x = "<" ++ show x ++ ">"
 
+-- A local value without parameters is polymorphic when its signature says
+-- so, as in Haskell (the monomorphism restriction is for values without
+-- one), even using a variable around it.
+both :: Int -> (Int, Bool)
+both n = (ev 1, ev True)
+  where
+    ev :: b -> b
+    ev = id
+
+pairWith :: Int -> (Maybe Int, Maybe Bool)
+pairWith n = (wrap 1, wrap True)
+  where
+    wrap :: a -> Maybe a
+    wrap = if n > 0 then Just else const Nothing
+
+shown :: Int -> (String, String)
+shown k = (sh k, sh (k > 0))
+  where
+    sh :: Show a => a -> String
+    sh = \x -> show x ++ "!"
+
 main :: IO ()
 main = do
   print (pairs 3)
@@ -24,3 +45,4 @@ main = do
   let swap (a, b) = (b, a)
   print (swap (1, 'x'), swap ("s", True))
   putStrLn (describe [1, 2])
+  print (both 0, pairWith 1, pairWith 0, shown 3)
