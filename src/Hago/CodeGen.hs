@@ -118,7 +118,8 @@ generate runtime prog =
       , "rt_time \"time\""
       , "rt_atomic \"sync/atomic\""
       , "rt_iter \"iter\""
-      , "rt_slices \"slices\"" ]
+      , "rt_slices \"slices\""
+      , "rt_unsafe \"unsafe\"" ]
     -- every imported package is used, even by a program that calls none of
     -- its functions; a generic function cannot be named without its types
     foreignUses =
@@ -914,10 +915,11 @@ genExpr ctx e = case e of
           pure ("(" ++ a' ++ " " ++ op ++ " " ++ b' ++ ")")
     -- a call to Go: functions given to it are generated as Go functions of
     -- all their arguments at once (see 'foreignArg')
-    -- a fold of a list made only to be folded: a loop (see 'Prod')
+    -- a fold: a loop (see 'Prod'), over the list where it is made, or
+    -- over its cells, without the curried closure listFoldl calls
     CVar "listFoldl" _ t
       | isTop ctx "listFoldl", [g, z, xs] <- args
-      , fusableFoldl (prodOf ctx xs) || fusable (prodOf ctx xs) && (ownedStep ctx g || stepHasOwner g) ->
+      , fusable (prodOf ctx xs) ->
           fuseFoldl ctx t g z xs
     CVar "listFoldr" _ t
       | isTop ctx "listFoldr", [k, z, xs] <- args, fusable (prodOf ctx xs)
@@ -998,6 +1000,7 @@ genExpr ctx e = case e of
       | length args == conArity k, any isDelay args
       , Just ci <- M.lookup k (progCons (cxProg ctx)), Just Pointer <- M.lookup (ciType ci) (cxUnboxed ctx) -> do
           parts <- forM (zip [0 :: Int ..] args) $ \case
+            (i, CDelay ty inner) | Just v <- nilTail ty inner -> pure (Left (i, v))
             (i, CDelay ty inner) -> do
               th <- thunkValue ty inner
               pure (Right (i, ty, th))
@@ -1005,7 +1008,7 @@ genExpr ctx e = case e of
           let st = conRef ctx k targs
               (_, r) = splitFun (length args) (zonk (progSubst (cxProg ctx)) t)
               thunks = [(i, ty, th) | Right (i, ty, th) <- parts]
-          pure $ "func() " ++ goTy ctx r ++ " {\n"
+          if null thunks then pure (conValue ctx k targs [v | Left (_, v) <- parts]) else pure $ "func() " ++ goTy ctx r ++ " {\n"
             ++ "hg_c := &struct{ c " ++ st ++ concat ["; t" ++ show i ++ " rt_thunk[" ++ goTy ctx ty ++ "]" | (i, ty, _) <- thunks] ++ " }{"
             ++ commas (("c: " ++ st ++ "{" ++ commas ["F" ++ show i ++ ": " ++ v | Left (i, v) <- parts] ++ "}") : ["t" ++ show i ++ ": " ++ th | (i, _, th) <- thunks])
             ++ "}\n"
@@ -1021,6 +1024,7 @@ genExpr ctx e = case e of
   -- now: a suspension that is already done is one allocation, and one that
   -- is not is two (the thunk and the closure).
   CDelay t inner -> case inner of
+    _ | Just v <- nilTail t inner -> pure v
     _ | isValue inner -> do
           v <- genExpr ctx inner
           pure ("rt_ready[" ++ goTy ctx t ++ "](" ++ v ++ ")")
@@ -1049,6 +1053,10 @@ genExpr ctx e = case e of
     isDelay = \case
       CDelay {} -> True
       _ -> False
+    -- [] suspended, computed already: the one thunk every list shares
+    nilTail ty inner = case (zonk (progSubst (cxProg ctx)) ty, inner) of
+      (TCon "[]" [el], CCon "[]" _ _) -> Just ("rt_nilTail[" ++ goTy ctx el ++ "]()")
+      _ -> Nothing
     -- a suspension as a thunk's value, to be kept inside another struct,
     -- computed now when that does the same (see CDelay)
     thunkValue ty inner
@@ -1165,6 +1173,7 @@ genPrim ctx x targs as = case (x, as) of
     [TCon "String" []] -> pure ("(" ++ a ++ " + " ++ b ++ ".force())")
     [TCon "[]" [el]] -> pure (mangle "append" ++ typeArgs ctx [el] ++ "(" ++ a ++ ", " ++ b ++ ")")
     _ -> pure ("rt_error[" ++ goTy ctx (case targs of (t : _) -> t; [] -> tUnit) ++ "](\"primAppend needs a String or a list\")")
+  ("primNilNow", [a]) -> pure ("rt_nilNow(" ++ a ++ ")")
   ("pack", [a]) -> pure ("rt_pack(" ++ a ++ ")")
   ("unpack", [a]) -> pure ("rt_unpack(" ++ a ++ ")")
   ("ord", [a]) -> pure ("int(" ++ a ++ ")")
@@ -2085,16 +2094,6 @@ fusable p = sites p <= 8
       SLet _ s -> stepSites s
       SStop q -> sites q
 
--- | The same, for listFoldl, which the Prelude already runs as a loop over
--- a list that exists: the loops are worth it only where the list does not.
-fusableFoldl :: Prod -> Bool
-fusableFoldl p = fusable p && not (cellsOnly p)
-  where
-    cellsOnly = \case
-      PCells _ -> True
-      PLet _ q -> cellsOnly q
-      _ -> False
-
 -- | Names bound by the expression made new, so that the loops, which bind
 -- them in nested Go blocks, never hide a name of the code around.
 renamed :: CExpr -> Gen CExpr
@@ -2463,18 +2462,6 @@ ownedStep ctx g = case lam2 g of
       CPVar _ _ -> True
       CPWild -> True
       CPCon c _ qs | Just _ <- tupleArity c -> all irrefutable qs
-      _ -> False
-
--- | A step already given an owner, by a loop around (see 'ownedLoop').
-stepHasOwner :: CExpr -> Bool
-stepHasOwner g = case lam2 g of
-  Just (_, _, body) -> go body
-  Nothing -> False
-  where
-    go = \case
-      CApp (CVar _ _ _) (CVar _ _ (TCon "Data.Map.Owner" []) : _) -> True
-      CLet _ b _ -> go b
-      CMatch _ [CRow _ _ [(Nothing, b)]] _ -> go b
       _ -> False
 
 -- | The step given the owner o in place of none.

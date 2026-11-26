@@ -42,6 +42,7 @@ progs=(
   "fib 32 x 16, map|bench/fib-map.hgo|"
   "fib 32 x 16, parMap|bench/fib-parmap.hgo|"
   "Data.Map, 1M inserts, deletes, lookups|bench/map-insert-delete.hgo|"
+  "Data.Set, 1M inserts, deletes, lookups|bench/set-insert-delete.hgo|"
   "sieve to 1M, STVector|examples/sieve.hgo|1000000 st"
   "sieve to 1M, Data.Map|examples/sieve.hgo|1000000 map"
   "sieve to 10M, STVector|examples/sieve.hgo|10000000 st"

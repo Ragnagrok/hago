@@ -58,14 +58,12 @@ delete k m = deleteT noOwner k m
 
 -- The value at the key changed with f, if the key is there.
 adjust :: Ord k => (v -> v) -> k -> Map k v -> Map k v
-adjust f k m = alter (fmap f) k m
+adjust f k m = adjustT noOwner f k m
 
 -- f is given the value at the key, if there is one, and says what the key
 -- has afterwards: Nothing deletes it.
 alter :: Ord k => (Maybe v -> Maybe v) -> k -> Map k v -> Map k v
-alter f k m = case f (lookup k m) of
-  Nothing -> delete k m
-  Just v -> insert k v m
+alter f k m = alterT noOwner f k m
 
 -- Looking up -------------------------------------------------------------------------
 
@@ -263,6 +261,24 @@ deleteT o k t@(Bin _ k' v' l r _) = case compare k k' of
   LT -> balanceT o t k' v' (deleteT o k l) r
   GT -> balanceT o t k' v' l (deleteT o k r)
   EQ -> glueT o l r
+
+adjustT :: Ord k => Owner -> (v -> v) -> k -> Map k v -> Map k v
+adjustT _ _ _ Tip = Tip
+adjustT o f k t@(Bin n k' v' l r _) = case compare k k' of
+  LT -> nodeT o t n k' v' (adjustT o f k l) r
+  GT -> nodeT o t n k' v' l (adjustT o f k r)
+  EQ -> nodeT o t n k' (f v') l r
+
+alterT :: Ord k => Owner -> (Maybe v -> Maybe v) -> k -> Map k v -> Map k v
+alterT o f k Tip = case f Nothing of
+  Nothing -> Tip
+  Just v -> Bin 1 k v Tip Tip o
+alterT o f k t@(Bin n k' v' l r _) = case compare k k' of
+  LT -> balanceT o t k' v' (alterT o f k l) r
+  GT -> balanceT o t k' v' l (alterT o f k r)
+  EQ -> case f (Just v') of
+    Nothing -> glueT o l r
+    Just v -> nodeT o t n k' v l r
 
 deleteMinT :: Owner -> Map k v -> Map k v
 deleteMinT _ Tip = Tip

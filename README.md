@@ -683,13 +683,14 @@ side by side with others (`bench/run.sh OLD_HAGO NEW_HAGO`).
 | parse and pretty print 3.7 MB of JSON with `examples/json.hgo` (`jq .`: 0.09 s, 28 MB) | 0.20 s | ~102 MB |
 | `fib 32` sixteen times with `map` | 0.13 s | — |
 | the same with `parMap`, on 16 processors | 0.03 s | — |
-| a million `Data.Map` inserts, then half a million deletes with `foldl`, and lookups | 0.36 s | ~66 MB |
+| a million `Data.Map` inserts, then half a million deletes with `foldl`, and lookups | 0.35 s | ~65 MB |
+| the same with a `Data.Set` | 0.35 s | ~66 MB |
 | the primes up to a million, sieve of Eratosthenes on an `STVector` (`examples/sieve.hgo`) | <0.01 s | ~3 MB |
-| the same with a `Data.Map` (the incremental sieve) | 0.55 s | ~25 MB |
+| the same with a `Data.Map` (the incremental sieve) | 0.42 s | ~17 MB |
 | the primes up to ten million, on an `STVector` | 0.03 s | ~11 MB |
 | the same on an `IOVector` | 0.03 s | ~11 MB |
 | the same on an `IOVector`, in a program with threads | 0.04 s | ~11 MB |
-| the same with a `Data.Map` | 5.9 s | ~185 MB |
+| the same with a `Data.Map` | 5.2 s | ~120 MB |
 | the same, hand-written Go | 0.03 s | ~12 MB |
 | how often each of a million numbers appears, in a `HashTable` in ST (`examples/frequencies.hgo`) | 0.11 s | ~13 MB |
 | the same with a `Data.Map` | 0.42 s | ~19 MB |
@@ -710,7 +711,8 @@ The JSON is the one `bench/json-input.go` writes, always the same:
   `mapM_` over a range) is a Go loop and allocates nothing (see
   [Lists, iterators and vectors](#lists-iterators-and-vectors)). A list kept in a variable and
   folded later is made: every cell allocates its thunk with it, and the closure that computes
-  the rest.
+  the rest; the fold is a loop over its cells. A cell known to be the last shares one thunk
+  with every other for its empty tail, and `[x] ++ ys` is one cell whose tail is `ys`.
 - **Parser combinators** need care. `Text.Parser`'s reply to each step is one constructor small
   enough to be kept by value (the value as a `Maybe`, the input left, what was expected there),
   so a step allocates nothing; whether it consumed input is whether what it left is what it was
@@ -729,7 +731,8 @@ The JSON is the one `bench/json-input.go` writes, always the same:
   itself cannot be seen by anything else, so the fold changes them instead (each node keeps
   the owner that made it; see `Data.Map`). The map it starts from, and every map made
   before, stay as they were (`examples/map-in-place.hgo`). A million inserts and deletes
-  allocated 1.4 GB; now 22 MB.
+  allocated 1.4 GB; now 22 MB. `alter` and `adjust` are built in place too, and so is a
+  `Data.Set`, which is a map whose values are `()`.
 - **A recursive function given a known function is copied for it.** One that passes a function
   parameter as it is to every call to itself, as `insertWith` passes its `f`, would call it
   through a curried closure on every step; given a lambda that uses no local variable, or a
@@ -768,7 +771,8 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
 | the same, GHC without full laziness | 0.12 s | 0.13 s |
 | the same with `parMap`, on 16 processors | 0.04 s | 0.05 s |
 | a million `Data.Map` inserts, half a million deletes, lookups | 0.36 s, 66 MB | 1.43 s, 218 MB |
-| the primes up to a million with a `Data.Map` | 0.58 s | 0.31 s |
+| a million `Data.Set` inserts, half a million deletes, lookups | 0.34 s, 66 MB | 1.12 s, 156 MB |
+| the primes up to a million with a `Data.Map` | 0.41 s | 0.31 s |
 | the primes up to ten million, on an `STVector` (`STUArray` in GHC) | 0.03 s | 0.04 s |
 | the same on an `IOVector` (`IOUArray`) | 0.03 s | 0.03 s |
 | the same, in a program with threads | 0.04 s | 0.04 s |
@@ -778,12 +782,13 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
 - **Even:** strict code at concrete types, newtypes, folds of lists made where they are
   folded (both make loops of them, in IO and in `StateT` too), recursive IO loops, mutable
   arrays, in ST, in IO and in a program with threads, `parMap`.
-- **Hago ahead:** a `Data.Map` built by a fold or a loop, which Hago builds in place (four
-  times faster, a third of the memory); a `foldr` that is recursion, taken from the last
+- **Hago ahead:** a `Data.Map` or a `Data.Set` built by a fold or a loop, which Hago builds in
+  place (three to four times faster, a third to a half of the memory); a `foldr` that is recursion, taken from the last
   element back (five times faster, with half the memory, or none over a range); the JSON
   parser and printer; the hash table; and memory in general.
-- **GHC ahead:** the sieve on a map, by a half again: every step still allocates the lists it
-  keeps (`[p]`, `++`), where GHC's generational collector does better than Go's.
+- **GHC ahead:** the sieve on a map, by a third: what is left is the map's own work, the nodes
+  of the keys it inserts and the rebalancing, where GHC's generational collector does better
+  than Go's.
 
 ## Using it
 

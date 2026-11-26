@@ -16,6 +16,7 @@ import (
 	rt_sync "sync"
 	rt_atomic "sync/atomic"
 	rt_time "time"
+	rt_unsafe "unsafe"
 )
 
 // --- runtime ---
@@ -30,6 +31,16 @@ type Cons[T any] struct {
 
 // Every runtime import is used even if the program never prints.
 var _ = rt_fmt.Sprint
+
+// The tail of a cell known to be a list's last: a thunk computed already,
+// empty, and never written again, which every such cell shares instead of
+// having one of its own. A rt_thunk[List[T]] is laid out alike for every T
+// (the closure, a pointer, the state), so one serves all.
+var rt_nilTailThunk = rt_thunk[List[struct{}]]{state: 2}
+
+func rt_nilTail[T any]() *rt_thunk[List[T]] {
+	return (*rt_thunk[List[T]])(rt_unsafe.Pointer(&rt_nilTailThunk))
+}
 
 // Thunks are in thunk_sequential.go or thunk_concurrent.go: the compiler
 // copies the concurrent ones only into programs that start goroutines.

@@ -387,10 +387,29 @@ lamParts = \case
 -- bound nowhere else.
 bindArgs :: [((Name, Type), CExpr)] -> CExpr -> M (Maybe CExpr)
 bindArgs pas body
-  | all ok pas && length [() | (_, a) <- pas, not (atomic a), not (value a)] <= 1 =
+  | all ok pas && length heavy <= 1 || forwards =
       pure (Just (substVars (M.fromList [(p, a) | ((p, _), a) <- pas]) body))
   | otherwise = pure Nothing
   where
+    heavy = [p | ((p, _), a) <- pas, not (atomic a), not (value a)]
+    -- a body that is a call given the parameters as they are, as alter f k
+    -- m = alterT noOwner f k m: however many arguments are expressions,
+    -- each is still computed once, where the call was, and in the same
+    -- order, if each is given once, directly, in the order of the
+    -- parameters, and the call's other arguments cost nothing and cannot fail
+    forwards = case body of
+      CApp g bs
+        | atomic g, not (any (`elem` coreRefs g) heavy)
+        , all (\p -> uses p body == 1 && length (at p bs) == 1) heavy
+        , increasing (concatMap (`at` bs) heavy)
+        , all (\b -> isHeavy b || atomic b || value b) bs
+        , all ok [pa | pa@((p, _), _) <- pas, p `notElem` heavy] -> True
+      _ -> False
+    at p bs = [i | (i, CVar x _ _) <- zip [0 :: Int ..] bs, x == p]
+    isHeavy = \case
+      CVar x _ _ -> x `elem` heavy
+      _ -> False
+    increasing xs = and (zipWith (<) xs (drop 1 xs))
     ok ((p, _), a)
       | atomic a = True
       | CLam {} <- a = uses p body <= 1

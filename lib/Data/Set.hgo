@@ -1,93 +1,77 @@
--- Finite sets, kept as a balanced binary search tree, as Data.Map is:
--- membership, inserting and deleting take time logarithmic in the size.
--- Many names are the Prelude's, so this module is meant to be imported
--- qualified: import qualified Data.Set as Set.
+-- Finite sets, kept as a balanced binary search tree: a Data.Map whose
+-- values are (), which costs nothing in Go. Membership, inserting and
+-- deleting take time logarithmic in the size. A set built by a fold
+-- (fromList, foldl (\s x -> Set.insert x s) s0 xs) or by a loop that passes
+-- it to itself is built in place, as a map is (see Data.Map). Many names
+-- are the Prelude's, so this module is meant to be imported qualified:
+-- import qualified Data.Set as Set.
 module Data.Set
   ( Set, empty, singleton, fromList, insert, delete, member, notMember, size, null
   , toList, toAscList, toDescList, elems, map, filter, partition, foldr, union, unions
   , intersection, difference, isSubsetOf, lookupMin, lookupMax, deleteMin, deleteMax
   ) where
 
-data Set a = Tip | Bin Int a (Set a) (Set a)
+import qualified Data.Map as Map
+
+newtype Set a = Set (Map.Map a ())
 
 empty :: Set a
-empty = Tip
+empty = Set Map.empty
 
 singleton :: a -> Set a
-singleton x = Bin 1 x Tip Tip
+singleton x = Set (Map.singleton x ())
 
 fromList :: Ord a => [a] -> Set a
-fromList xs = foldl (\s x -> insert x s) Tip xs
+fromList xs = foldl (\s x -> insert x s) empty xs
 
 insert :: Ord a => a -> Set a -> Set a
-insert x Tip = singleton x
-insert x s@(Bin n y l r) = case compare x y of
-  LT -> balance y (insert x l) r
-  GT -> balance y l (insert x r)
-  EQ -> s
+insert x (Set m) = Set (Map.insert x () m)
 
 delete :: Ord a => a -> Set a -> Set a
-delete _ Tip = Tip
-delete x (Bin _ y l r) = case compare x y of
-  LT -> balance y (delete x l) r
-  GT -> balance y l (delete x r)
-  EQ -> glue l r
+delete x (Set m) = Set (Map.delete x m)
 
 member :: Ord a => a -> Set a -> Bool
-member _ Tip = False
-member x (Bin _ y l r) = case compare x y of
-  LT -> member x l
-  GT -> member x r
-  EQ -> True
+member x (Set m) = Map.member x m
 
 notMember :: Ord a => a -> Set a -> Bool
 notMember x s = not (member x s)
 
 size :: Set a -> Int
-size Tip = 0
-size (Bin n _ _ _) = n
+size (Set m) = Map.size m
 
 null :: Set a -> Bool
-null Tip = True
-null _ = False
+null (Set m) = Map.null m
 
 -- The elements, in increasing order.
 toList :: Set a -> [a]
 toList s = toAscList s
 
 toAscList :: Set a -> [a]
-toAscList s = foldr (\x rest -> x : rest) [] s
+toAscList (Set m) = Map.keys m
 
 toDescList :: Set a -> [a]
-toDescList s = go [] s
-  where
-    go acc Tip = acc
-    go acc (Bin _ x l r) = go (x : go acc l) r
+toDescList (Set m) = [x | (x, _) <- Map.toDescList m]
 
 elems :: Set a -> [a]
 elems s = toAscList s
 
 foldr :: (a -> b -> b) -> b -> Set a -> b
-foldr _ z Tip = z
-foldr f z (Bin _ x l r) = foldr f (f x (foldr f z r)) l
+foldr f z (Set m) = Map.foldrWithKey (\x _ acc -> f x acc) z m
 
 map :: Ord b => (a -> b) -> Set a -> Set b
 map f s = fromList (Prelude.map f (toAscList s))
 
 filter :: (a -> Bool) -> Set a -> Set a
-filter _ Tip = Tip
-filter p (Bin _ x l r)
-  | p x = link x (filter p l) (filter p r)
-  | otherwise = merge (filter p l) (filter p r)
+filter p (Set m) = Set (Map.filterWithKey (\x _ -> p x) m)
 
 partition :: (a -> Bool) -> Set a -> (Set a, Set a)
 partition p s = (filter p s, filter (\x -> not (p x)) s)
 
 union :: Ord a => Set a -> Set a -> Set a
-union a b = foldl (\s x -> insert x s) a (toAscList b)
+union (Set a) (Set b) = Set (Map.union a b)
 
 unions :: Ord a => [Set a] -> Set a
-unions ss = foldl union Tip ss
+unions ss = foldl union empty ss
 
 intersection :: Ord a => Set a -> Set a -> Set a
 intersection a b = filter (\x -> member x b) a
@@ -99,102 +83,16 @@ isSubsetOf :: Ord a => Set a -> Set a -> Bool
 isSubsetOf a b = size a <= size b && all (\x -> member x b) (toAscList a)
 
 lookupMin :: Set a -> Maybe a
-lookupMin Tip = Nothing
-lookupMin (Bin _ x Tip _) = Just x
-lookupMin (Bin _ _ l _) = lookupMin l
+lookupMin (Set m) = fmap fst (Map.lookupMin m)
 
 lookupMax :: Set a -> Maybe a
-lookupMax Tip = Nothing
-lookupMax (Bin _ x _ Tip) = Just x
-lookupMax (Bin _ _ _ r) = lookupMax r
+lookupMax (Set m) = fmap fst (Map.lookupMax m)
 
 deleteMin :: Set a -> Set a
-deleteMin Tip = Tip
-deleteMin (Bin _ _ Tip r) = r
-deleteMin (Bin _ x l r) = balance x (deleteMin l) r
+deleteMin (Set m) = Set (Map.deleteMin m)
 
 deleteMax :: Set a -> Set a
-deleteMax Tip = Tip
-deleteMax (Bin _ _ l Tip) = l
-deleteMax (Bin _ x l r) = balance x l (deleteMax r)
-
--- Balancing, as in Data.Map ------------------------------------------------------------
-
-bin :: a -> Set a -> Set a -> Set a
-bin x l r = Bin (size l + size r + 1) x l r
-
-balance :: a -> Set a -> Set a -> Set a
-balance x l r
-  | sl + sr <= 1 = bin x l r
-  | sr > 3 * sl = rotateL x l r
-  | sl > 3 * sr = rotateR x l r
-  | otherwise = bin x l r
-  where
-    sl = size l
-    sr = size r
-
-rotateL :: a -> Set a -> Set a -> Set a
-rotateL x l r@(Bin _ _ rl rr)
-  | size rl < 2 * size rr = singleL x l r
-  | otherwise = doubleL x l r
-rotateL x l Tip = bin x l Tip
-
-rotateR :: a -> Set a -> Set a -> Set a
-rotateR x l@(Bin _ _ ll lr) r
-  | size lr < 2 * size ll = singleR x l r
-  | otherwise = doubleR x l r
-rotateR x Tip r = bin x Tip r
-
-singleL :: a -> Set a -> Set a -> Set a
-singleL x1 t1 (Bin _ x2 t2 t3) = bin x2 (bin x1 t1 t2) t3
-singleL x l Tip = bin x l Tip
-
-singleR :: a -> Set a -> Set a -> Set a
-singleR x1 (Bin _ x2 t1 t2) t3 = bin x2 t1 (bin x1 t2 t3)
-singleR x Tip r = bin x Tip r
-
-doubleL :: a -> Set a -> Set a -> Set a
-doubleL x1 t1 (Bin _ x2 (Bin _ x3 t2 t3) t4) = bin x3 (bin x1 t1 t2) (bin x2 t3 t4)
-doubleL x l r = singleL x l r
-
-doubleR :: a -> Set a -> Set a -> Set a
-doubleR x1 (Bin _ x2 t1 (Bin _ x3 t2 t3)) t4 = bin x3 (bin x2 t1 t2) (bin x1 t3 t4)
-doubleR x l r = singleR x l r
-
-glue :: Set a -> Set a -> Set a
-glue Tip r = r
-glue l Tip = l
-glue l r
-  | size l > size r = case lookupMax l of
-      Just x -> balance x (deleteMax l) r
-      Nothing -> r
-  | otherwise = case lookupMin r of
-      Just x -> balance x l (deleteMin r)
-      Nothing -> l
-
-merge :: Set a -> Set a -> Set a
-merge Tip b = b
-merge a Tip = a
-merge a@(Bin sa xa la ra) b@(Bin sb xb lb rb)
-  | 3 * sa < sb = balance xb (merge a lb) rb
-  | 3 * sb < sa = balance xa la (merge ra b)
-  | otherwise = glue a b
-
-link :: a -> Set a -> Set a -> Set a
-link x Tip r = insertMin x r
-link x l Tip = insertMax x l
-link x l@(Bin sl xl ll lr) r@(Bin sr xr rl rr)
-  | 3 * sl < sr = balance xr (link x l rl) rr
-  | 3 * sr < sl = balance xl ll (link x lr r)
-  | otherwise = bin x l r
-
-insertMin :: a -> Set a -> Set a
-insertMin x Tip = singleton x
-insertMin x (Bin _ y l r) = balance y (insertMin x l) r
-
-insertMax :: a -> Set a -> Set a
-insertMax x Tip = singleton x
-insertMax x (Bin _ y l r) = balance y l (insertMax x r)
+deleteMax (Set m) = Set (Map.deleteMax m)
 
 -- Instances ----------------------------------------------------------------------------
 
@@ -216,4 +114,4 @@ instance Ord a => Semigroup (Set a) where
   a <> b = union a b
 
 instance Ord a => Monoid (Set a) where
-  mempty = Tip
+  mempty = empty

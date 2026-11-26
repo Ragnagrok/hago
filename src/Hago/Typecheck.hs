@@ -55,6 +55,9 @@ primSchemes = M.fromList $
        -- joins two Strings or two lists; anything else fails at run time, so
        -- only the Prelude's instances of Semigroup and deriving use it
        , ("primAppend", Forall ["a"] [] (a ~> tLazy a ~> a))
+       -- whether a list's tail is already computed and empty, without
+       -- computing it: only for definitions whose two branches mean the same
+       , ("primNilNow", Forall ["a"] [] (tLazy (tList a) ~> tBool))
        , ("pack", mono (tList tChar ~> tString))
        , ("unpack", mono (tString ~> tList tChar))
        , ("ord", mono (tChar ~> tInt))

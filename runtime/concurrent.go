@@ -40,6 +40,11 @@ type rt_thunk[T any] struct {
 	mu    rt_sync.Mutex
 }
 
+// Whether a list's tail is computed already and empty (primNilNow).
+func rt_nilNow[T any](t *rt_thunk[List[T]]) bool {
+	return rt_atomic.LoadUint32(&t.state) == 2 && t.v == nil
+}
+
 func (t *rt_thunk[T]) force() T {
 	if rt_atomic.LoadUint32(&t.state) == 2 {
 		return t.v

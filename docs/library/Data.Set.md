@@ -1,14 +1,17 @@
 # Data.Set
 
-Finite sets, kept as a balanced binary search tree, as Data.Map is:
-membership, inserting and deleting take time logarithmic in the size.
-Many names are the Prelude's, so this module is meant to be imported
-qualified: import qualified Data.Set as Set.
+Finite sets, kept as a balanced binary search tree: a Data.Map whose
+values are (), which costs nothing in Go. Membership, inserting and
+deleting take time logarithmic in the size. A set built by a fold
+(fromList, foldl (\s x -> Set.insert x s) s0 xs) or by a loop that passes
+it to itself is built in place, as a map is (see Data.Map). Many names
+are the Prelude's, so this module is meant to be imported qualified:
+import qualified Data.Set as Set.
 
 Its source is [`lib/Data/Set.hgo`](../../lib/Data/Set.hgo).
 
 ```haskell
-data Set a
+newtype Set a
 
 instance Eq a => Eq (Set a)
 instance Foldable Set

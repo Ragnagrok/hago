@@ -4,11 +4,17 @@
 -- the persistent operations make, balanced as they are.
 import qualified Data.Map as Map
 
--- the same with alter, which uses the map twice, so it is never built in
--- place: every insert and delete persistent
+-- the same with alter given a function that reads the map, which is then
+-- used after the loop reads it, so it is never built in place: every insert
+-- and delete persistent
 persistently :: Map.Map Int Int -> [Int] -> Map.Map Int Int
 persistently m [] = m
-persistently m (k : ks) = persistently (Map.alter (const (if even k then Just k else Nothing)) (k `mod` 1000) m) ks
+persistently m (k : ks) = persistently (Map.alter (const (if even k && Map.size m >= 0 then Just k else Nothing)) (k `mod` 1000) m) ks
+
+-- the same with alter, in place
+altered :: Map.Map Int Int -> [Int] -> Map.Map Int Int
+altered m [] = m
+altered m (k : ks) = altered (Map.alter (const (if even k then Just k else Nothing)) (k `mod` 1000) m) ks
 
 -- a loop that builds its map in place: it reads it, then changes it
 build :: Map.Map Int Int -> [Int] -> Map.Map Int Int
@@ -49,3 +55,13 @@ main = do
   let again = build base [2, 4, 3, 30]
   print (Map.toList base, Map.toList again)
   print (Map.size wellMade, sum (Map.elems wellMade))
+  -- alter and adjust in place, in a loop and in folds, from maps kept
+  let viaAlter = altered Map.empty ks
+      counted = foldl (\m k -> Map.alter (\c -> Just (maybe 1 (+ 1) c)) (k `mod` 1000) m) Map.empty ks
+      adjusted = foldl (\m k -> Map.adjust (+ k) (k `mod` 1000) m) inPlace ks
+      adjustedSlowly = foldl (\m k -> Map.insertWith (+) (k `mod` 1000) k m) inPlace (filter (\k -> Map.member (k `mod` 1000) inPlace) ks)
+      thinned = foldl (\m k -> Map.alter (\_ -> Nothing) k m) base [2, 4 .. 10]
+  print (Map.toList viaAlter == Map.toList persistent, Map.toList counted == Map.toList wellMade)
+  print (Map.toList adjusted == Map.toList adjustedSlowly, Map.size inPlace, Map.toList thinned, Map.size base)
+  print (all Map.valid [viaAlter, counted, adjusted, thinned, base])
+  print (Map.toList (Map.adjust (* 2) 3 base), Map.toList (Map.adjust (* 2) 30 base), Map.lookup 3 base)

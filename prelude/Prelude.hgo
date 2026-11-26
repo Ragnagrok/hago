@@ -796,7 +796,9 @@ tail [] = Nothing
 -- What ++ means on lists. The second list is only demanded once the first runs out.
 append :: [a] -> Lazy [a] -> [a]
 append [] ys = ys
-append (x:xs) ys = x : append xs ys
+-- A cell already known to be the last is followed by ys itself, with no
+-- suspension of append [] ys in between: [x] ++ ys is one cell.
+append (x:xs) ys = if primNilNow xs then x : ys else x : append xs ys
 
 map :: (a -> b) -> [a] -> [b]
 map _ [] = []

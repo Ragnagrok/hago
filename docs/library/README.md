@@ -34,7 +34,7 @@ above each declaration. Do not edit these files; edit the sources and run `hago 
 | [Data.Ord](Data.Ord.md) | Orderings: comparing by a part of a value, and an order turned around. |
 | [Data.Ratio](Data.Ratio.md) | Fractions, exact: 1 % 3 + 1 % 6 is 1 % 2, never 0.49999. |
 | [Data.STRef](Data.STRef.md) | Mutable references in ST: see Control.Monad.ST. |
-| [Data.Set](Data.Set.md) | Finite sets, kept as a balanced binary search tree, as Data.Map is: membership, inserting and deleting take time logarithmic in the size. |
+| [Data.Set](Data.Set.md) | Finite sets, kept as a balanced binary search tree: a Data.Map whose values are (), which costs nothing in Go. |
 | [Data.String](Data.String.md) | Functions on String, which is Go's string: taking the first character off slices it without copying, so a String can be read from the front as a list would, without making one. |
 | [Data.String.Builder](Data.String.Builder.md) | Building a long String from many pieces. |
 | [Data.Time](Data.Time.md) | Points in time, Go's time.Time: the current time, the seconds between two, and dates written and read. |

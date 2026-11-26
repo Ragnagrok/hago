@@ -50,6 +50,7 @@ progs=(
   "the same, GHC without full laziness|bench/fib-map.hgo|fib-map+nofloat|-fno-full-laziness|"
   "fib 32 x 16, parMap|bench/fib-parmap.hgo|fib-parmap|-threaded -with-rtsopts=-N|"
   "Data.Map, 1M inserts, deletes, lookups|bench/map-insert-delete.hgo|map-insert-delete||"
+  "Data.Set, 1M inserts, deletes, lookups|bench/set-insert-delete.hgo|set-insert-delete||"
   "sieve to 1M, Data.Map|examples/sieve.hgo|sieve||1000000 map"
   "sieve to 10M, STVector / STUArray|examples/sieve.hgo|sieve||10000000 st"
   "sieve to 10M, IOVector / IOUArray|bench/sieve-io.hgo|sieve-io||"

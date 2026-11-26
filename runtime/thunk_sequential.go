@@ -19,6 +19,9 @@ type rt_thunk[T any] struct {
 	state uint8 // 0 not computed, 1 computing, 2 computed
 }
 
+// Whether a list's tail is computed already and empty (primNilNow).
+func rt_nilNow[T any](t *rt_thunk[List[T]]) bool { return t.state == 2 && t.v == nil }
+
 // A Lazy a is a *rt_thunk[a]: one allocation, and the closure that computes
 // it, which is dropped once it has run.
 func (t *rt_thunk[T]) force() T {

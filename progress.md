@@ -603,11 +603,39 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       | sieve to 1M, `Data.Map` | 0.68 s | 0.55 s | 0.31 s |
       | sieve to 10M, `Data.Map` | 8.7 s | 5.9 s | |
       | frequencies of 1M, `Data.Map` | 0.50 s | 0.42 s | 0.58 s |
-- [ ] **What is left of the map programs:** the sieve on a map, a half again GHC's: each step
-      allocates the lists it keeps (`[p]`, `++`). `alter` and `adjust` use the map twice, so
-      they are never in place; `Data.Set` is not in place yet. Specialisation leaves the list
-      functions fusion knows as they are, so `map f xs` that is not folded still calls `f`
-      through a closure.
+- [x] **What was left of the map programs** (2026-11-25):
+      - **The sieve's lists.** pprof had `[p]` and `++` at 213 of the 265 MB the sieve to a
+        million allocated. A cell whose tail is `[]` computed already points to one thunk
+        every list shares (`rt_nilTail`: a `rt_thunk[List[T]]` is laid out alike for every
+        `T`), so `[p]` is one allocation of 16 bytes instead of 48. And `append` asks
+        whether the rest of its first list is computed and empty (`primNilNow`, only for
+        definitions whose two branches mean the same), and if so gives the last cell `ys`
+        itself as its tail, without a suspension of `append [] ys`: `[p] ++ ps` is one cell.
+        265 MB → 120 MB; what is left is the map's own work.
+      - **`alter` and `adjust`** walk the tree once and take an owner (`alterT`, `adjustT`), as
+        `insertWith` does, so folds and loops build with them in place. A loop got no owner
+        when its call to `alter` had two arguments that were expressions, since the inliner
+        copied a call only with one: a function whose body is a call given its parameters
+        as they are, once each, in their order, as `alter f k m = alterT noOwner f k m`, is
+        now copied whatever its arguments, each still computed once, where the call was,
+        in the same order.
+      - **`Data.Set`** is a `newtype` of `Map a ()` (a `()` takes no room in Go), and has
+        everything a map has in place.
+      - **A `foldl` over a list that exists** (a variable, a parameter) is a loop over its
+        cells too; it was a call to `listFoldl`, which called the step's curried closure,
+        one allocation per element (a fold of three million cells, 0.41 s → 0.34 s).
+      - Not done: `map f xs` that is not folded calls `f` through a closure. Specialised by
+        hand in the Go of three million elements it took the same time and a fifth less
+        memory, which is not worth the copies.
+      `examples/map-in-place.hgo` checks `alter` and `adjust` in loops and folds against the
+      persistent ones (GHC's containers print the same), `examples/lazy.hgo` that `++`
+      demands no more than before. Measured, before and after:
+
+      | Program | Before | After | GHC |
+      | --- | --- | --- | --- |
+      | sieve to 1M, `Data.Map` | 0.59 s, 25 MB | 0.42 s, 17 MB | 0.31 s, 16 MB |
+      | sieve to 10M, `Data.Map` | 5.8 s, 188 MB | 5.2 s, 120 MB | |
+      | `Data.Set`, 1M inserts, deletes, lookups | 1.10 s, 96 MB | 0.35 s, 66 MB | 1.12 s, 156 MB |
 - [x] **The same programs in GHC** (`bench/ghc/`, `bench/ghc/run.sh`; the README's "Against
       GHC"). Even on strict code and on folds of lists made where they are folded; Hago ahead
       on JSON (0.23 s against 0.28 s, the combinators and printer ported line by line) and on
