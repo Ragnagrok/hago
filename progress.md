@@ -652,6 +652,47 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       | sieve to 1M, `Data.Map` | 0.59 s, 25 MB | 0.42 s, 17 MB | 0.31 s, 16 MB |
       | sieve to 10M, `Data.Map` | 5.8 s, 188 MB | 5.2 s, 120 MB | |
       | `Data.Set`, 1M inserts, deletes, lookups | 1.10 s, 96 MB | 0.35 s, 66 MB | 1.12 s, 156 MB |
+- [x] **Hugen's core, a real program** (2026-11-26). Hugen's fighting game engine, its pure
+      core ported line by line to Hago in `hago-examples` (thirteen modules, a driver that
+      prints the match tick by tick and matches the Haskell original over a million ticks),
+      took 10.1 s for a million ticks where GHC takes 1.5 s. Three causes, each fixed:
+      - **Go's collector ran every few megabytes.** Less than a megabyte is alive, so Go's
+        least goal, 8 MB at `GOGC=200`, made 2,200 cycles a million ticks, each waking a mark
+        worker on every processor: with one processor the run took 2.6 s where sixteen took
+        4.2 s, and without a collector 2.2 s. The goal is now never less than 32 MB
+        (`rt_tuneGC`, from a finalizer after each cycle: the percentage that gives that goal
+        for what is alive, at most 800, since Go's least goal grows with it, and 200 once three
+        times what is alive is more). 4.2 s → 2.2 s at 300,000 ticks. The cost is memory:
+        a program with little alive that allocates much takes up to 35 MB (the sieve on a map
+        17 → 35 MB, frequencies 12 → 35 MB, `Data.Map` 66 → 81 MB); the hash table went from
+        0.26 s to 0.12 s.
+      - **A record of many fields was an interface:** a type of one constructor too big to be
+        kept by value (`Fighter`, `Match`) was a Go interface, and every field read asserted
+        it to its struct and copied the struct out. It is now a pointer to the struct
+        (`dataReprs`), as the trees of `Data.Map` were: 8 % fewer bytes allocated.
+      - **A comprehension kept as a list** was `concatMap`: a curried closure and a suspended
+        rest for every element, kept or not, and `[x] ++ rest` for each kept. Comprehensions
+        are now translated as GHC does, a generator a `foldr` whose step puts an element before
+        the rest or skips to it (a generator inside another still joins its list with `++`,
+        since Hago's `foldr` computes its end first), a `case` in a step fuses as `if` does,
+        and a `foldr` whose list is kept and whose step makes at most one element is a loop
+        that skips without allocating, and for each element kept a cell whose tail goes on
+        from the next cell (`fuseFoldrLazy`). 9 % fewer allocations. `examples/lazy.hgo`
+        checks an infinite source, an error in a cell never reached, nested generators over an
+        infinite list, patterns that drop elements.
+      The per-tick output is still the original's. A million ticks, five runs, cores 0-15:
+
+      | | Before | After | GHC |
+      | --- | --- | --- | --- |
+      | Hugen's core, 1M ticks | 10.1 s, 14 MB | 6.4 s, 37 MB | 1.5 s, 9 MB |
+
+- [ ] **What is left of Hugen:** a third of what it allocates is `evalTerm`'s local functions,
+      closures made again on each call (`evalTerm c sight self = go`, `go` capturing them):
+      eta-expanding a function whose body only makes local functions, and lifting local
+      functions that are only called to the top with what they capture as parameters, as GHC
+      does, would make none. Then `Command.matches` (lazy lists searched with `any` and `take
+      1`), `zip` of constant lists in `Input.relative` (a literal list is built on each call;
+      constants could be made once), and the driver's own hash.
 - [x] **The same programs in GHC** (`bench/ghc/`, `bench/ghc/run.sh`; the README's "Against
       GHC"). Even on strict code and on folds of lists made where they are folded; Hago ahead
       on JSON (0.23 s against 0.28 s, the combinators and printer ported line by line) and on

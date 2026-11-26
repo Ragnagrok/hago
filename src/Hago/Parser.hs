@@ -615,19 +615,36 @@ qualifier = gen <|> letQ <|> (QGuard <$> expr)
       notFollowedBy (key "in")
       pure (QLet ds)
 
--- | The translation of the Haskell report: generators are concatMap, guards
--- are if, and an element that does not match a generator's pattern is skipped.
+-- | The translation GHC makes, which means what the Haskell report's does
+-- (generators are concatMap, guards are if, and an element that does not
+-- match a generator's pattern is skipped) without lists of one element
+-- joined with ++: a generator is a foldr whose step is given the rest of
+-- the list, puts an element before it or skips to it, and
+-- [b | (k, b) <- xs, p k] is foldr (\x r -> case x of (k, b) -> if p k then
+-- b : r else r; _ -> r) [] xs. Hago's foldr computes its end first, so a
+-- generator inside another is a list of its own followed by the rest with
+-- ++, which would otherwise be computed before the inner list is visited.
 comprehension :: Expr -> [Qualifier] -> Expr
-comprehension e = \case
-  [] -> EApp (EApp (ECon ":") e) (ECon "[]")
-  QGuard b : qs -> EIf b (comprehension e qs) (ECon "[]")
-  QLet ds : qs -> ELet ds (comprehension e qs)
-  QGen p l : qs ->
-    let body = comprehension e qs
-        fn = case unLocP p of
-          PVar _ -> ELam [p] body
-          _ -> ELam [PVar "_lc"] (ECase (EVar "_lc") [Alt p (Rhs [(Nothing, body)] []), Alt PWild (Rhs [(Nothing, ECon "[]")] [])])
-     in EApp (EApp (EVar "Prelude.concatMap") fn) l
+comprehension e qs0 = go (0 :: Int) Nothing qs0
+  where
+    -- the list that follows, a variable, or [] for the outermost generator
+    end = maybe (ECon "[]") EVar
+    go n tl = \case
+      [] -> EApp (EApp (ECon ":") e) (end tl)
+      QGuard b : qs -> EIf b (go n tl qs) (end tl)
+      QLet ds : qs -> ELet ds (go n tl qs)
+      QGen p l : qs ->
+        let r = "_lr" ++ show n
+            body = go (n + 1) (Just r) qs
+            step = case unLocP p of
+              PVar _ -> ELam [p, PVar r] body
+              _ ->
+                let x = "_lc" ++ show n
+                 in ELam [PVar x, PVar r] (ECase (EVar x) [Alt p (Rhs [(Nothing, body)] []), Alt PWild (Rhs [(Nothing, EVar r)] [])])
+            fold = EApp (EApp (EApp (EVar "Prelude.foldr") step) (ECon "[]")) l
+         in case tl of
+              Nothing -> fold
+              Just t -> EApp (EApp (EVar "Prelude.append") fold) (EVar t)
 
 -- | After an opening parenthesis: unit, a tuple constructor, an operator as a
 -- value, a section, a parenthesised expression or a tuple.

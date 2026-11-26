@@ -102,7 +102,7 @@ generate runtime prog =
       , "package main"
       , "import (" ]
         ++ baseImports
-        ++ (if concurrent then ["rt_reflect \"reflect\"", "rt_runtime \"runtime\"", "rt_syscall \"syscall\""] else [])
+        ++ (if concurrent then ["rt_reflect \"reflect\"", "rt_syscall \"syscall\""] else [])
         ++ partImports
         ++ [show p | p <- foreignPkgs]
         ++ [")"]
@@ -111,6 +111,8 @@ generate runtime prog =
       , "rt_fmt \"fmt\""
       , "rt_os \"os\""
       , "rt_debug \"runtime/debug\""
+      , "rt_runtime \"runtime\""
+      , "rt_metrics \"runtime/metrics\""
       , "rt_strconv \"strconv\""
       , "rt_strings \"strings\""
       , "rt_sync \"sync\""
@@ -226,15 +228,9 @@ generate runtime prog =
       TCon "IO" [_] -> True
       _ -> False
     -- drop the global reference first, so actions already run can be collected
-    -- The garbage collector runs when the heap has grown by 200% of what was
-    -- left alive, not Go's 100%: a functional program allocates much and
-    -- briefly, and Go's collector, which is not generational, marks
-    -- everything alive on each cycle, so a cycle costs what is alive and
-    -- the cycles are fewer. The heap reaches three times what is alive, as
-    -- GHC's does by default. GOGC still decides, if it is set.
+    -- The garbage collector's settings (see rt_startGC).
     mainFn =
-      [ "func main() {", "defer rt_failed()"
-      , "if rt_os.Getenv(\"GOGC\") == \"\" {", "rt_debug.SetGCPercent(200)", "}"
+      [ "func main() {", "defer rt_failed()", "rt_startGC()"
       ] ++ fromMaybe ["m := " ++ mangle "main", mangle "main" ++ " = nil", "rt_run(m)"] mainRun ++ ["}"]
 
 -- Names -------------------------------------------------------------------------
@@ -441,15 +437,21 @@ data Repr
 --
 -- A type with two constructors, one with no fields, as a list or a tree, is
 -- a pointer, which is half the size of an interface and is matched by
--- comparing it with nil.
+-- comparing it with nil. So is a type of one constructor that is not kept
+-- by value (a record of many fields, one that contains itself): a field is
+-- read through the pointer, where an interface would be asserted to its
+-- struct and the struct copied out.
 dataReprs :: Program -> M.Map Name Repr
-dataReprs prog = M.union byValueReprs pointers
+dataReprs prog = M.unions [byValueReprs, pointers, onePointers]
   where
     byValueReprs = M.fromList [(n, repr n) | AcyclicSCC n <- stronglyConnComp [(n, n, byValue n) | n <- S.toList candidates]]
     pointers = M.fromList
       [ (n, Pointer) | (n, DataInfo _ _ [a, b] nt _) <- M.toList (progData prog), not nt, n `notElem` ["Bool"]
       , null (hkPositions prog n), tupleArity n == Nothing
       , length (filter null [ciFields (progCons prog M.! a), ciFields (progCons prog M.! b)]) == 1 ]
+    onePointers = M.fromList
+      [ (n, Pointer) | (n, DataInfo _ _ [k] nt _) <- M.toList (progData prog), not nt, n `notElem` ["()"]
+      , null (hkPositions prog n), tupleArity n == Nothing, not (null (ciFields (progCons prog M.! k))) ]
     candidates = S.fromList
       [ n | (n, DataInfo _ _ ks nt _) <- M.toList (progData prog), not nt, not (null ks), n `notElem` ["[]", "Bool", "()"]
       , tupleArity n == Nothing, null (hkPositions prog n), sizeOf [] n <= (8 :: Int) ]
@@ -974,6 +976,8 @@ genExpr ctx e = case e of
           fuseFoldr ctx t k z xs
       | isTop ctx "listFoldr", [k, z, xs] <- args, fusable (prodOf ctx xs), Just _ <- strictStepOf ctx k ->
           fuseFoldrBack ctx t k z xs
+      | isTop ctx "listFoldr", [k, z, xs] <- args, Just (_, r, body) <- lam2 k, Just st <- stepOf ctx r body, producer st ->
+          fuseFoldrLazy ctx t k z xs
     -- Iter.find (any, all, elem, head) of an Iter made right there
     CVar fn _ t | Just "rt_iterFind" <- foreignSym ctx fn, [q0, xs0] <- args
                 , let p = iterProdOf ctx xs0, iterKnown p, fusable p -> do
@@ -1960,6 +1964,7 @@ data Step
   | SEach Prod Step
   | SIf CExpr Step Step
   | SLet [CBind] Step
+  | SMatch [CExpr] [CRow] (CExpr -> Step)   -- ^ a case, and the step each body is
   | SStop Prod   -- ^ these elements, and the list ends: the step dropped its rest
 
 -- | The type of an Iter's values.
@@ -2111,6 +2116,14 @@ stepOf ctx r e = case e of
   CApp (CCon ":" _ _) [h, t] | free h -> SYield h <$> lazyStep t
   CIf c a b _ | free c -> SIf c <$> stepOf ctx r a <*> stepOf ctx r b
   CLet bs b _ | all (\(CBind _ _ _ x) -> free x) bs -> SLet bs <$> stepOf ctx r b
+  -- a case whose scrutinees, bindings and guards do not use the rest, as a
+  -- comprehension's generator with a pattern makes
+  CMatch ss rows _
+    | all free ss, all rowFree rows
+    , Just _ <- mapM (stepOf ctx r) [b | CRow _ _ gs <- rows, (_, b) <- gs] ->
+        Just (SMatch ss rows (\b -> fromMaybe (error "stepOf: a body not of the case") (stepOf ctx r b)))
+    where
+      rowFree (CRow _ binds gs) = all (\(CBind _ _ _ x) -> free x) binds && all (maybe True free . fst) gs
   _ -> Nothing
   where
     free x = r `notElem` coreRefs x
@@ -2147,6 +2160,7 @@ fusable p = sites p <= 8
       SEach q s -> sites q + stepSites s
       SIf _ a b -> stepSites a + stepSites b
       SLet _ s -> stepSites s
+      SMatch _ rows sf -> sum [stepSites (sf b) | CRow _ _ gs <- rows, (_, b) <- gs]
       SStop q -> sites q
 
 -- | Names bound by the expression made new, so that the loops, which bind
@@ -2424,6 +2438,7 @@ stops = \case
   SEach _ s -> stops s
   SIf _ a b -> stops a || stops b
   SLet _ s -> stops s
+  SMatch _ rows sf -> or [stops (sf b) | CRow _ _ gs <- rows, (_, b) <- gs]
   SNext -> False
 
 -- | A step's elements; lab is the label that ends the list, for a step
@@ -2446,6 +2461,10 @@ genStep ctx lab st k = case st of
     (ctx', ls) <- genBinds ctx bs
     b <- genStep ctx' lab s k
     pure (["{"] ++ ls ++ b ++ ["}"])
+  SMatch ss rows sf -> do
+    m <- freshName "M"
+    ls <- genMatch (\c b -> (++ ["break " ++ m]) <$> genStep c lab (sf b) k) ctx ss rows
+    pure ([m ++ ":", "for {"] ++ ls ++ ["}"])
   SStop p -> (++ maybe [] (\l -> ["break " ++ l]) lab) <$> genLoop ctx p k
 
 -- | A new variable holding the value of e.
@@ -2549,6 +2568,74 @@ exitsOf ctx k = case k of
       CIf c a b _ -> r `notElem` coreRefs c && exits r a && exits r b
       CLet bs b _ -> all (\(CBind _ _ _ x) -> r `notElem` coreRefs x) bs && exits r b
       _ -> False
+
+-- | Whether a step puts at most one element before its rest, as a
+-- comprehension's does (see 'fuseFoldrLazy').
+producer :: Step -> Bool
+producer = \case
+  SNext -> True
+  SYield _ SNext -> True
+  SIf _ a b -> producer a && producer b
+  SLet _ s -> producer s
+  SMatch _ rows sf -> and [producer (sf b) | CRow _ _ gs <- rows, (_, b) <- gs]
+  _ -> False
+
+-- | A foldr that makes a list that is kept, a comprehension's: a loop
+-- over the cells that skips the elements the step drops, and for one it
+-- keeps, a cell whose tail goes on with the loop from the next cell, when
+-- it is forced. listFoldr would call the step's curried closure on every
+-- element and suspend the rest of the fold for each, kept or not. The end
+-- z is computed first, as listFoldr's argument is.
+fuseFoldrLazy :: Ctx -> Type -> CExpr -> CExpr -> CExpr -> Gen String
+fuseFoldrLazy ctx0 t k0 z xs0 = do
+  (k, xs) <- renamed2 k0 xs0
+  let ctx = noSelf ctx0
+      (pts, res) = splitFun 3 (zonk (progSubst (cxProg ctx)) t)
+  case (lam2 k, pts, res) of
+    (Just (x, r, body), [_, _, srcT], TCon "[]" [_]) | Just st <- stepOf ctx r body -> do
+      go <- freshName "go"
+      c <- freshName "c"
+      zv <- freshName "z"
+      z' <- genExpr ctx z
+      xs' <- genExpr ctx xs
+      let ctx' = bindLocals ctx [(x, 0)]
+          resT = goTy ctx res
+          step c' = \case
+            SNext -> pure []
+            SYield h _ -> do
+              h' <- genExpr c' h
+              tl <- freshName "t"
+              pure [ tl ++ " := " ++ c ++ ".F1"
+                   , "return &Cons[" ++ goTy ctx (elemOf res) ++ "]{" ++ h' ++ ", rt_lazy(func() " ++ resT ++ " { return " ++ go ++ "(" ++ tl ++ ".force()) })}" ]
+            SIf cond a b -> do
+              cond' <- genExpr c' cond
+              as <- step c' a
+              bs <- step c' b
+              pure (["if " ++ cond' ++ " {"] ++ as ++ ["} else {"] ++ bs ++ ["}"])
+            SLet bs s -> do
+              (c'', ls) <- genBinds c' bs
+              b <- step c'' s
+              pure (["{"] ++ ls ++ b ++ ["}"])
+            SMatch ss rows sf -> do
+              m <- freshName "M"
+              ls <- genMatch (\c'' b -> (++ ["break " ++ m]) <$> step c'' (sf b)) c' ss rows
+              pure ([m ++ ":", "for {"] ++ ls ++ ["}"])
+            _ -> error "fuseFoldrLazy: not a step that makes one element"
+      ls <- step ctx' st
+      pure $ intercalate "\n" $
+        [ "func() " ++ resT ++ " {"
+        , zv ++ " := " ++ z'
+        , "var " ++ go ++ " func(" ++ goTy ctx srcT ++ ") " ++ resT
+        , go ++ " = func(" ++ c ++ " " ++ goTy ctx srcT ++ ") " ++ resT ++ " {"
+        , "for ; " ++ c ++ " != nil; " ++ c ++ " = " ++ c ++ ".F1.force() {"
+        , mangle x ++ " := " ++ c ++ ".F0", "_ = " ++ mangle x ]
+        ++ ls ++
+        [ "}", "return " ++ zv, "}", "return " ++ go ++ "(" ++ xs' ++ ")", "}()" ]
+    _ -> error "fuseFoldrLazy: not a fold that makes a list"
+  where
+    elemOf = \case
+      TCon "[]" [e] -> e
+      _ -> error "fuseFoldrLazy: not a list"
 
 fuseFoldr :: Ctx -> Type -> CExpr -> CExpr -> CExpr -> Gen String
 fuseFoldr ctx0 t k0 z xs0 = do

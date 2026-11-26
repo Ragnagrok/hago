@@ -371,7 +371,9 @@ data Tree a = Leaf | Node (Tree a) a (Tree a)
 - **`type` synonyms** take parameters and can be exported. They must be given all their
   arguments, and a synonym that refers to itself is an error.
 - **List comprehensions** have generators, guards and `let`, and they are lazy, like the lists
-  they build.
+  they build. A generator is a `foldr` that puts each element before the rest or skips it, as
+  GHC translates them, so a comprehension kept as a list is a loop that skips what the guards
+  drop and makes a cell for each element when it is reached.
 - **`deriving`** covers `Eq`, `Ord`, `Show`, `Read`, `Enum`, `Bounded`, `Functor`, `Foldable` and
   `Traversable`. `Enum` needs constructors without fields; `[minBound .. maxBound]` lists every
   value of such a type. The last three map over the last type parameter. `Show` prints records with their fields, as Haskell
@@ -406,10 +408,11 @@ func map_[T_a any, T_b any](_arg0 func(T_a) T_b, _arg1 List[T_a]) List[T_b] {
 
 - **Data types** are kept the cheapest way their shape allows. One with a single constructor
   is that constructor's struct, passed by value, so `data Meters = Meters Double` costs what
-  `newtype` does. A small sum that does not contain itself (`Maybe`, `Either`, `Ordering`) is
-  one struct with a tag, also by value. One with two constructors, one without fields (a list,
-  `Data.Map`'s trees), is a pointer, `nil` for the empty one. Anything else is a Go interface
-  with a struct per constructor. A field of a type that contains itself counts as the pointer
+  `newtype` does; if it is too big for that (more than eight words) or contains itself, a
+  pointer to the struct, whose fields are read through it. A small sum that does not contain
+  itself (`Maybe`, `Either`, `Ordering`) is one struct with a tag, also by value. One with two
+  constructors, one without fields (a list, `Data.Map`'s trees), is a pointer, `nil` for the
+  empty one. Anything else is a Go interface with a struct per constructor. A field of a type that contains itself counts as the pointer
   or interface it is, so a record with a `Map` in it is still kept by value.
 
 - **Polymorphism** becomes Go generics.
@@ -686,17 +689,17 @@ side by side with others (`bench/run.sh OLD_HAGO NEW_HAGO`).
 | parse and pretty print 3.7 MB of JSON with `examples/json.hgo` (`jq .`: 0.09 s, 28 MB) | 0.20 s | ~102 MB |
 | `fib 32` sixteen times with `map` | 0.13 s | — |
 | the same with `parMap`, on 16 processors | 0.03 s | — |
-| a million `Data.Map` inserts, then half a million deletes with `foldl`, and lookups | 0.35 s | ~65 MB |
-| the same with a `Data.Set` | 0.35 s | ~66 MB |
+| a million `Data.Map` inserts, then half a million deletes with `foldl`, and lookups | 0.36 s | ~80 MB |
+| the same with a `Data.Set` | 0.34 s | ~81 MB |
 | the primes up to a million, sieve of Eratosthenes on an `STVector` (`examples/sieve.hgo`) | <0.01 s | ~3 MB |
-| the same with a `Data.Map` (the incremental sieve) | 0.42 s | ~17 MB |
+| the same with a `Data.Map` (the incremental sieve) | 0.37 s | ~35 MB |
 | the primes up to ten million, on an `STVector` | 0.03 s | ~11 MB |
 | the same on an `IOVector` | 0.03 s | ~11 MB |
 | the same on an `IOVector`, in a program with threads | 0.04 s | ~11 MB |
 | the same with a `Data.Map` | 5.2 s | ~120 MB |
 | the same, hand-written Go | 0.03 s | ~12 MB |
-| how often each of a million numbers appears, in a `HashTable` in ST (`examples/frequencies.hgo`) | 0.11 s | ~13 MB |
-| the same with a `Data.Map` | 0.42 s | ~19 MB |
+| how often each of a million numbers appears, in a `HashTable` in ST (`examples/frequencies.hgo`) | 0.12 s | ~35 MB |
+| the same with a `Data.Map` | 0.42 s | ~35 MB |
 
 The JSON is the one `bench/json-input.go` writes, always the same:
 `go run bench/json-input.go > input.json`, then `hago run examples/json.hgo input.json`.
@@ -728,7 +731,10 @@ The JSON is the one `bench/json-input.go` writes, always the same:
   it costs grows with what a program allocates, and a functional program allocates much and
   briefly. Two things make it cheaper. Programs run with `GOGC=200` unless `GOGC` is set:
   the heap reaches three times what is alive, as GHC's does by default, and the cycles are
-  half as many (`Data.Map` 1.79 s → 1.44 s, JSON 0.24 s → 0.22 s, a third more memory). And
+  half as many (`Data.Map` 1.79 s → 1.44 s, JSON 0.24 s → 0.22 s, a third more memory); and
+  never less than 32 MB, since with little alive Go's least goal made a cycle every few
+  megabytes, each waking a worker on every processor (Hugen's core, below a megabyte alive,
+  took half the time). And
   **a map built by a fold or a loop is built in place:** inserting into a persistent tree
   copies the path to the key, twenty nodes in a map of a million, but the nodes a fold made
   itself cannot be seen by anything else, so the fold changes them instead (each node keeps
@@ -774,26 +780,30 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
 | `fib 32` sixteen times with `map` (GHC computes it once) | 0.13 s | 0.01 s |
 | the same, GHC without full laziness | 0.12 s | 0.13 s |
 | the same with `parMap`, on 16 processors | 0.04 s | 0.05 s |
-| a million `Data.Map` inserts, half a million deletes, lookups | 0.36 s, 66 MB | 1.43 s, 218 MB |
-| a million `Data.Set` inserts, half a million deletes, lookups | 0.34 s, 66 MB | 1.12 s, 156 MB |
-| the primes up to a million with a `Data.Map` | 0.41 s | 0.31 s |
+| a million `Data.Map` inserts, half a million deletes, lookups | 0.34 s, 81 MB | 1.40 s, 218 MB |
+| a million `Data.Set` inserts, half a million deletes, lookups | 0.35 s, 80 MB | 1.20 s, 156 MB |
+| the primes up to a million with a `Data.Map` | 0.37 s | 0.31 s |
 | the primes up to ten million, on an `STVector` (`STUArray` in GHC) | 0.03 s | 0.04 s |
 | the same on an `IOVector` (`IOUArray`) | 0.03 s | 0.03 s |
 | the same, in a program with threads | 0.04 s | 0.04 s |
-| frequencies of a million numbers, in a hash table in ST | 0.11 s, 12 MB | 0.20 s, 45 MB |
-| the same with a `Data.Map` | 0.39 s | 0.58 s |
+| frequencies of a million numbers, in a hash table in ST | 0.10 s, 35 MB | 0.20 s, 44 MB |
+| the same with a `Data.Map` | 0.41 s | 0.57 s |
+| Hugen's core, a million ticks of a match (`hago-examples`) | 6.4 s, 37 MB | 1.5 s, 9 MB |
 
 - **Even:** strict code at concrete types, newtypes, folds of lists made where they are
   folded (both make loops of them, in IO and in `StateT` too), recursive IO loops, functions
   that end calling each other, mutable arrays, in ST, in IO and in a program with threads,
   `parMap`.
 - **Hago ahead:** a `Data.Map` or a `Data.Set` built by a fold or a loop, which Hago builds in
-  place (three to four times faster, a third to a half of the memory); a `foldr` that is recursion, taken from the last
-  element back (five times faster, with half the memory, or none over a range); the JSON
-  parser and printer; the hash table; and memory in general.
-- **GHC ahead:** the sieve on a map, by a third: what is left is the map's own work, the nodes
+  place (three to four times faster, a third to a half of the memory); a `foldr` that is
+  recursion, taken from the last element back (five times faster, with half the memory, or
+  none over a range); the JSON parser and printer; the hash table; and memory where much is
+  alive.
+- **GHC ahead:** the sieve on a map, by a fifth: what is left is the map's own work, the nodes
   of the keys it inserts and the rebalancing, where GHC's generational collector does better
-  than Go's.
+  than Go's. A program with little alive that allocates much takes up to 35 MB, the heap's
+  floor. And a real program, Hugen's fighting game engine ported line by line, by four times:
+  its local functions are closures, made again on each call, where GHC lifts them out.
 
 ## Using it
 

@@ -387,7 +387,9 @@ data Tree a = Leaf | Node (Tree a) a (Tree a)
 - **Los sinónimos con `type`** toman parámetros y se pueden exportar. Hay que darles todos sus
   argumentos, y un sinónimo que se refiere a sí mismo es un error.
 - **Las listas por comprensión** tienen generadores, guardas y `let`, y son perezosas, como las
-  listas que construyen.
+  listas que construyen. Un generador es un `foldr` que pone cada elemento antes del resto o lo
+  saltea, como las traduce GHC, así que una comprensión guardada como lista es un loop que
+  saltea lo que las guardas descartan y arma una celda por elemento cuando se llega a él.
 - **`deriving`** cubre `Eq`, `Ord`, `Show`, `Read`, `Enum`, `Bounded`, `Functor`, `Foldable` y
   `Traversable`. `Enum` pide constructores sin campos; `[minBound .. maxBound]` lista todos los
   valores de un tipo así. Los tres últimos mapean sobre el último parámetro de tipo. `Show` muestra los records con sus campos,
@@ -422,7 +424,9 @@ func map_[T_a any, T_b any](_arg0 func(T_a) T_b, _arg1 List[T_a]) List[T_b] {
 
 - **Los tipos de datos** se guardan de la forma más barata que su forma permite. Uno con un solo
   constructor es el struct de ese constructor, pasado por valor, así que
-  `data Meters = Meters Double` cuesta lo mismo que un `newtype`. Un tipo suma chico que no se
+  `data Meters = Meters Double` cuesta lo mismo que un `newtype`; si es demasiado grande para
+  eso (más de ocho palabras) o se contiene a sí mismo, un puntero al struct, cuyos campos se
+  leen a través de él. Un tipo suma chico que no se
   contiene a sí mismo (`Maybe`, `Either`, `Ordering`) es un struct con una etiqueta, también
   por valor. Uno con dos constructores, uno sin campos (una lista, los árboles de `Data.Map`),
   es un puntero, `nil` para el vacío. Cualquier otro es una interfaz de Go con un struct por
@@ -710,17 +714,17 @@ lado a lado con otros (`bench/run.sh HAGO_VIEJO HAGO_NUEVO`).
 | parsear e imprimir con formato 3,7 MB de JSON con `examples/json.hgo` (`jq .`: 0,09 s, 28 MB) | 0,20 s | ~102 MB |
 | `fib 32` dieciséis veces con `map` | 0,13 s | — |
 | lo mismo con `parMap`, en 16 procesadores | 0,03 s | — |
-| un millón de inserciones en un `Data.Map`, después medio millón de borrados con `foldl`, y búsquedas | 0,35 s | ~65 MB |
-| lo mismo con un `Data.Set` | 0,35 s | ~66 MB |
+| un millón de inserciones en un `Data.Map`, después medio millón de borrados con `foldl`, y búsquedas | 0,36 s | ~80 MB |
+| lo mismo con un `Data.Set` | 0,34 s | ~81 MB |
 | los primos hasta un millón, criba de Eratóstenes sobre un `STVector` (`examples/sieve.hgo`) | <0,01 s | ~3 MB |
-| lo mismo con un `Data.Map` (la criba incremental) | 0,42 s | ~17 MB |
+| lo mismo con un `Data.Map` (la criba incremental) | 0,37 s | ~35 MB |
 | los primos hasta diez millones, sobre un `STVector` | 0,03 s | ~11 MB |
 | lo mismo sobre un `IOVector` | 0,03 s | ~11 MB |
 | lo mismo sobre un `IOVector`, en un programa con hilos | 0,04 s | ~11 MB |
 | lo mismo con un `Data.Map` | 5,2 s | ~120 MB |
 | lo mismo, Go escrito a mano | 0,03 s | ~12 MB |
-| cuántas veces aparece cada uno de un millón de números, en una `HashTable` en ST (`examples/frequencies.hgo`) | 0,11 s | ~13 MB |
-| lo mismo con un `Data.Map` | 0,42 s | ~19 MB |
+| cuántas veces aparece cada uno de un millón de números, en una `HashTable` en ST (`examples/frequencies.hgo`) | 0,12 s | ~35 MB |
+| lo mismo con un `Data.Map` | 0,42 s | ~35 MB |
 
 El JSON es el que escribe `bench/json-input.go`, siempre el mismo:
 `go run bench/json-input.go > input.json`, y después `hago run examples/json.hgo input.json`.
@@ -757,7 +761,9 @@ El JSON es el que escribe `bench/json-input.go`, siempre el mismo:
   mucho y por poco tiempo. Dos cosas lo abaratan. Los programas corren con `GOGC=200` salvo que
   `GOGC` esté definido: el heap llega a tres veces lo que está vivo, como el de GHC por defecto,
   y los ciclos son la mitad (`Data.Map` 1,79 s → 1,44 s, JSON 0,24 s → 0,22 s, un tercio más de
-  memoria). Y **un map construido por un pliegue o un loop se construye en el lugar:** insertar
+  memoria); y nunca menos de 32 MB, porque con poco vivo la meta mínima de Go hacía un ciclo
+  cada pocos megabytes, y cada uno despertaba un worker en cada procesador (el núcleo de Hugen,
+  con menos de un megabyte vivo, tardó la mitad). Y **un map construido por un pliegue o un loop se construye en el lugar:** insertar
   en un árbol persistente copia el camino hasta la clave, veinte nodos en un map de un millón,
   pero los nodos que hizo el propio pliegue no los puede ver nadie más, así que el pliegue los
   cambia en vez de copiarlos (cada nodo guarda el dueño que lo hizo; ver `Data.Map`). El map del
@@ -804,14 +810,15 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
 | `fib 32` dieciséis veces con `map` (GHC lo calcula una vez) | 0,13 s | 0,01 s |
 | lo mismo, GHC sin full laziness | 0,12 s | 0,13 s |
 | lo mismo con `parMap`, en 16 procesadores | 0,04 s | 0,05 s |
-| un millón de inserciones en un `Data.Map`, medio millón de borrados, búsquedas | 0,36 s, 66 MB | 1,43 s, 218 MB |
-| un millón de inserciones en un `Data.Set`, medio millón de borrados, búsquedas | 0,34 s, 66 MB | 1,12 s, 156 MB |
-| los primos hasta un millón con un `Data.Map` | 0,41 s | 0,31 s |
+| un millón de inserciones en un `Data.Map`, medio millón de borrados, búsquedas | 0,34 s, 81 MB | 1,40 s, 218 MB |
+| un millón de inserciones en un `Data.Set`, medio millón de borrados, búsquedas | 0,35 s, 80 MB | 1,20 s, 156 MB |
+| los primos hasta un millón con un `Data.Map` | 0,37 s | 0,31 s |
 | los primos hasta diez millones, sobre un `STVector` (`STUArray` en GHC) | 0,03 s | 0,04 s |
 | lo mismo sobre un `IOVector` (`IOUArray`) | 0,03 s | 0,03 s |
 | lo mismo, en un programa con hilos | 0,04 s | 0,04 s |
-| frecuencias de un millón de números, en una tabla hash en ST | 0,11 s, 12 MB | 0,20 s, 45 MB |
-| lo mismo con un `Data.Map` | 0,39 s | 0,58 s |
+| frecuencias de un millón de números, en una tabla hash en ST | 0,10 s, 35 MB | 0,20 s, 44 MB |
+| lo mismo con un `Data.Map` | 0,41 s | 0,57 s |
+| el núcleo de Hugen, un millón de ticks de una pelea (`hago-examples`) | 6,4 s, 37 MB | 1,5 s, 9 MB |
 
 - **Parejos:** el código estricto en tipos concretos, los newtypes, los pliegues de listas que
   se arman donde se pliegan (los dos los vuelven loops, también en IO y en `StateT`), los loops
@@ -819,13 +826,15 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
   ST, en IO y en un programa con hilos, `parMap`.
 - **Adelante Hago:** un `Data.Map` o un `Data.Set` construido por un pliegue o un loop, que Hago
   construye en el lugar (de tres a cuatro veces más rápido, de un tercio a la mitad de la
-  memoria); un `foldr` que es recursión, tomado
-  desde el último elemento hacia atrás (cinco veces más rápido, con la mitad de la memoria, o
-  ninguna sobre un rango); el parser y el impresor de JSON; la tabla hash; y la memoria en
-  general.
-- **Adelante GHC:** la criba con un map, por un tercio: lo que queda es el trabajo del propio
+  memoria); un `foldr` que es recursión, tomado desde el último elemento hacia atrás (cinco
+  veces más rápido, con la mitad de la memoria, o ninguna sobre un rango); el parser y el
+  impresor de JSON; la tabla hash; y la memoria donde hay mucho vivo.
+- **Adelante GHC:** la criba con un map, por un quinto: lo que queda es el trabajo del propio
   map, los nodos de las claves que inserta y el rebalanceo, donde el recolector generacional de
-  GHC anda mejor que el de Go.
+  GHC anda mejor que el de Go. Un programa con poco vivo que reserva mucho llega a 35 MB, el
+  piso del heap. Y un programa real, el motor de juegos de pelea Hugen portado línea por línea,
+  por cuatro veces: sus funciones locales son clausuras que se vuelven a crear en cada llamada,
+  donde GHC las saca afuera.
 
 ## Uso
 

@@ -9,6 +9,9 @@ import (
 	rt_iter "iter"
 	rt_big "math/big"
 	rt_os "os"
+	rt_runtime "runtime"
+	rt_debug "runtime/debug"
+	rt_metrics "runtime/metrics"
 	rt_filepath "path/filepath"
 	rt_slices "slices"
 	rt_strconv "strconv"
@@ -51,6 +54,59 @@ var _ = rt_filepath.Base
 var _ = rt_time.Now
 
 func rt_error[T any](msg string) T { panic(msg) }
+
+// The garbage collector runs when the heap has grown by 200% of what was
+// left alive, not Go's 100%: a functional program allocates much and
+// briefly, and Go's collector, which is not generational, marks everything
+// alive on each cycle, so a cycle costs what is alive and the cycles are
+// fewer. The heap reaches three times what is alive, as GHC's does by
+// default, and never less than rt_heapFloor: with little alive, Go's own
+// least goal (8 MB at 200%) made a cycle every few megabytes, each waking
+// a worker on every processor, which cost more than the marking (Hugen's
+// core, whose live heap is under a megabyte, ran in half the time at a
+// 32 MB goal). After each cycle the percentage is set again for the heap
+// left alive. GOGC still decides, if it is set.
+const rt_heapFloor = 32 << 20
+
+// the percentage set last: only the finalizer's goroutine reads and sets it
+var rt_gcPercent = 200
+
+func rt_startGC() {
+	if rt_os.Getenv("GOGC") != "" {
+		return
+	}
+	rt_debug.SetGCPercent(200)
+	rt_watchGC()
+}
+
+// A finalizer runs after each cycle that finds its object dead.
+type rt_gcSentinel struct{ _ *int }
+
+func rt_watchGC() {
+	rt_runtime.SetFinalizer(&rt_gcSentinel{}, func(*rt_gcSentinel) {
+		rt_tuneGC()
+		rt_watchGC()
+	})
+}
+
+// Go's goal is what was left alive and the percentage of that and of the
+// stacks and globals it scans, live + (live + stacks + globals) * p / 100,
+// and never less than 4 MB * p / 100: so p is at most what makes that
+// least goal the floor (800 for 32 MB).
+func rt_tuneGC() {
+	sample := []rt_metrics.Sample{{Name: "/gc/heap/live:bytes"}, {Name: "/gc/scan/stack:bytes"}, {Name: "/gc/scan/globals:bytes"}}
+	rt_metrics.Read(sample)
+	live := sample[0].Value.Uint64()
+	scanned := live + sample[1].Value.Uint64() + sample[2].Value.Uint64()
+	percent := 200
+	if scanned > 0 && live+2*scanned < rt_heapFloor {
+		percent = min(int((rt_heapFloor-live)*100/scanned), rt_heapFloor/(4<<20)*100)
+	}
+	if percent != rt_gcPercent {
+		rt_gcPercent = percent
+		rt_debug.SetGCPercent(percent)
+	}
+}
 
 // A program that fails (error, a division by zero) says why on standard
 // error and exits with status 1, without Go's trace of the goroutines.

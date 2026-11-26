@@ -24,7 +24,6 @@ import (
 const rt_concurrent = true
 
 var _ = rt_reflect.Select
-var _ = rt_runtime.Gosched
 var _ = rt_syscall.Exec
 
 // Thunks.
