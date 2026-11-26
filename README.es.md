@@ -742,7 +742,10 @@ El JSON es el que escribe `bench/json-input.go`, siempre el mismo:
   clausura que se vuelve a crear en cada llamada. Una función que sólo crea funciones locales y
   valores baratos y devuelve una (`eval c s = go`) recibe también el argumento de esa función,
   así su `go` sólo se llama (`examples/lift.hgo`). Era un tercio de lo que reservaba el núcleo
-  de Hugen.
+  de Hugen. Y un valor escrito en el código, un constructor aplicado a constantes (una lista de
+  constantes, un record de literales), se crea una sola vez, como valor del nivel superior, en
+  vez de cada vez que corre el código que lo rodea; una llamada no, aunque sea de constantes,
+  porque guardar su resultado durante toda la ejecución podría retener una lista larga.
 - **El código con restricciones o polimórfico sobre constructores** (`Num a =>`, `Monad m =>`)
   no cuesta nada extra, porque se especializa. El precio es el tamaño del código: una copia por
   cada tipo con que se usa.
@@ -824,7 +827,7 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
 | lo mismo, en un programa con hilos | 0,04 s | 0,04 s |
 | frecuencias de un millón de números, en una tabla hash en ST | 0,10 s, 35 MB | 0,20 s, 44 MB |
 | lo mismo con un `Data.Map` | 0,41 s | 0,57 s |
-| el núcleo de Hugen, un millón de ticks de una pelea (`hago-examples`) | 5,5 s, 36 MB | 1,5 s, 9 MB |
+| el núcleo de Hugen, un millón de ticks de una pelea (`hago-examples`) | 5,0 s, 36 MB | 1,5 s, 9 MB |
 
 - **Parejos:** el código estricto en tipos concretos, los newtypes, los pliegues de listas que
   se arman donde se pliegan (los dos los vuelven loops, también en IO y en `StateT`), los loops
@@ -839,7 +842,7 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
   map, los nodos de las claves que inserta y el rebalanceo, donde el recolector generacional de
   GHC anda mejor que el de Go. Un programa con poco vivo que reserva mucho llega a 35 MB, el
   piso del heap. Y un programa real, el motor de juegos de pelea Hugen portado línea por línea,
-  por tres veces y media: hace 200 reservas de memoria por tick, cada una una llamada al
+  por tres veces: hace 190 reservas de memoria por tick, cada una una llamada al
   asignador de Go, donde el de GHC mueve un puntero.
 
 ## Uso

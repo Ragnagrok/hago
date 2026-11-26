@@ -25,7 +25,7 @@
 --
 -- It runs after inlining, on code where every type is known and no
 -- dictionary is left.
-module Hago.Lift (liftLocals) where
+module Hago.Lift (liftLocals, floatStatics) where
 
 import Control.Monad (foldM, forM, forM_)
 import Control.Monad.State
@@ -196,3 +196,67 @@ etaExpand prog tb = case tbBody tb of
       CPCon k _ qs
         | Just ci <- M.lookup k (progCons prog), Just di <- M.lookup (ciType ci) (progData prog), length (diCons di) == 1 -> all irrefutable qs
       _ -> False
+
+-- Constants --------------------------------------------------------------------------
+
+-- | A value written out in the code, a constructor applied to literals and
+-- to such values (a list of constants, a tuple, a record), at a type with
+-- no type variable, is made once, as a top-level value, instead of each
+-- time the code around it runs: it is data, so making it once cannot fail
+-- or keep more than the code says. A call is not moved, even when
+-- everything it is given is constant, since keeping its result for the
+-- whole run could keep a long list alive. The same value written twice is
+-- one.
+floatStatics :: Program -> Program
+floatStatics prog = prog {progBinds = reverse new ++ binds'}
+  where
+    (binds', (_, new)) = runState (mapM top (progBinds prog)) (M.empty, [])
+    top tb
+      | tbArity tb == 0 = pure tb
+      | otherwise = (\b -> tb {tbBody = b}) <$> go (tbBody tb)
+    go :: CExpr -> State (M.Map String Name, [TopBind]) CExpr
+    go e
+      | Just t <- staticType e = do
+          (seen, acc) <- get
+          let key = show e
+          case M.lookup key seen of
+            Just n -> pure (CVar n (Inst [] []) t)
+            Nothing -> do
+              let n = "static'" ++ show (M.size seen)
+              put (M.insert key n seen, TopBind n [] [] t 0 e True : acc)
+              pure (CVar n (Inst [] []) t)
+      | otherwise = descend e
+    descend = \case
+      CApp f as -> CApp <$> go f <*> mapM go as
+      CLam ps r b -> CLam ps r <$> go b
+      CLet bs b t -> CLet <$> mapM bind bs <*> go b <*> pure t
+      CMatch ss rows t -> CMatch <$> mapM go ss <*> mapM row rows <*> pure t
+      CIf a b c t -> CIf <$> go a <*> go b <*> go c <*> pure t
+      CDelay t x -> CDelay t <$> go x
+      CForce x -> CForce <$> go x
+      CDo m d r ss -> CDo m d r <$> mapM stmt ss
+      e -> pure e
+    bind (CBind n t ar x) = CBind n t ar <$> go x
+    row (CRow ps bs gs) = CRow ps <$> mapM bind bs <*> mapM (\(g, e) -> (,) <$> traverse go g <*> go e) gs
+    stmt = \case
+      CSBind x t e -> CSBind x t <$> go e
+      CSExpr t e -> CSExpr t <$> go e
+      CSLet bs -> CSLet <$> mapM bind bs
+    -- the type of a constructor applied to constants, if it has no type
+    -- variable
+    staticType = \case
+      e@(CApp (CCon _ _ t) as)
+        | length as == arrows t, all constant as
+        , let r = zonk (progSubst prog) (snd (splitFun (length as) t)), concrete r, sized e -> Just r
+      _ -> Nothing
+    constant = \case
+      CLit _ -> True
+      CNum _ t _ -> concrete (zonk (progSubst prog) t)
+      CFrac _ t _ -> concrete (zonk (progSubst prog) t)
+      CCon _ _ t -> arrows t == 0
+      CApp (CCon _ _ t) as -> length as == arrows t && all constant as
+      CDelay _ x -> constant x
+      _ -> False
+    concrete t = null [() | TVar _ <- everything @Type t] && null [() | TMeta _ <- everything @Type t]
+    -- worth a top-level value: more than one constructor with fields
+    sized e = length [() | CApp (CCon {}) _ <- everything @CExpr e] > 1

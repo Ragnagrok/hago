@@ -715,7 +715,11 @@ The JSON is the one `bench/json-input.go` writes, always the same:
   given what they use from around them as parameters, as GHC does: a `go` in a `where` is not
   a closure made again on each call. A function that only makes local functions and cheap
   values and gives one (`eval c s = go`) takes that function's argument too, so its `go` is
-  only called (`examples/lift.hgo`). A third of what Hugen's core allocated.
+  only called (`examples/lift.hgo`). A third of what Hugen's core allocated. And a value
+  written out in the code, a constructor applied to constants (a list of constants, a record
+  of literals), is made once, as a top-level value, instead of each time the code around it
+  runs; a call is not, even of constants, since keeping its result for the whole run could
+  keep a long list alive.
 - **Constrained and constructor-polymorphic code** (`Num a =>`, `Monad m =>`) costs nothing
   extra, because it is specialised. The price is code size: one copy per type it is used at.
 - **A list folded where it is made** (the pipeline of squares, the comprehension of triples,
@@ -793,7 +797,7 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
 | the same, in a program with threads | 0.04 s | 0.04 s |
 | frequencies of a million numbers, in a hash table in ST | 0.10 s, 35 MB | 0.20 s, 44 MB |
 | the same with a `Data.Map` | 0.41 s | 0.57 s |
-| Hugen's core, a million ticks of a match (`hago-examples`) | 5.5 s, 36 MB | 1.5 s, 9 MB |
+| Hugen's core, a million ticks of a match (`hago-examples`) | 5.0 s, 36 MB | 1.5 s, 9 MB |
 
 - **Even:** strict code at concrete types, newtypes, folds of lists made where they are
   folded (both make loops of them, in IO and in `StateT` too), recursive IO loops, functions
@@ -807,9 +811,8 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
 - **GHC ahead:** the sieve on a map, by a fifth: what is left is the map's own work, the nodes
   of the keys it inserts and the rebalancing, where GHC's generational collector does better
   than Go's. A program with little alive that allocates much takes up to 35 MB, the heap's
-  floor. And a real program, Hugen's fighting game engine ported line by line, by three and a
-  half times: it makes 200 allocations a tick, each a call to Go's allocator, where GHC's
-  moves a pointer.
+  floor. And a real program, Hugen's fighting game engine ported line by line, by three times:
+  it makes 190 allocations a tick, each a call to Go's allocator, where GHC's moves a pointer.
 
 ## Using it
 

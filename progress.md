@@ -700,10 +700,17 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       `examples/lift.hgo` checks those, mutual recursion, a polymorphic function around, a
       `do`, and shadowing; GHC prints the same. Nothing else in `bench/` moved. Hugen, a
       million ticks, cores 0-15: 7.0 s → 5.5 s (GHC 1.5 s), allocations 350 → 206 a tick.
-- [ ] **What is left of Hugen** (3.5 times GHC): it allocates 206 times a tick, each a call
-      to Go's allocator. `Command.matches` (lazy lists searched with `any` and `take 1`),
-      `zip` of constant lists in `Input.relative` (a literal list is built on each call;
-      constants could be made once), the record updates of `Match.step`, and the driver's own
+- [x] **Constants made once** (2026-11-26). A value written out in the code, a constructor
+      applied to literals and to such values at a type with no type variable (Hugen's list of
+      buttons in `Input.relative`, built twice a tick), is a top-level value made at start
+      (`floatStatics` in `Hago.Lift`), the same one wherever it is written twice. A call is
+      not moved, even of constants: keeping its result for the whole run could keep a long
+      list alive, as GHC's full laziness can. Hugen: 5.5 s → 5.0 s, 206 → 192 allocations a
+      tick; in `bench/` only the sieve and frequencies have one (a `[Char]` of the Prelude's),
+      and did not move.
+- [ ] **What is left of Hugen** (three times GHC): it allocates 192 times a tick, each a
+      call to Go's allocator. `Command.matches` (lazy lists searched with `any` and `take 1`),
+      the `zip` of `Input.relative`, the record updates of `Match.step`, and the driver's own
       hash.
 - [x] **The same programs in GHC** (`bench/ghc/`, `bench/ghc/run.sh`; the README's "Against
       GHC"). Even on strict code and on folds of lists made where they are folded; Hago ahead
