@@ -22,7 +22,7 @@ import Hago.Syntax
 import Hago.TcMonad (prettyAtom, pretty)
 import Hago.Typecheck (Checked (..))
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removeDirectoryRecursive, removeFile)
-import System.FilePath (takeBaseName, (</>))
+import System.FilePath (takeBaseName, takeDirectory, (</>))
 import System.IO
 import System.Exit (ExitCode (..))
 import System.Process (CreateProcess (..), StdStream (..), createProcess, getCurrentPid, proc, waitForProcess)
@@ -37,17 +37,23 @@ data Session = Session
   , sTarget :: Maybe FilePath   -- ^ the file :reload loads, even if it failed to load
   , sChunks :: [Chunk]   -- ^ oldest first
   , sDir :: FilePath     -- ^ where the programs are written
+  , sPath :: [FilePath]  -- ^ where else modules are looked for (hago's -i and HAGO_PATH)
   }
 
-repl :: Maybe FilePath -> IO ()
-repl file = do
+-- | Where a session's modules are looked for after the current directory:
+-- next to the file loaded, then the search path.
+sessionDirs :: Session -> [FilePath]
+sessionDirs s = maybe [] (pure . takeDirectory) (sLoaded s) ++ sPath s
+
+repl :: [FilePath] -> Maybe FilePath -> IO ()
+repl path file = do
   hSetBuffering stdout LineBuffering
   tty <- hIsTerminalDevice stdin
   tmp <- getTemporaryDirectory
   pid <- getCurrentPid
   let dir = tmp </> ("hago-repl-" ++ show pid)
   createDirectoryIfMissing True dir
-  let s0 = Session [] Nothing Nothing [] dir
+  let s0 = Session [] Nothing Nothing [] dir path
   (maybe (pure s0) (load s0) file >>= loop tty) `finally` removeDirectoryRecursive dir
   where
     -- with a terminal the prompt is shown; without one, the line read follows it
@@ -205,7 +211,7 @@ sessionExports s extra runner = do
           virtual = M.fromList
             ([("Main", ("<main>", mainSrc)), ("Interactive", ("<interactive>", src))]
               ++ [(n, (f, text)) | Just (n, f, text, _) <- [loaded]])
-      r <- checkProgramExports virtual "<main>"
+      r <- checkProgramExports (sessionDirs s) virtual "<main>"
       pure $ case r of
         Left e -> Left e
         Right (mods, rn, syns) -> Right (fromMaybe mempty (lookup "Interactive" mods), mconcat (map snd mods), rn, syns, virtual)
@@ -348,7 +354,7 @@ evaluateExpr s input = do
           | not (null ms) -> tryMains ms
           | otherwise -> putStrLn =<< (locate m err >>= reportExpr)
         Right (_, _, virtual) -> do
-          checked <- checkProgram virtual "<main>"
+          checked <- checkProgram (sessionDirs s) virtual "<main>"
           case checked >>= generateProgram "<main>" of
             Left err -> putStrLn =<< reportExpr err
             Right go -> do
@@ -689,7 +695,7 @@ bindAction s input patText p blanked = do
       case r of
         Left err -> s <$ (putStrLn =<< report s 0 0 "" err)
         Right (_, _, virtual) -> do
-          checked <- checkProgram virtual "<main>"
+          checked <- checkProgram (sessionDirs s) virtual "<main>"
           case checked >>= generateProgram "<main>" of
             Left err -> s <$ (putStrLn =<< report s 0 0 "" err)
             Right go -> do

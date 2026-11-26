@@ -3,10 +3,10 @@
 -- | From a source file to Go source: loading modules, renaming, type
 -- synonyms, deriving, type checking, specialisation, newtype erasure, code
 -- generation.
-module Hago.Driver (Virtual, compileFile, checkFile, checkProgram, checkProgramExports, generateProgram, quoteSource, quoteIn, libraryInterfaces) where
+module Hago.Driver (Virtual, compileFile, checkFile, checkProgram, checkProgramExports, generateProgram, quoteSource, quoteIn, libraryInterfaces, searchPath) where
 
 import Control.Applicative ((<|>))
-import Control.Monad (foldM)
+import Control.Monad (filterM, foldM)
 import Data.Char (isAlphaNum, isDigit)
 import Data.List (intercalate, isPrefixOf, stripPrefix)
 import qualified Data.Map as M
@@ -26,7 +26,8 @@ import Hago.Specialize (specialize)
 import Hago.Syntax
 import Hago.Typecheck (Checked (..), programOf, typecheckModule)
 import System.Directory (doesFileExist)
-import System.FilePath (joinPath, splitDirectories, takeDirectory, takeFileName, (<.>), (</>))
+import System.Environment (lookupEnv)
+import System.FilePath (joinPath, splitDirectories, splitSearchPath, takeDirectory, takeFileName, (<.>), (</>))
 
 preludeSource :: String
 preludeSource = $(embedFile "prelude/Prelude.hgo")
@@ -176,32 +177,42 @@ data Unit = Unit FilePath Name String (Maybe Module)
 -- name, and their source. A program's main module can be one of them.
 type Virtual = M.Map Name (FilePath, String)
 
-compileFile :: FilePath -> IO (Either String String)
-compileFile file = do
-  checked <- checkProgram M.empty file
+-- | The directories, besides the main file's, that modules are looked for
+-- in, in order: those given (hago's -i), then those of HAGO_PATH, separated
+-- as PATH's are. The standard library is looked in last.
+searchPath :: [FilePath] -> IO [FilePath]
+searchPath given = do
+  env <- lookupEnv "HAGO_PATH"
+  pure (given ++ filter (not . null) (maybe [] splitSearchPath env))
+
+-- | Compiles a program, looking for its modules next to it and in the
+-- directories given.
+compileFile :: [FilePath] -> FilePath -> IO (Either String String)
+compileFile dirs file = do
+  checked <- checkProgram dirs M.empty file
   either (fmap Left . quoteSource) (pure . Right) (checked >>= generateProgram file)
 
 -- | Every module of the program, type checked, dependencies first, with the
 -- Prelude. Errors are not quoted yet.
-checkProgram :: Virtual -> FilePath -> IO (Either String [(Name, Checked)])
-checkProgram virtual file = fmap (\(mods, _, _) -> mods) <$> checkProgramExports virtual file
+checkProgram :: [FilePath] -> Virtual -> FilePath -> IO (Either String [(Name, Checked)])
+checkProgram dirs virtual file = fmap (\(mods, _, _) -> mods) <$> checkProgramExports dirs virtual file
 
 -- | checkProgram, also giving what each module exports, and the type
 -- synonyms, by internal name.
-checkProgramExports :: Virtual -> FilePath -> IO (Either String ([(Name, Checked)], Renamed, M.Map Name ([Name], SType)))
-checkProgramExports virtual file = checkUnitsExports ("Prelude.hgo", preludeSource) virtual "Main" (takeDirectory file) file
+checkProgramExports :: [FilePath] -> Virtual -> FilePath -> IO (Either String ([(Name, Checked)], Renamed, M.Map Name ([Name], SType)))
+checkProgramExports dirs virtual file = checkUnitsExports ("Prelude.hgo", preludeSource) virtual "Main" (takeDirectory file : dirs) file
 
 -- | The Prelude, at the path its errors name, with the modules loaded from
--- a root, starting from the named one.
-checkUnits :: (FilePath, String) -> Virtual -> Name -> FilePath -> FilePath -> IO (Either String [(Name, Checked)])
-checkUnits prelude virtual name root file = fmap (\(mods, _, _) -> mods) <$> checkUnitsExports prelude virtual name root file
+-- the roots, starting from the named one.
+checkUnits :: (FilePath, String) -> Virtual -> Name -> [FilePath] -> FilePath -> IO (Either String [(Name, Checked)])
+checkUnits prelude virtual name roots file = fmap (\(mods, _, _) -> mods) <$> checkUnitsExports prelude virtual name roots file
 
 -- | checkUnits, also giving what each module exports, and the type synonyms.
 checkUnitsExports
-  :: (FilePath, String) -> Virtual -> Name -> FilePath -> FilePath
+  :: (FilePath, String) -> Virtual -> Name -> [FilePath] -> FilePath
   -> IO (Either String ([(Name, Checked)], Renamed, M.Map Name ([Name], SType)))
-checkUnitsExports (preludePath, prelude) virtual name root file = do
-  loaded <- loadAll virtual name root file
+checkUnitsExports (preludePath, prelude) virtual name roots file = do
+  loaded <- loadAll virtual name roots file
   stamp <- compilerStamp
   cache <- cacheDirectory
   let preludeUnit = Unit preludePath "Prelude" (prelude ++ tupleInstances) Nothing
@@ -214,17 +225,18 @@ checkUnitsExports (preludePath, prelude) virtual name root file = do
 -- The file is a program, one of its modules (whose imports are looked for
 -- from the directory its name implies: Data/Json.hgo's are next to Data/),
 -- a module of the standard library, or the Prelude (a file named
--- Prelude.hgo without a module header). Errors are quoted.
-checkFile :: FilePath -> IO (Either String ())
-checkFile file = do
+-- Prelude.hgo without a module header). The directories given are looked in
+-- after that one. Errors are quoted.
+checkFile :: [FilePath] -> FilePath -> IO (Either String ())
+checkFile dirs file = do
   src <- readFile file
   result <- case parseModule file src of
     Left e -> pure (Left e)
     Right m -> case modName m of
       -- the Prelude has no header
-      "Main" | takeFileName file == "Prelude.hgo" -> fmap (const ()) <$> checkUnits (file, src) M.empty "Prelude" (takeDirectory file) file
-      "Main" -> checkProgram M.empty file >>= pure . (>>= duplicateInstances file . map snd)
-      name -> fmap (const ()) <$> checkUnits ("Prelude.hgo", preludeSource) M.empty name (rootOf name) file
+      "Main" | takeFileName file == "Prelude.hgo" -> fmap (const ()) <$> checkUnits (file, src) M.empty "Prelude" [takeDirectory file] file
+      "Main" -> checkProgram dirs M.empty file >>= pure . (>>= duplicateInstances file . map snd)
+      name -> fmap (const ()) <$> checkUnits ("Prelude.hgo", preludeSource) M.empty name (rootOf name : dirs) file
   either (fmap Left . quoteSource) (pure . Right) result
   where
     -- the directory A.B's imports are under, if the file is at <root>/A/B.hgo
@@ -247,7 +259,7 @@ libraryInterfaces = do
   let path n = "lib" </> moduleFile n
       importer = unlines (["module Main where"] ++ ["import " ++ n ++ " ()" | n <- M.keys libraryModules] ++ ["main :: IO ()", "main = pure ()"])
       virtual = M.insert "Main" ("<library>", importer) (M.mapWithKey (\n src -> (path n, src)) libraryModules)
-  loaded <- loadAll virtual "Main" "." "<library>"
+  loaded <- loadAll virtual "Main" [] "<library>"
   stamp <- compilerStamp
   cache <- cacheDirectory
   case loaded of
@@ -351,13 +363,13 @@ location s = case break (== ':') s of
       _ -> Nothing
 
 -- | The first module and everything it imports, dependencies first. A module
--- A.B lives in root/A/B.hgo (the root is the main file's directory), or in the
--- standard library.
-loadAll :: Virtual -> Name -> FilePath -> FilePath -> IO (Either String [(FilePath, String, Module)])
-loadAll virtual first root firstFile
+-- A.B lives in root/A/B.hgo, in the first of the roots that has it (the main
+-- file's directory first), or in the standard library.
+loadAll :: Virtual -> Name -> [FilePath] -> FilePath -> IO (Either String [(FilePath, String, Module)])
+loadAll virtual first roots firstFile
   | first == "Prelude" = pure (Right [])
   | otherwise = do
-      r <- load [] (Right (M.empty, [])) (first, firstFile, Nothing)
+      r <- load [] (Right (M.empty, [])) (first, Just firstFile, Nothing)
       pure (fmap (reverse . snd) r)
   where
     load stack acc (name, path, from) = case acc of
@@ -366,14 +378,15 @@ loadAll virtual first root firstFile
         | M.member name seen -> pure acc
         | name `elem` stack -> pure (Left ("import cycle: " ++ intercalate " -> " (reverse (name : stack))))
         | otherwise -> do
-            exists <- doesFileExist path
-            found <- case (M.lookup name virtual, exists, M.lookup name libraryModules) of
+            let candidates = maybe [root </> moduleFile name | root <- roots] pure path
+            onDisk <- filterM doesFileExist candidates
+            found <- case (M.lookup name virtual, onDisk, M.lookup name libraryModules) of
               (Just v, _, _) -> pure (Just v)
-              (_, True, _) -> Just . (,) path <$> readFile path
-              (_, False, Just src) -> pure (Just ("lib" </> moduleFile name, src))
+              (_, p : _, _) -> Just . (,) p <$> readFile p
+              (_, [], Just src) -> pure (Just ("lib" </> moduleFile name, src))
               _ -> pure Nothing
             case found of
-              Nothing -> pure (Left (maybe "" ((++ ": ") . showLoc) from ++ "cannot find module " ++ name ++ " (looked for " ++ path ++ ")"))
+              Nothing -> pure (Left (maybe "" ((++ ": ") . showLoc) from ++ "cannot find module " ++ name ++ " (looked for " ++ intercalate ", " candidates ++ ")"))
               Just (path', src) ->
                 case parseModule path' src of
                   Left e -> pure (Left e)
@@ -381,7 +394,7 @@ loadAll virtual first root firstFile
                     | modName m /= name, not (M.member name virtual) ->
                         pure (Left (path' ++ ": declares module " ++ modName m ++ ", but should be " ++ name))
                     | otherwise -> do
-                        let deps = [(impModule i, root </> moduleFile (impModule i), Just (impLoc i)) | i <- modImports m, impModule i /= "Prelude"]
+                        let deps = [(impModule i, Nothing, Just (impLoc i)) | i <- modImports m, impModule i /= "Prelude"]
                         r <- foldM (load (name : stack)) (Right (seen, done)) deps
                         pure (fmap (\(seen', done') -> (M.insert name () seen', (path', src, m {modName = name}) : done')) r)
 

@@ -1,0 +1,4 @@
+module Here (here) where
+
+here :: String
+here = "Here from next to the program"

@@ -210,8 +210,10 @@ import Geometry.Shapes hiding (perimeter)
 module Geometry (module Geometry.Shapes, scale) where   -- re-exports Geometry.Shapes
 ```
 
-- **A module `A.B` lives in `A/B.hgo`,** next to the main file, which is `Main`, or in the
-  standard library.
+- **A module `A.B` lives in `A/B.hgo`,** next to the main file, which is `Main`, or under a
+  directory of the search path, or in the standard library, looked in in that order. The
+  search path is each `-i DIR` given to `hago` (`build`, `run`, `check`, `repl`), then the
+  directories of `HAGO_PATH`, separated as `PATH`'s are: `hago run -i engine/lib game/Main.hgo`.
 - **Export and import lists, `qualified`, `as` and `hiding`** work as in Haskell. A type
   exported without `(..)` is abstract.
 - **A module can re-export** names it imports, one by one or a whole module with `module M`.
@@ -485,6 +487,12 @@ one at a time, never from two goroutines at once, as `strings.Map` does on its o
 game library its update and draw, is declared `foreign import go sequential "strings.Map" ...`,
 and the program keeps the runtime for one goroutine, whose thunks take no lock. `examples/http-server.hgo` serves pages with
 `net/http`, and asks itself for several at once.
+
+A package from outside Go's standard library (`github.com/...`) needs a `go.mod` that says
+which version to use. `hago run` looks for one next to the program and in the directories above
+it, and builds the program in that Go module, so what it requires and replaces holds, and the
+program can import the module's own Go packages (`search-path/` does). Without one, it names the
+packages and refuses. `hago build` only writes the Go file; building it is up to you.
 
 ## Lists, iterators and vectors
 
@@ -1005,6 +1013,7 @@ into a typed core, Go generation) works from end to end, but a lot of Haskell 98
 | `lib/` | the standard library (`Control.Monad.State` and friends), written in Hago |
 | `docs/library/` | the library's reference, made by `hago doc` |
 | `editors/vscode/` | the VS Code extension: the TextMate grammar, and `hago check` on save |
+| `search-path/` | a program whose modules are found through `-i` and `HAGO_PATH`, run in its own Go module |
 | `bench/json-input.go` | writes the JSON of the benchmark in [Performance](#performance) |
 | `bench/run.sh` | the programs of [Performance](#performance), built and timed, with one compiler or several side by side |
 | `bench/ghc/` | the same programs for GHC, and `run.sh`, which times them against Hago's |

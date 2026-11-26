@@ -869,9 +869,17 @@ decided or ordered yet:
       not done.
 - [ ] **`Concurrently`,** async's applicative whose `<*>` runs both sides at once (`traverse` over
       it is `mapConcurrently`): cheap on what `Control.Concurrent.Async` has.
-- [ ] **Modules are found only next to the main file or in the library:** no search path, so Hög's
-      `hog` copies its modules next to a game's. And a third-party Go module a program imports
-      (Ebitengine) needs a `go.mod`, which Hago does not make; `hog` brings one.
+- [x] **A search path, and a program's own go.mod.** Modules are looked for next to the main
+      file, then under each `-i DIR` (`build`, `run`, `check`, `repl`), then under the
+      directories of `HAGO_PATH`, then in the library; the error names every place looked in.
+      The REPL also looks next to the file it loaded. `hago run` builds in the Go module of the
+      nearest `go.mod` at or above the program (in `.hago-run-PID` at the module's root, with
+      `go build` run there), so its requirements and replacements hold and the module's own Go
+      packages can be imported; a program that imports packages outside Go's standard library
+      without one is refused, with the packages and the commands that make one. `hago build`
+      only writes the Go. `search-path/` and `check.sh` check all of it, without the network.
+      Hög can now give `-i lib` instead of copying its modules; its glue (Go files of package
+      `main`) still has to sit next to `main.go`.
 - [ ] **Ideas for libraries, from the user:** lenses (simple ones, or van Laarhoven's at rank 1,
       to see how well they inline) and FRP (events over goroutines and channels, or Yampa's
       arrows at a fixed step, as Hög's update is).

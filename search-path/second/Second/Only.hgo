@@ -1,0 +1,4 @@
+module Second.Only (only) where
+
+only :: String
+only = "Second.Only from second/"

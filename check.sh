@@ -2,9 +2,11 @@
 # Builds the compiler, compiles and runs every example program comparing its
 # output with the .out file next to it (the concurrent ones also under Go's
 # race detector), checks that every program in failing/ fails at run time,
-# replays every session in repl/, and checks that every file in rejected/ fails
-# with the error announced on its "-- expects:" line, with hago build and with
-# hago check, which must pass every example and module of the library. Modules
+# replays every session in repl/, runs search-path/ (modules found through
+# -i and HAGO_PATH, hago run in a Go module), and checks that every file in
+# rejected/ fails with the error announced on its "-- expects:" line, with
+# hago build and with hago check, which must pass every example and module of
+# the library. Modules
 # are compiled with an empty cache, and every example again with the cache
 # full, which must give the same Go. The reference in docs/library must be
 # what hago doc makes, and hago fmt must keep every file's meaning and comments.
@@ -18,6 +20,7 @@ hago=$(cabal list-bin -v0 exe:hago)
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 export HAGO_CACHE="$out/cache"
+unset HAGO_PATH
 
 failures=0
 # a program has an .out next to it; the other .hgo files are its modules
@@ -125,6 +128,27 @@ for t in repl/*.txt; do
     echo "FAIL $t gave:"; diff <(echo "$actual") "$t" || true; failures=1
   fi
 done
+
+# modules looked for next to the program, then in -i's directories, then in
+# HAGO_PATH's; hago run builds in the Go module of the go.mod above the
+# program, whose own Go package it uses, and refuses that program without one
+if actual=$(HAGO_PATH=search-path/second "$hago" run -i search-path/first search-path/Main.hgo 2>&1) && [ "$actual" == "$(cat search-path/Main.out)" ] \
+  && HAGO_PATH=search-path/second "$hago" check -i search-path/first search-path/Main.hgo; then
+  echo "ok   search-path/Main.hgo, with -i and HAGO_PATH, in its Go module"
+else
+  echo "FAIL search-path/Main.hgo printed:"; echo "$actual"; failures=1
+fi
+cp -R search-path "$out/no-go-mod" && rm "$out/no-go-mod/go.mod"
+if output=$("$hago" run -i "$out/no-go-mod/first" -i "$out/no-go-mod/second" "$out/no-go-mod/Main.hgo" 2>&1) || ! grep -qF "so it needs a go.mod" <<<"$output"; then
+  echo "FAIL search-path/Main.hgo without a go.mod gave:"; echo "$output"; failures=1
+else
+  echo "ok   search-path/Main.hgo without a go.mod is refused"
+fi
+if output=$("$hago" check search-path/Main.hgo 2>&1) || ! grep -qF "cannot find module Shared (looked for search-path/Shared.hgo)" <<<"$output"; then
+  echo "FAIL search-path/Main.hgo without -i gave:"; echo "$output"; failures=1
+else
+  echo "ok   search-path/Main.hgo without -i cannot find its modules"
+fi
 
 for f in rejected/*.hgo; do
   expected=$(sed -n 's/^-- expects: //p' "$f")

@@ -1,0 +1,4 @@
+module Shared (shared) where
+
+shared :: String
+shared = "Shared from second/"

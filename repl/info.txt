@@ -51,6 +51,6 @@ runIdentity :: Identity a -> a
 hago> :info nothing
 <interactive>: not in scope: nothing
 hago> :browse Nothing.Here
-<interactive>: cannot find module Nothing.Here (looked for ./Nothing/Here.hgo)
+<interactive>: cannot find module Nothing.Here (looked for ./Nothing/Here.hgo, repl/Nothing/Here.hgo)
 hago> :info
 <interactive>: :info takes a name, as in :info Maybe

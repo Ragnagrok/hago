@@ -1,0 +1,20 @@
+-- Modules are looked for next to the program, then in each -i DIR, then in
+-- HAGO_PATH's directories; check.sh runs this with -i search-path/first and
+-- HAGO_PATH=search-path/second. Here is in this directory and in first/,
+-- Shared in first/ and second/, Second.Only only in second/. The go.mod here
+-- makes hago run build in its Go module, so the program can use the module's
+-- own Go package, glue.
+module Main where
+
+import Here (here)
+import Shared (shared)
+import Second.Only (only)
+
+foreign import go "hago.test/searchpath/glue.Twice" twice :: String -> String
+
+main :: IO ()
+main = do
+  putStrLn here
+  putStrLn shared
+  putStrLn only
+  putStrLn (twice "glue ")
