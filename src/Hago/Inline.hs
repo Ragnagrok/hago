@@ -30,7 +30,7 @@
 --
 -- Otherwise the call stays a call. Names bound in a copied body are
 -- renamed, so nothing in it can capture a variable of the arguments.
-module Hago.Inline (inlineSmall, renameBinders) where
+module Hago.Inline (inlineSmall, renameBinders, freeVars) where
 
 import Control.Monad (when)
 import Control.Monad.State

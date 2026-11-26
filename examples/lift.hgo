@@ -1,0 +1,78 @@
+-- Local functions that are only called become top-level functions, given
+-- what they use from around them as parameters, so that no closure is made
+-- for them on each call (see src/Hago/Lift.hs). These check that what they
+-- compute stays the same.
+
+-- a local function that calls itself, using the parameters around it
+countIn :: Int -> Int -> [Int] -> Int
+countIn lo hi xs = go 0 xs
+  where
+    go n [] = n
+    go n (y : ys) = if y >= lo && y <= hi then go (n + 1) ys else go n ys
+
+-- a function that gives a local function: it takes the argument too
+data Shape = Circle Int | Square Int | Pair Shape Shape
+
+measure :: Int -> Int -> Shape -> Int
+measure scale offset = go
+  where
+    k = scale * 2
+    go s = case s of
+      Circle r -> k * r + offset
+      Square a -> a * a + offset
+      Pair a b -> go a + go b
+
+-- two local functions calling each other, with a variable from around them
+hops :: Int -> Int -> Int
+hops limit n = up n 0
+  where
+    up k steps = if k > limit then steps else down (k * 3) (steps + 1)
+    down k steps = if even k then up (k `div` 2) (steps + 1) else up (k + 1) (steps + 1)
+
+-- a local function given as a value stays a closure
+scaleAll :: Int -> [Int] -> [Int]
+scaleAll f xs = map times xs
+  where
+    times x = x * f
+
+-- inside a polymorphic function
+pairsWith :: (a -> b) -> [a] -> [(a, b)]
+pairsWith f xs = go xs
+  where
+    go [] = []
+    go (y : ys) = (y, f y) : go ys
+
+-- a local function inside a do block, and one calling a local function of
+-- the function around it
+report :: Int -> IO ()
+report n = do
+  let square x = x * n
+      both x = square x + square (x + 1)
+  print (both 3, map square [1, 2])
+
+-- what the function computes before giving its local function is costly
+-- here, so it is computed once for the value given (no eta-expansion): the
+-- trace says how many times
+costly :: Int -> Int -> Int
+costly a = go
+  where
+    big = sum [1 .. a]
+    go x = big + x
+
+-- the same names in nested scopes
+shadow :: Int -> Int
+shadow x = let f y = x + y in let x = 100 in f x + x
+
+main :: IO ()
+main = do
+  print (countIn 3 7 [1 .. 10], countIn 0 0 [])
+  print (measure 3 1 (Pair (Circle 2) (Pair (Square 3) (Circle 1))))
+  let m = measure 1 0
+  print (map m [Circle 1, Square 2], m (Pair (Circle 5) (Circle 5)))
+  print (hops 1000 1, hops 10 20)
+  print (scaleAll 3 [1, 2, 3])
+  print (pairsWith (* 2) [1, 2, 3], pairsWith not [True])
+  report 5
+  let c = costly 1000
+  print (map c [1, 2, 3])
+  print (shadow 1)

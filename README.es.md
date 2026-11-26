@@ -737,6 +737,12 @@ El JSON es el que escribe `bench/json-input.go`, siempre el mismo:
   `read` de un vector) no dejan ninguna llamada, y con ellos una acción que se ejecuta donde se
   crea no se construye, así que un loop en IO o en ST es un loop de Go (ver
   [Loops y la pila](#loops-y-la-pila)).
+- **Las funciones locales que sólo se llaman pasan al nivel superior** (`src/Hago/Lift.hs`),
+  con lo que usan de alrededor como parámetros, como hace GHC: un `go` en un `where` no es una
+  clausura que se vuelve a crear en cada llamada. Una función que sólo crea funciones locales y
+  valores baratos y devuelve una (`eval c s = go`) recibe también el argumento de esa función,
+  así su `go` sólo se llama (`examples/lift.hgo`). Era un tercio de lo que reservaba el núcleo
+  de Hugen.
 - **El código con restricciones o polimórfico sobre constructores** (`Num a =>`, `Monad m =>`)
   no cuesta nada extra, porque se especializa. El precio es el tamaño del código: una copia por
   cada tipo con que se usa.
@@ -818,7 +824,7 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
 | lo mismo, en un programa con hilos | 0,04 s | 0,04 s |
 | frecuencias de un millón de números, en una tabla hash en ST | 0,10 s, 35 MB | 0,20 s, 44 MB |
 | lo mismo con un `Data.Map` | 0,41 s | 0,57 s |
-| el núcleo de Hugen, un millón de ticks de una pelea (`hago-examples`) | 6,4 s, 37 MB | 1,5 s, 9 MB |
+| el núcleo de Hugen, un millón de ticks de una pelea (`hago-examples`) | 5,5 s, 36 MB | 1,5 s, 9 MB |
 
 - **Parejos:** el código estricto en tipos concretos, los newtypes, los pliegues de listas que
   se arman donde se pliegan (los dos los vuelven loops, también en IO y en `StateT`), los loops
@@ -833,8 +839,8 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
   map, los nodos de las claves que inserta y el rebalanceo, donde el recolector generacional de
   GHC anda mejor que el de Go. Un programa con poco vivo que reserva mucho llega a 35 MB, el
   piso del heap. Y un programa real, el motor de juegos de pelea Hugen portado línea por línea,
-  por cuatro veces: sus funciones locales son clausuras que se vuelven a crear en cada llamada,
-  donde GHC las saca afuera.
+  por tres veces y media: hace 200 reservas de memoria por tick, cada una una llamada al
+  asignador de Go, donde el de GHC mueve un puntero.
 
 ## Uso
 
@@ -1014,6 +1020,7 @@ Haskell 98.
 | `src/Hago/Specialize.hs` | copias del código sobre constructores de tipos; los métodos de instancia pasan a ser funciones |
 | `src/Hago/Newtype.hs` | los newtypes, reemplazados por el tipo que envuelven |
 | `src/Hago/Inline.hs` | las funciones chicas, copiadas en el código que las llama |
+| `src/Hago/Lift.hs` | las funciones locales que sólo se llaman, llevadas al nivel superior |
 | `src/Hago/CodeGen.hs` | generación de Go |
 | `src/Hago/Cache.hs` | compilación separada: lo que da cada módulo, guardado en disco |
 | `src/Hago/Driver.hs` | encontrar los módulos, compilar cada uno, y después el programa entero |

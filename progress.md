@@ -686,13 +686,25 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       | --- | --- | --- | --- |
       | Hugen's core, 1M ticks | 10.1 s, 14 MB | 6.4 s, 37 MB | 1.5 s, 9 MB |
 
-- [ ] **What is left of Hugen:** a third of what it allocates is `evalTerm`'s local functions,
-      closures made again on each call (`evalTerm c sight self = go`, `go` capturing them):
-      eta-expanding a function whose body only makes local functions, and lifting local
-      functions that are only called to the top with what they capture as parameters, as GHC
-      does, would make none. Then `Command.matches` (lazy lists searched with `any` and `take
-      1`), `zip` of constant lists in `Input.relative` (a literal list is built on each call;
-      constants could be made once), and the driver's own hash.
+- [x] **Local functions lifted** (2026-11-26). A third of what Hugen allocated was
+      `evalTerm`'s local functions, closures made again on each call (`evalTerm c sight self =
+      go`, `go` capturing them, and on the heap, since a closure that calls itself holds the
+      variable that holds it). `Hago.Lift`, after inlining: a function whose body only makes
+      local functions and cheap values (variables, constructors, a field of a type of one
+      constructor, arithmetic that cannot fail) and gives one of them takes that function's
+      argument too; then a group of local functions whose every use is a call with all its
+      arguments moves to the top, its free variables first among its parameters and in each
+      call, the type variables those of the function around it, after binders are made
+      unique. A local function given as a value stays a closure, and one whose `where`
+      computes something costly is not expanded, so that it is computed once.
+      `examples/lift.hgo` checks those, mutual recursion, a polymorphic function around, a
+      `do`, and shadowing; GHC prints the same. Nothing else in `bench/` moved. Hugen, a
+      million ticks, cores 0-15: 7.0 s → 5.5 s (GHC 1.5 s), allocations 350 → 206 a tick.
+- [ ] **What is left of Hugen** (3.5 times GHC): it allocates 206 times a tick, each a call
+      to Go's allocator. `Command.matches` (lazy lists searched with `any` and `take 1`),
+      `zip` of constant lists in `Input.relative` (a literal list is built on each call;
+      constants could be made once), the record updates of `Match.step`, and the driver's own
+      hash.
 - [x] **The same programs in GHC** (`bench/ghc/`, `bench/ghc/run.sh`; the README's "Against
       GHC"). Even on strict code and on folds of lists made where they are folded; Hago ahead
       on JSON (0.23 s against 0.28 s, the combinators and printer ported line by line) and on
