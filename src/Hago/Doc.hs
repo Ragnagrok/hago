@@ -357,6 +357,7 @@ declared = \case
      in (KClass, take 1 [c | TConId c <- afterContext])
   TKey "foreign" : TKey "import" : TVarId "go" : TKey "type" : TStr _ : TConId c : _ -> (KType, [c])
   TKey "foreign" : TKey "import" : TVarId "go" : TStr _ : rest -> (KValue, fromMaybe [] (signature rest))
+  TKey "foreign" : TKey "import" : TVarId "go" : TVarId "sequential" : TStr _ : rest -> (KValue, fromMaybe [] (signature rest))
   TKey _ : _ -> (KOther, [])
   ts -> (KValue, fromMaybe (binding ts) (signature ts))
   where

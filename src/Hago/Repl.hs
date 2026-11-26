@@ -277,7 +277,7 @@ declValues = \case
   DSig _ ns _ _ -> ns
   DData d -> [c | ConDecl c _ _ <- ddCons d] ++ concat [fs | ConDecl _ _ fs <- ddCons d]
   DClass _ _ _ _ ds -> concatMap declValues ds
-  DForeign _ n _ -> [n]
+  DForeign _ _ n _ -> [n]
   _ -> []
 
 declTypes :: Decl -> [Name]

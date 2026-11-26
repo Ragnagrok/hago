@@ -491,7 +491,11 @@ foreign import go ".HandleFunc" handleFunc
 ```
 
 Go la puede llamar desde cualquier goroutine, así que un programa que le pasa una función a Go
-recibe el runtime concurrente (ver [Concurrencia](#concurrencia)). `examples/http-server.hgo`
+recibe el runtime concurrente (ver [Concurrencia](#concurrencia)). Una función de Go que llama a
+las funciones que recibe de a una, nunca desde dos goroutines a la vez, como `strings.Map` en su
+propia goroutine o una biblioteca de juegos su update y su draw, se declara
+`foreign import go sequential "strings.Map" ...`, y el programa conserva el runtime para una
+goroutine, cuyos thunks no toman ningún lock. `examples/http-server.hgo`
 sirve páginas con `net/http` y se pide varias a sí mismo a la vez.
 
 ## Listas, iteradores y vectores
@@ -603,7 +607,8 @@ main = do
   esté puesta al arrancar, así que un programa que usa concurrencia se vuelve a lanzar con ella.
 - **Sólo pagan los programas que usan concurrencia.** Un programa recibe el runtime concurrente
   cuando llama a una función de estos módulos, o a una función de Go que recibe una función o
-  acción de Hago, que Go podría llamar desde otra goroutine.
+  acción de Hago, que Go podría llamar desde otra goroutine, salvo que esté declarada
+  `sequential` (ver [Llamar a Go](#llamar-a-go)).
 
 ## Estado mutable
 

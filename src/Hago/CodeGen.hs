@@ -1260,7 +1260,7 @@ numLit ctx n t = case zonk (progSubst (cxProg ctx)) t of
 -- Go code could call from another goroutine (net/http calls a handler on
 -- one per request).
 startsGoroutines :: Foreign -> Bool
-startsGoroutines f = not (isRuntimeSymbol f) && any callable (fst (splitFun (fArity f) (fType f)))
+startsGoroutines f = not (isRuntimeSymbol f) && not (fSequential f) && any callable (fst (splitFun (fArity f) (fType f)))
   where
     callable = \case
       TFun _ _ -> True

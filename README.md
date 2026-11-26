@@ -472,7 +472,10 @@ foreign import go ".HandleFunc" handleFunc
 ```
 
 Go may call it from any goroutine, so a program that gives Go a function gets the concurrent
-runtime (see [Concurrency](#concurrency)). `examples/http-server.hgo` serves pages with
+runtime (see [Concurrency](#concurrency)). A Go function that calls the functions it is given
+one at a time, never from two goroutines at once, as `strings.Map` does on its own goroutine or a
+game library its update and draw, is declared `foreign import go sequential "strings.Map" ...`,
+and the program keeps the runtime for one goroutine, whose thunks take no lock. `examples/http-server.hgo` serves pages with
 `net/http`, and asks itself for several at once.
 
 ## Lists, iterators and vectors
@@ -583,7 +586,8 @@ main = do
   itself again with it.
 - **Only programs that use concurrency pay for it.** A program gets the concurrent runtime when
   it calls a function from these modules, or a Go function that is given a Hago function or
-  action, which Go could call from another goroutine.
+  action, which Go could call from another goroutine, unless it is declared `sequential` (see
+  [Calling Go](#calling-go)).
 
 ## Mutable state
 

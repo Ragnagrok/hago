@@ -134,7 +134,7 @@ data Decl
   | DInstance (Maybe Loc) Context Name [SType] [Decl]   -- ^ where, context, class, instance types, methods
   | DBind Name [Clause]
   | DFixity Assoc Int [Name]
-  | DForeign String Name SType   -- ^ Go symbol, Hago name, type
+  | DForeign Bool String Name SType   -- ^ sequential (see 'Hago.Core.Foreign'), Go symbol, Hago name, type
   deriving (Eq, Show, Data)
 
 isConName :: Name -> Bool

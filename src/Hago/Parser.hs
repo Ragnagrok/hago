@@ -259,6 +259,8 @@ foreignDecl = do
   lang <- varId
   unless (lang == "go") (fail "only `foreign import go` is supported")
   isType <- option False (True <$ key "type")
+  -- foreign import go sequential "hog_run" run :: ... (see Hago.Core.Foreign)
+  sequential <- option False (True <$ try (tokEq (TVarId "sequential")))
   sym <- satisfyT (\t -> case t of TStr s -> Just s; _ -> Nothing)
   if isType
     then do
@@ -269,7 +271,7 @@ foreignDecl = do
     else do
       name <- var
       key "::"
-      DForeign sym name <$> pType
+      DForeign sequential sym name <$> pType
 
 -- | Declarations allowed in let/where and at the top: signatures, fixity
 -- declarations, function clauses and pattern bindings.

@@ -53,7 +53,7 @@ tableOf m = Table vals types children
     vals = M.fromList [(n, q n) | n <- valueNames]
     types = M.fromList [(n, q n) | n <- [ddName d | DData d <- ds] ++ [t | DType t _ _ <- ds] ++ [c | DClass _ c _ _ _ <- ds]]
     valueNames = nub $
-      [n | DBind n _ <- ds] ++ [n | DSig _ ns _ _ <- ds, n <- ns] ++ [n | DForeign _ n _ <- ds]
+      [n | DBind n _ <- ds] ++ [n | DSig _ ns _ _ <- ds, n <- ns] ++ [n | DForeign _ _ n _ <- ds]
         ++ [k | DData d <- ds, ConDecl k _ _ <- ddCons d] ++ methods
     methods = [n | DClass _ _ _ _ body <- ds, DSig _ ns _ _ <- body, n <- ns]
     children = M.fromList $
@@ -263,7 +263,7 @@ topDecl sc = \case
       d -> pure d
     pure (DInstance l ctx' c' t' body')
   DFixity a p ops -> pure (DFixity a p [M.findWithDefault op op (scOwnVals sc) | op <- ops])
-  DForeign s n t -> DForeign s (own sc n) <$> rnType sc t
+  DForeign q s n t -> DForeign q s (own sc n) <$> rnType sc t
 
 rnContext :: Scope -> Context -> Rn Context
 rnContext sc = mapM (\(c, ts) -> (,) <$> resolveType sc c <*> mapM (rnType sc) ts)

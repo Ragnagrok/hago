@@ -45,7 +45,7 @@ allGroups r s = goAllGroups r s (-1)
 foreign import go ".ReplaceAllString" replaceAll :: Regex -> String -> String -> String
 
 -- Replaces every match with what a function makes of it.
-foreign import go ".ReplaceAllStringFunc" replaceAllWith :: Regex -> String -> (String -> String) -> String
+foreign import go sequential ".ReplaceAllStringFunc" replaceAllWith :: Regex -> String -> (String -> String) -> String
 
 foreign import go ".Split" goSplit :: Regex -> String -> Int -> Vector String
 

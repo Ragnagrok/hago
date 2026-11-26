@@ -5,6 +5,9 @@ foreign import go "strings.Repeat" repeatString :: String -> Int -> String
 foreign import go "strconv.Atoi" parseInt :: String -> Either String Int
 foreign import go "fmt.Println" goPrintln :: String -> IO ()
 foreign import go "math.MaxInt32" maxInt32 :: Int
+-- Go calls the function it is given on this goroutine, one call at a time:
+-- sequential says so, and the program keeps the runtime for one goroutine
+foreign import go sequential "strings.Map" mapRunes :: (Char -> Char) -> String -> String
 
 describe :: String -> String
 describe s = case parseInt s of
@@ -18,3 +21,4 @@ main = do
   mapM_ (putStrLn . describe) ["42", "forty-two"]
   goPrintln "printed by fmt.Println"
   print maxInt32
+  putStrLn (mapRunes (\c -> if c == 'a' then '4' else c) "banana")

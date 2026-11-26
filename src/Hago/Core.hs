@@ -244,7 +244,12 @@ data ConInfo = ConInfo
 data DataInfo = DataInfo {diParams :: [Name], diKinds :: [Int], diCons :: [Name], diNewtype :: Bool, diForeign :: Maybe String}
   deriving (Show, Data)
 
-data Foreign = Foreign {fSymbol :: String, fVars :: [Name], fType :: Type, fArity :: Int}
+-- | A Go function or value. fSequential: declared @foreign import go
+-- sequential@, a promise that the Go function calls the functions it is
+-- given one at a time, never from two goroutines at once, as a game
+-- library calls its update and draw, so that the program keeps the
+-- runtime for one goroutine.
+data Foreign = Foreign {fSymbol :: String, fVars :: [Name], fType :: Type, fArity :: Int, fSequential :: Bool}
   deriving (Show, Data)
 
 data ClassInfo = ClassInfo

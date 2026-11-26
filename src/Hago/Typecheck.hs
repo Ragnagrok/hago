@@ -1038,9 +1038,9 @@ tcModule interactive modName' before ds = do
   let ownInsts = M.fromList [(key, ih) | (key, ih, _, _) <- instDecls]
       env0 = envCl {envInsts = M.union (ckInsts before) ownInsts}
   -- foreign imports, signatures and bindings
-  foreigns <- forM [(s, n, st) | DForeign s n st <- ds] $ \(s, n, st) -> withCtx n $ do
+  foreigns <- forM [(q, s, n, st) | DForeign q s n st <- ds] $ \(q, s, n, st) -> withCtx n $ do
     t <- fromSType env0 (rigid st) st
-    pure (n, (Forall (stypeVars st) [] t, Foreign s (stypeVars st) t (arrows t)))
+    pure (n, (Forall (stypeVars st) [] t, Foreign s (stypeVars st) t (arrows t) q))
   let sigs = M.fromList [(n, (l, ctx, st)) | DSig l ns ctx st <- ds, n <- ns]
       binds = [(n, cs) | DBind n cs <- ds]
       names = map fst binds

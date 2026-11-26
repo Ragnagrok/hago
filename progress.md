@@ -712,6 +712,13 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       call to Go's allocator. `Command.matches` (lazy lists searched with `any` and `take 1`),
       the `zip` of `Input.relative`, the record updates of `Match.step`, and the driver's own
       hash.
+- [x] **Go that calls back one call at a time** (2026-11-26). A program that gives Go a
+      function got the concurrent runtime, since Go may call it from any goroutine; but
+      `strings.Map`, a regex's replace, or a game library's update and draw (Hög, on
+      Ebitengine) call it one call at a time. `foreign import go sequential "strings.Map" ...`
+      says so (`fSequential`, Haskell's FFI has `safe` and `unsafe` in the same place), and
+      the program keeps the runtime for one goroutine, whose thunks take no lock.
+      `Text.Regex.replaceAllWith` is declared so; `examples/foreign.hgo` uses `strings.Map`.
 - [x] **The same programs in GHC** (`bench/ghc/`, `bench/ghc/run.sh`; the README's "Against
       GHC"). Even on strict code and on folds of lists made where they are folded; Hago ahead
       on JSON (0.23 s against 0.28 s, the combinators and printer ported line by line) and on
