@@ -42,6 +42,7 @@ progs=(
   "mapM_ over 1M in IO|bench/mapm-io.hgo|mapm-io||"
   "recursive IO loop, 5M|bench/loop-io.hgo|loop-io||"
   "the same, two functions calling each other|bench/loop-io-mutual.hgo|loop-io-mutual||"
+  "two pure functions calling each other, 100M|bench/mutual-pure.hgo|mutual-pure||"
   "mapM_ over 1M in StateT Int IO|bench/mapm-statet.hgo|mapm-statet||"
   "50M additions, newtype|bench/meters-newtype.hgo|meters-newtype||"
   "50M additions, data|bench/meters-data.hgo|meters-data||"

@@ -408,6 +408,22 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       | recursive IO loop, 5M | 0.05 s, 11 MB | <0.01 s, 2 MB | 0.01 s, 4 MB |
       | the same, two functions calling each other (`bench/loop-io-mutual.hgo`) | 0.05 s, 12 MB | <0.01 s, 2 MB | 0.01 s, 4 MB |
       | `examples/io-loops.hgo` (two rounds) | 2.7 s, 3.2 s | 2.0 s, 1.7 s | |
+- [x] **Pure functions that end calling each other** (2026-11-25) were Go calls, a stack frame
+      each: `isEven`/`isOdd` of ten million took 250 MB of stack, a hundred million went past
+      Go's 1 GB. The same loop as the run forms' (`genRunLoop`, given whether its functions
+      are pure): of a group of mutually recursive functions that are not actions and give the
+      same type, one `hgloop_f` with a `switch` over which is running, and each function a
+      call that enters it at its case; local ones too. Only those that go round a circle of
+      tail calls, two or more, are put in it, for the run forms as well: a chain of tail calls
+      that ends (`Eq` of JSON, whose calls round go through `&&`) is as deep as the program,
+      and direct calls are faster. A function that builds a map in place in its own loop is
+      left out. `examples/loops.hgo` adds even and odd, a state machine over a string, local
+      functions that use a variable around them, a polymorphic pair, and closures made in each
+      round; GHC prints the same. Only `examples/loops.hgo` changed its Go.
+
+      | Program | Before | After | GHC |
+      | --- | --- | --- | --- |
+      | two pure functions calling each other, 100M (`bench/mutual-pure.hgo`) | stack overflow, 1.9 s, 1 GB | 0.03 s, 2 MB | 0.02 s, 3 MB |
 - [x] **Lists made only to be folded are loops** (2026-11-25). Against GHC 9.12 with `-O2`,
       on the same programs, the largest gaps were its fusion: the pipeline of squares 0.13 s
       against under 0.01 s, the comprehension of Pythagorean triples 1.10 s against under

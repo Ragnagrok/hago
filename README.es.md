@@ -433,7 +433,9 @@ func map_[T_a any, T_b any](_arg0 func(T_a) T_b, _arg1 List[T_a]) List[T_b] {
 - **Las llamadas** a funciones conocidas son llamadas directas de Go. La aplicación parcial y las
   funciones como valores usan closures currificadas.
 - **Las llamadas de cola a sí misma** se vuelven un `for`, así que `filter` saltea elementos y
-  los loops con acumulador corren con pila constante.
+  los loops con acumulador corren con pila constante. Las funciones que terminan llamándose entre
+  sí en círculo (una máquina de estados, `isEven` e `isOdd`) son un solo loop `for` sobre cuál de
+  ellas está corriendo, en el nivel superior o locales (`examples/loops.hgo`).
 
 ## Llamar a Go
 
@@ -701,6 +703,7 @@ lado a lado con otros (`bench/run.sh HAGO_VIEJO HAGO_NUEVO`).
 | `mapM_` sobre un millón de elementos en IO | <0,01 s | ~2 MB |
 | un loop recursivo en IO de cinco millones de iteraciones | <0,01 s | ~2 MB |
 | lo mismo con dos funciones que se llaman entre sí | <0,01 s | ~2 MB |
+| dos funciones puras que terminan llamándose entre sí, cien millones de veces | 0,03 s | ~2 MB |
 | `mapM_` sobre un millón de elementos en `StateT Int IO` | <0,01 s | ~2 MB |
 | cincuenta millones de sumas de un `newtype Meters = Meters Double` | 0,02 s | ~2 MB |
 | lo mismo con `data Meters = Meters Double` | 0,02 s | ~2 MB |
@@ -794,6 +797,7 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
 | `mapM_` sobre un millón de elementos en IO | <0,01 s | <0,01 s |
 | un loop recursivo en IO de cinco millones de iteraciones | <0,01 s | 0,01 s |
 | lo mismo con dos funciones que se llaman entre sí | <0,01 s | 0,01 s |
+| dos funciones puras que terminan llamándose entre sí, cien millones de veces | 0,03 s | 0,02 s |
 | `mapM_` sobre un millón de elementos en `StateT Int IO` | <0,01 s | <0,01 s |
 | cincuenta millones de sumas de un `Meters`, `newtype` o `data` | 0,02 s | 0,02 s |
 | JSON, 3,7 MB, los mismos combinadores e impresor | 0,20 s, 100 MB | 0,29 s, 93 MB |
@@ -811,7 +815,8 @@ y los combinadores, la respuesta y el pretty printer del JSON portados línea po
 
 - **Parejos:** el código estricto en tipos concretos, los newtypes, los pliegues de listas que
   se arman donde se pliegan (los dos los vuelven loops, también en IO y en `StateT`), los loops
-  recursivos en IO, los arreglos mutables, en ST, en IO y en un programa con hilos, `parMap`.
+  recursivos en IO, las funciones que terminan llamándose entre sí, los arreglos mutables, en
+  ST, en IO y en un programa con hilos, `parMap`.
 - **Adelante Hago:** un `Data.Map` o un `Data.Set` construido por un pliegue o un loop, que Hago
   construye en el lugar (de tres a cuatro veces más rápido, de un tercio a la mitad de la
   memoria); un `foldr` que es recursión, tomado

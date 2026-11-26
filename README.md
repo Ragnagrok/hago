@@ -416,7 +416,9 @@ func map_[T_a any, T_b any](_arg0 func(T_a) T_b, _arg1 List[T_a]) List[T_b] {
 - **Calls** to known functions are direct Go calls. Partial application and function values use
   curried closures.
 - **Self tail calls** become a `for` loop, so `filter` skips elements and accumulator loops run
-  in constant stack.
+  in constant stack. Functions that end calling each other in a circle (a state machine,
+  `isEven` and `isOdd`) are one `for` loop over which of them is running, at the top level or
+  local (`examples/loops.hgo`).
 
 ## Calling Go
 
@@ -677,6 +679,7 @@ side by side with others (`bench/run.sh OLD_HAGO NEW_HAGO`).
 | `mapM_` over a million elements in IO | <0.01 s | ~2 MB |
 | a recursive IO loop of five million iterations | <0.01 s | ~2 MB |
 | the same as two functions that call each other | <0.01 s | ~2 MB |
+| two pure functions that end calling each other, a hundred million times | 0.03 s | ~2 MB |
 | `mapM_` over a million elements in `StateT Int IO` | <0.01 s | ~2 MB |
 | fifty million additions of a `newtype Meters = Meters Double` | 0.02 s | ~2 MB |
 | the same with `data Meters = Meters Double` | 0.02 s | ~2 MB |
@@ -764,6 +767,7 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
 | `mapM_` over a million elements in IO | <0.01 s | <0.01 s |
 | a recursive IO loop of five million iterations | <0.01 s | 0.01 s |
 | the same as two functions that call each other | <0.01 s | 0.01 s |
+| two pure functions that end calling each other, a hundred million times | 0.03 s | 0.02 s |
 | `mapM_` over a million elements in `StateT Int IO` | <0.01 s | <0.01 s |
 | fifty million additions of a `Meters`, `newtype` or `data` | 0.02 s | 0.02 s |
 | JSON, 3.7 MB, the same combinators and printer | 0.20 s, 100 MB | 0.29 s, 93 MB |
@@ -780,8 +784,9 @@ combinators, reply and pretty printer ported line by line onto `Data.Text`.
 | the same with a `Data.Map` | 0.39 s | 0.58 s |
 
 - **Even:** strict code at concrete types, newtypes, folds of lists made where they are
-  folded (both make loops of them, in IO and in `StateT` too), recursive IO loops, mutable
-  arrays, in ST, in IO and in a program with threads, `parMap`.
+  folded (both make loops of them, in IO and in `StateT` too), recursive IO loops, functions
+  that end calling each other, mutable arrays, in ST, in IO and in a program with threads,
+  `parMap`.
 - **Hago ahead:** a `Data.Map` or a `Data.Set` built by a fold or a loop, which Hago builds in
   place (three to four times faster, a third to a half of the memory); a `foldr` that is recursion, taken from the last
   element back (five times faster, with half the memory, or none over a range); the JSON

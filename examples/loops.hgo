@@ -1,4 +1,5 @@
--- Self tail calls compile to loops, so deep recursion needs no stack.
+-- Self tail calls compile to loops, so deep recursion needs no stack, and
+-- so do functions that end calling each other: they are one loop.
 
 count :: Int -> Int -> Int
 count acc n = if n == 0 then acc else count (acc + n) (n - 1)
@@ -11,6 +12,48 @@ collatz n = go n 0
       | m `mod` 2 == 0 = go (m `div` 2) (steps + 1)
       | otherwise = go (3 * m + 1) (steps + 1)
 
+isEven :: Int -> Bool
+isEven n = if n == 0 then True else isOdd (n - 1)
+
+isOdd :: Int -> Bool
+isOdd n = if n == 0 then False else isEven (n - 1)
+
+-- a state machine: how many words, with the space that ends them
+countWords :: String -> Int
+countWords s = outside (unpack s) 0
+  where
+    outside [] n = n
+    outside (c : cs) n = if c == ' ' then outside cs n else inside cs (n + 1)
+    inside [] n = n
+    inside (c : cs) n = if c == ' ' then outside cs n else inside cs n
+
+-- local functions that use a variable around them, and do not give it on
+stepsBelow :: Int -> Int -> Int
+stepsBelow limit start = up start 0
+  where
+    up k n = if k >= limit then n else down (k * 3) (n + 1)
+    down k n = if k `mod` 2 == 0 then up (k `div` 2) (n + 1) else up (k + 1) (n + 1)
+
+-- polymorphic: the two at any type of element
+alternate :: [a] -> ([a], [a])
+alternate xs = left xs [] []
+
+left :: [a] -> [a] -> [a] -> ([a], [a])
+left [] as bs = (reverse as, reverse bs)
+left (x : xs) as bs = right xs (x : as) bs
+
+right :: [a] -> [a] -> [a] -> ([a], [a])
+right [] as bs = (reverse as, reverse bs)
+right (x : xs) as bs = left xs as (x : bs)
+
+-- closures made in each round keep that round's values
+adders :: Int -> [Int -> Int] -> [Int -> Int]
+adders 0 fs = fs
+adders n fs = adders' (n - 1) ((\x -> x + n) : fs)
+
+adders' :: Int -> [Int -> Int] -> [Int -> Int]
+adders' n fs = adders n fs
+
 main :: IO ()
 main = do
   print (count 0 10000000)
@@ -18,6 +61,11 @@ main = do
   print (collatz 27)
   print (and (map (< 10) [1..]))
   print (length (filter even [1..100]))
+  print (isEven 10000000, isOdd 10000001, isEven 7)
+  print (countWords " the quick  brown fox ", countWords "")
+  print (stepsBelow 1000000 1, stepsBelow 10 20)
+  print (alternate [1 .. 7], alternate [True, False, False])
+  print (map (\f -> f 100) (adders 4 []))
   -- a main that something refers to (here itself) is an action, made and run
   when (collatz 27 < 0) main
   where
