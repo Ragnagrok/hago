@@ -840,6 +840,40 @@ Next, tools around the language, in this order:
          the printed text is the original's but for locations, the comments are the same and
          attached to the same nodes, and printing again gives the same text.
 
+Next, the language: what porting Hugen (a fighting game engine's core, 2,600 lines of Haskell,
+since removed) and building Hög found missing, and what was talked about on 2026-11-26. Not
+decided or ordered yet:
+
+- [ ] **GADTs.** Hugen's triggers were a typed syntax tree (`data Expr a where Lit :: Show a =>
+      a -> Expr a; Cmp :: (Ord b, Show b) => CmpOp -> Expr b -> Expr b -> Expr Bool; ...`);
+      the port used an untyped tree behind a phantom type and a run-time check. Two parts:
+      type refinement in the checker, and constraints kept in a constructor (`Cmp`'s `b` is
+      existential), whose dictionaries must travel in the value, against Hago's rule that
+      specialisation leaves none; GHC keeps them there. Existential types come with it.
+- [ ] **Rank-N types.** Not needed so far: `runST` has a rule of its own, and a lens library can
+      use `data Lens s a = Lens (s -> a) (a -> s -> s)`. Like GADTs, they would bring back
+      dictionaries where the function given is not known.
+- [ ] **`FlexibleInstances` and `StandaloneDeriving`.** Hugen had `instance Fractional (Expr Fx)`
+      (generalised to every `Expr a` in the port) and standalone deriving clauses.
+- [ ] **`show` of a `Double` is Go's, not Haskell's:** `1e+07` and `0.001` where Haskell prints
+      `1.0e7` and `1.0e-3` (`0.1` is the same). Programs compared against GHC print integers.
+- [ ] **`abs` and `signum` are not methods of `Num`** (a ring here, on purpose), so a type such
+      as an expression tree cannot overload them; Hugen's became functions of their own.
+- [ ] **What of Haskell 2010 is missing:** an audit against the Report's language and its library
+      chapters (`Data.Array`/`Data.Ix`, `Numeric`, `Data.Complex`, `Data.Char`'s rest); offered,
+      not done.
+- [ ] **`Concurrently`,** async's applicative whose `<*>` runs both sides at once (`traverse` over
+      it is `mapConcurrently`): cheap on what `Control.Concurrent.Async` has.
+- [ ] **Modules are found only next to the main file or in the library:** no search path, so Hög's
+      `hog` copies its modules next to a game's. And a third-party Go module a program imports
+      (Ebitengine) needs a `go.mod`, which Hago does not make; `hog` brings one.
+- [ ] **Ideas for libraries, from the user:** lenses (simple ones, or van Laarhoven's at rank 1,
+      to see how well they inline) and FRP (events over goroutines and channels, or Yampa's
+      arrows at a fixed step, as Hög's update is).
+- [ ] **What was left of Hugen's speed** (three times GHC, 190 allocations a tick, each a call to
+      Go's allocator where GHC's moves a pointer): lazy lists searched with `any` and `take 1`,
+      record updates of many fields, a `zip` of constant lists made on each call.
+
 Known rough edges, found on the way and not fixed yet:
 
 - [x] **Errors in type signatures have a location.** A signature keeps where it starts, as the
@@ -874,6 +908,8 @@ L); `examples/syntax-*.hgo` hold the tricky cases. Where it differs:
   is written `f . g`.
 - **A string literal is a `String`, never a `[Char]`,** so it is not a list pattern.
 - **No `n+k` patterns, no `(x <+> y) = e` pattern binding of an operator,** as in Haskell 2010.
+- **A minus after an operator of precedence 6 or more is negation:** `a - - b` is `a - (-b)` and
+  `a * - b` is `a * (-b)`, which the Report refuses; everything the Report accepts means the same.
 
 ## Out of scope, on purpose
 
