@@ -719,9 +719,15 @@ allocates much and briefly (`Data.Map`, parsers), so those are where Hago has mo
       says so (`fSequential`, Haskell's FFI has `safe` and `unsafe` in the same place), and
       the program keeps the runtime for one goroutine, whose thunks take no lock.
       `Text.Regex.replaceAllWith` is declared so; `examples/foreign.hgo` uses `strings.Map`.
-- [ ] **A minus after an operator:** `x < -0.4` is a syntax error ("unexpected operator -"),
-      where Haskell reads the minus as negation, of precedence 6, after any operator of less
-      (GHC accepts it); `(< -0.5)`, a section, is accepted. Found writing Hög's Asteroids.
+- [x] **A minus after an operator** (2026-11-26): `x < -0.4` was a syntax error ("unexpected
+      operator -"), where Haskell reads the minus as negation; and a minus at the start was
+      `negate` of the first operand alone, so `-2 ^ 2` was 4 where Haskell gives -4. Found
+      writing Hög's Asteroids. A minus before an operand, at the start or after an operator, is
+      now a mark that fixity resolution reads as negation of precedence 6: the operand takes
+      the operators after it that bind tighter (7 and up) before `negate` applies. After an
+      operator of 6 or more, which the Report refuses (`a - - b`, `a * - b`), it negates what
+      follows. `examples/syntax-definitions.hgo` checks them; GHC prints the same where it
+      accepts them.
 - [x] **The same programs in GHC** (`bench/ghc/`, `bench/ghc/run.sh`; the README's "Against
       GHC"). Even on strict code and on folds of lists made where they are folded; Hago ahead
       on JSON (0.23 s against 0.28 s, the combinators and printer ported line by line) and on

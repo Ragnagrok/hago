@@ -452,12 +452,25 @@ literal = satisfyT f <?> "literal"
 
 expr :: Parser Expr
 expr = do
-  neg <- optionMaybe (tokEq (TVarSym "-"))
-  e0 <- expr10
-  let first = maybe e0 (const (EApp (EVar "Prelude.negate") e0)) neg
-  rest <- many (try ((,) <$> (here >>= \l -> operator >>= \op -> pure (op, l)) <*> expr10))
-  let e = if null rest then first else EOpSeq first rest
+  e0 <- operand
+  rest <- many (try ((,) <$> (here >>= \l -> operator >>= \op -> pure (op, l)) <*> operand))
+  let e = if null rest then unmarked e0 else EOpSeq e0 rest
   option e (EAnn e <$> (key "::" *> pType))
+  where
+    -- an operand, which a minus before it negates, at the start or after an
+    -- operator: x < -0.4 (see 'resolveFixity')
+    operand = do
+      neg <- optionMaybe (tokEq (TVarSym "-"))
+      e <- expr10
+      pure (maybe e (const (EApp (EVar negated) e)) neg)
+    unmarked = \case
+      EApp (EVar m) e | m == negated -> EApp (EVar "Prelude.negate") e
+      e -> e
+
+-- | The mark of an operand with a minus before it, until fixities are
+-- resolved: a name no source can write.
+negated :: Name
+negated = "-negated"
 
 expr10 :: Parser Expr
 expr10 = locE $ choice
@@ -739,7 +752,24 @@ rExpr fx = go
     stmtR (SExpr e) = SExpr (go e)
     fixOf (op, _) = fromMaybe (AssocL, 9) (M.lookup op fx)
     prec = snd . fixOf
-    climb lhs rest = fst (loop 0 lhs rest)
+    climb lhs0 rest0 = let (lhs, rest) = unneg lhs0 rest0 in fst (loop 0 lhs rest)
+    -- A minus is negation, of precedence 6, as in Haskell: a negated
+    -- operand takes the operators after it that bind tighter (7 and up,
+    -- as * and ^) before negate applies, so -2 ^ 2 is -(2 ^ 2) and - a + b
+    -- is (-a) + b. After any operator it negates what follows it too:
+    -- x < -0.4, and a * -b (which Haskell refuses) is a * (-b).
+    unneg x rest =
+      let (x', rest1) = operandWith x rest
+       in case rest1 of
+            [] -> (x', [])
+            (op, y) : more -> let (y', more') = unneg y more in (x', (op, y') : more')
+    operandWith x rest = case x of
+      -- after renaming: the Prelude's names are their own
+      EApp (EVar m) operand | m == negated ->
+        let (tight, after) = span ((> 6) . prec . fst) rest
+            (operand', tight') = unneg operand tight
+         in (EApp (EVar "negate") (fst (loop 0 operand' tight')), after)
+      _ -> (x, rest)
     -- precedence climbing over e0 op1 e1 op2 e2 ...
     loop minP lhs ((op, r) : rest)
       | prec op >= minP =

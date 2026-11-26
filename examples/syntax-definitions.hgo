@@ -29,6 +29,16 @@ main = do
              | otherwise -> "small")
   print [x | Just x <- [Just 1, Nothing, Just 3]]
   print (f 10)
+  -- a minus is negation, of precedence 6 as in the Report, at the start and
+  -- after an operator: -2 ^ 2 is -(2 ^ 2), x < -0.4 compares with -0.4
+  let x = 0.3 :: Double
+      a = 3 :: Int
+      b = 4 :: Int
+  print (x < -0.4, x > - 1, -2 ^ 2 :: Int, - 3 * 2 :: Int)
+  print (- a + b, - a ^ 2 + b, negate a * b, - a `div` 2, [-1, - 2, (- 5)])
+  -- after an operator of 6 or more, which the Report refuses, it negates
+  -- what follows: a - - b is a - (-b)
+  print (a - - b, a * - b, 10 - -3 - 2)
   where
     halve :: Int -> Maybe Int
     halve n = if even n then Just (n `div` 2) else Nothing
