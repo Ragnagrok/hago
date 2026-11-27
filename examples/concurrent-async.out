@@ -6,4 +6,9 @@ Right 42
 Left "fast"
 [1,4,9,16]
 ["aa","bb","cc"]
+('a',True)
+[1,4,9,16]
+fast
+alone
+abcd
 all finished

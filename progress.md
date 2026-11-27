@@ -867,8 +867,10 @@ decided or ordered yet:
 - [ ] **What of Haskell 2010 is missing:** an audit against the Report's language and its library
       chapters (`Data.Array`/`Data.Ix`, `Numeric`, `Data.Complex`, `Data.Char`'s rest); offered,
       not done.
-- [ ] **`Concurrently`,** async's applicative whose `<*>` runs both sides at once (`traverse` over
-      it is `mapConcurrently`): cheap on what `Control.Concurrent.Async` has.
+- [x] **`Concurrently`,** in `Control.Concurrent.Async`: `<*>` and `liftA2` are `concurrently`,
+      `<|>` is `race`, `empty` never finishes, and `Semigroup`/`Monoid` lift the result's, so
+      `traverse` over it is `mapConcurrently`. `examples/concurrent-async.hgo` checks it, under
+      the race detector too.
 - [x] **A search path, and a program's own go.mod.** Modules are looked for next to the main
       file, then under each `-i DIR` (`build`, `run`, `check`, `repl`), then under the
       directories of `HAGO_PATH`, then in the library; the error names every place looked in.

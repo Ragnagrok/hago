@@ -7,6 +7,7 @@
 module Control.Concurrent.Async
   ( Async, async, wait, poll, concurrently, race
   , mapConcurrently, mapConcurrently_, forConcurrently, forConcurrently_
+  , Concurrently (..), runConcurrently
   ) where
 
 import Control.Concurrent
@@ -56,3 +57,36 @@ forConcurrently xs f = mapConcurrently f xs
 
 forConcurrently_ :: [a] -> (a -> IO b) -> IO ()
 forConcurrently_ xs f = mapConcurrently_ f xs
+
+-- Concurrently -------------------------------------------------------------
+
+-- An action that runs at the same time as those it is combined with: its
+-- <*> runs both sides at once and waits for both (concurrently), its <|>
+-- gives the side that finishes first (race), so traverse over it is
+-- mapConcurrently, and
+--
+--   runConcurrently ((,) <$> Concurrently (getURL a) <*> Concurrently (getURL b))
+--
+-- fetches both at once. empty never finishes, so x <|> empty is x.
+newtype Concurrently a = Concurrently (IO a)
+
+runConcurrently :: Concurrently a -> IO a
+runConcurrently (Concurrently a) = a
+
+instance Functor Concurrently where
+  fmap f (Concurrently a) = Concurrently (fmap f a)
+
+instance Applicative Concurrently where
+  pure x = Concurrently (pure x)
+  Concurrently fs <*> Concurrently xs = Concurrently (fmap (\(f, x) -> f x) (concurrently fs xs))
+  liftA2 f (Concurrently xs) (Concurrently ys) = Concurrently (fmap (\(x, y) -> f x y) (concurrently xs ys))
+
+instance Alternative Concurrently where
+  empty = Concurrently (newEmptyMVar >>= takeMVar)
+  Concurrently a <|> Concurrently b = Concurrently (fmap (either id id) (race a b))
+
+instance Semigroup a => Semigroup (Concurrently a) where
+  a <> b = liftA2 (<>) a b
+
+instance Monoid a => Monoid (Concurrently a) where
+  mempty = pure mempty

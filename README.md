@@ -266,7 +266,7 @@ every name each one exports, with its type and what it does:
 | `System.Random` | `StdGen` (SplitMix64), `mkStdGen`, `randomR`, `random`, `randomRs`, `randoms`, `split`; in IO `newStdGen`, `randomRIO`, seeded by the clock or by `HAGO_RANDOM_SEED` |
 | `Control.Concurrent` | `forkIO`, `threadDelay`, `yield`, `getNumCapabilities`; `MVar` with `takeMVar`, `putMVar`, `readMVar`, the `try` versions, `modifyMVar_`, `modifyMVar`, `withMVar` |
 | `Control.Concurrent.Channel` | Go's channels: `newChannel` (with the size of its buffer), `send`, `receive` (`Nothing` once closed), `close`, `receiveAll`, and `select` over `onReceive`, `onSend` and `after` |
-| `Control.Concurrent.Async` | `async`, `wait`, `poll`, `concurrently`, `race`, `mapConcurrently`, `forConcurrently` and their `_` versions |
+| `Control.Concurrent.Async` | `async`, `wait`, `poll`, `concurrently`, `race`, `mapConcurrently`, `forConcurrently` and their `_` versions, and `Concurrently`, whose `<*>` runs both sides at once and `<\|>` races them |
 | `Control.Parallel` | `parMap`: `map` with the elements computed on every processor |
 | `Data.IORef` | `IORef`, a reference threads can share: `newIORef`, `readIORef`, `writeIORef`, `modifyIORef'` and `atomicModifyIORef'` (atomic) |
 | `Control.Monad.ST`, `Data.STRef` | `ST s`, `runST` (pure), `STRef` with `newSTRef`, `readSTRef`, `writeSTRef`, `modifySTRef'`; `PrimMonad`, the class of IO and `ST s` |
@@ -586,8 +586,9 @@ main = do
   until there is one, `putMVar` until there is room. **Channels**
   (`Control.Concurrent.Channel`) are Go's, buffer, `close` and `select` included.
   **`Control.Concurrent.Async`** runs actions at the same time and waits for their results,
-  without handling threads. **`parMap`** (`Control.Parallel`) is a pure `map` computed on every
-  processor, with the same result as `map`.
+  without handling threads; through its `Concurrently` applicative, `traverse` does too.
+  **`parMap`** (`Control.Parallel`) is a pure `map` computed on every processor, with the same
+  result as `map`.
 - **Values are immutable, so threads share them freely.** The only state they share and change
   is in MVars and channels. A lazy list can be shared too: its cells are computed once, by
   whichever thread forces them first. The examples run under Go's race detector in `check.sh`.

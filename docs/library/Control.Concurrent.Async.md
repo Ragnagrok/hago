@@ -54,3 +54,28 @@ mapConcurrently_ :: (a -> IO b) -> [a] -> IO ()
 forConcurrently :: [a] -> (a -> IO b) -> IO [b]
 forConcurrently_ :: [a] -> (a -> IO b) -> IO ()
 ```
+
+## Concurrently
+
+```haskell
+newtype Concurrently a = Concurrently (IO a)
+
+instance Alternative Concurrently
+instance Applicative Concurrently
+instance Functor Concurrently
+instance Monoid a => Monoid (Concurrently a)
+instance Semigroup a => Semigroup (Concurrently a)
+```
+
+An action that runs at the same time as those it is combined with: its
+<*> runs both sides at once and waits for both (concurrently), its <|>
+gives the side that finishes first (race), so traverse over it is
+mapConcurrently, and
+
+  runConcurrently ((,) <$> Concurrently (getURL a) <*> Concurrently (getURL b))
+
+fetches both at once. empty never finishes, so x <|> empty is x.
+
+```haskell
+runConcurrently :: Concurrently a -> IO a
+```

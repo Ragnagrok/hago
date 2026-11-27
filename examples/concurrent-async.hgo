@@ -18,4 +18,10 @@ main = do
   mapConcurrently (\n -> slowly (50 - n * 10) (n * n)) [1 .. 4] >>= print
   forConcurrently (unpack "abc") (\c -> pure (pack [c, c])) >>= print
   mapConcurrently_ (slowly 1) [(), ()]
+  -- Concurrently: <*> runs both sides at once, <|> keeps the first to finish
+  runConcurrently ((,) <$> Concurrently (slowly 30 'a') <*> Concurrently (slowly 10 True)) >>= print
+  runConcurrently (traverse (\n -> Concurrently (slowly (50 - n * 10) (n * n))) [1 .. 4]) >>= print
+  runConcurrently (Concurrently (slowly 300 "slow") <|> Concurrently (slowly 1 "fast")) >>= putStrLn
+  runConcurrently (Concurrently (slowly 1 "alone") <|> empty) >>= putStrLn
+  runConcurrently (Concurrently (slowly 20 "ab") <> Concurrently (slowly 5 "cd") <> mempty) >>= putStrLn
   putStrLn "all finished"

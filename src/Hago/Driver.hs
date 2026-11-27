@@ -242,10 +242,10 @@ checkFile dirs file = do
     -- the directory A.B's imports are under, if the file is at <root>/A/B.hgo
     rootOf name =
       let parts = splitOn name
-          dirs = splitDirectories (takeDirectory file)
+          above = splitDirectories (takeDirectory file)
           depth = length parts - 1
-       in if depth > 0 && drop (length dirs - depth) dirs == init parts
-            then (if length dirs == depth then "." else joinPath (take (length dirs - depth) dirs))
+       in if depth > 0 && drop (length above - depth) above == init parts
+            then (if length above == depth then "." else joinPath (take (length above - depth) above))
             else takeDirectory file
     splitOn n = case break (== '.') n of
       (a, '.' : rest) -> a : splitOn rest
